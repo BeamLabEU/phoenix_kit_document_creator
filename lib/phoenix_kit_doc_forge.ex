@@ -2,13 +2,8 @@ defmodule PhoenixKitDocForge do
   @moduledoc """
   Document Creator module for PhoenixKit.
 
-  Compare five PDF generation approaches side-by-side:
-
-  1. **ChromicPDF** — HTML → headless Chrome → PDF (community standard)
-  2. **Typst** — markup → Rust NIF → PDF (fast, professional typesetting)
-  3. **PDF** — pure Elixir, coordinate-based (most mature, 222K downloads)
-  4. **PrawnEx** — pure Elixir, Prawn-inspired (tables, charts, zero deps)
-  5. **Mudbrick** — pure Elixir, PDF 2.0 (OpenType fonts, vector paths)
+  Visual template design with GrapesJS (drag-and-drop page builder) and
+  PDF generation via ChromicPDF (headless Chrome).
 
   ## Installation
 
@@ -19,17 +14,21 @@ defmodule PhoenixKitDocForge do
   Then `mix deps.get`. The module auto-discovers via beam scanning.
   Enable it in Admin > Modules.
 
-  ## Prerequisites
+  ## Testing Editors
 
-  - **ChromicPDF**: Requires Chrome or Chromium installed on the system
-  - **Typst**: Uses precompiled Rust NIFs — no toolchain needed
-  - **PDF, PrawnEx, Mudbrick**: Pure Elixir — zero external dependencies
+  Alternative editors (pdfme, TipTap) are available behind a config flag:
+
+      config :phoenix_kit_doc_forge, :testing_editors, true
+
+  These load from CDN — no extra mix dependencies.
   """
 
   use PhoenixKit.Module
 
   alias PhoenixKit.Dashboard.Tab
   alias PhoenixKit.Settings
+
+  @testing_editors Application.compile_env(:phoenix_kit_doc_forge, :testing_editors, false)
 
   # ===========================================================================
   # Required callbacks
@@ -71,8 +70,7 @@ defmodule PhoenixKitDocForge do
       key: module_key(),
       label: "Document Creator",
       icon: "hero-document-text",
-      description:
-        "Document creation and PDF generation — compare editors and PDF approaches side-by-side"
+      description: "Visual template design and PDF generation"
     }
   end
 
@@ -87,6 +85,10 @@ defmodule PhoenixKitDocForge do
 
   @impl PhoenixKit.Module
   def admin_tabs do
+    base_tabs() ++ testing_tabs()
+  end
+
+  defp base_tabs do
     [
       %Tab{
         id: :admin_document_creator,
@@ -100,69 +102,14 @@ defmodule PhoenixKitDocForge do
         group: :admin_modules,
         subtab_display: :when_active,
         highlight_with_subtabs: false,
-        live_view: {PhoenixKitDocForge.Web.OverviewLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_chromic,
-        label: "ChromicPDF",
-        icon: "hero-globe-alt",
-        path: "document-creator/chromic",
-        priority: 651,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.ChromicTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_typst,
-        label: "Typst",
-        icon: "hero-document-arrow-down",
-        path: "document-creator/typst",
-        priority: 652,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.TypstTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_pdf,
-        label: "PDF (Elixir)",
-        icon: "hero-code-bracket",
-        path: "document-creator/pdf-elixir",
-        priority: 653,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.PdfTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_prawn,
-        label: "PrawnEx",
-        icon: "hero-table-cells",
-        path: "document-creator/prawn-ex",
-        priority: 654,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.PrawnTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_mudbrick,
-        label: "Mudbrick",
-        icon: "hero-paint-brush",
-        path: "document-creator/mudbrick",
-        priority: 655,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.MudbrickTestLive, :index}
+        live_view: {PhoenixKitDocForge.Web.EditorGrapesjsTestLive, :index}
       },
       %Tab{
         id: :admin_document_creator_builder,
         label: "Template Builder",
         icon: "hero-puzzle-piece",
         path: "document-creator/template-builder",
-        priority: 656,
+        priority: 651,
         level: :admin,
         permission: module_key(),
         parent: :admin_document_creator,
@@ -173,102 +120,55 @@ defmodule PhoenixKitDocForge do
         label: "Template Preview",
         icon: "hero-eye",
         path: "document-creator/template-preview",
-        priority: 657,
+        priority: 652,
         level: :admin,
         permission: module_key(),
         parent: :admin_document_creator,
         live_view: {PhoenixKitDocForge.Web.TemplatePreviewLive, :index}
-      },
-      # --- Editor test pages ---
-      %Tab{
-        id: :admin_document_creator_editors,
-        label: "Editors",
-        icon: "hero-pencil-square",
-        path: "document-creator/editors",
-        priority: 660,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.EditorsOverviewLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_editor_tiptap,
-        label: "TipTap",
-        icon: "hero-cursor-arrow-rays",
-        path: "document-creator/editors/tiptap",
-        priority: 661,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.EditorTiptapTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_editor_quill,
-        label: "Quill",
-        icon: "hero-pencil",
-        path: "document-creator/editors/quill",
-        priority: 662,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.EditorQuillTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_editor_ckeditor,
-        label: "CKEditor",
-        icon: "hero-document-text",
-        path: "document-creator/editors/ckeditor",
-        priority: 663,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.EditorCkeditorTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_editor_lexical,
-        label: "Lexical",
-        icon: "hero-code-bracket-square",
-        path: "document-creator/editors/lexical",
-        priority: 664,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.EditorLexicalTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_editor_grapesjs,
-        label: "GrapesJS",
-        icon: "hero-squares-2x2",
-        path: "document-creator/editors/grapesjs",
-        priority: 665,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.EditorGrapesjsTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_editor_jodit,
-        label: "Jodit",
-        icon: "hero-bold",
-        path: "document-creator/editors/jodit",
-        priority: 666,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.EditorJoditTestLive, :index}
-      },
-      %Tab{
-        id: :admin_document_creator_editor_pdfme,
-        label: "pdfme",
-        icon: "hero-document",
-        path: "document-creator/editors/pdfme",
-        priority: 667,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.EditorPdfmeTestLive, :index}
       }
     ]
+  end
+
+  defp testing_tabs do
+    if @testing_editors do
+      [
+        %Tab{
+          id: :admin_document_creator_testing,
+          label: "Testing",
+          icon: "hero-beaker",
+          path: "document-creator/testing",
+          priority: 690,
+          level: :admin,
+          permission: module_key(),
+          parent: :admin_document_creator,
+          live_view: {PhoenixKitDocForge.Web.TestingLive, :index}
+        },
+        %Tab{
+          id: :admin_document_creator_testing_pdfme,
+          label: "pdfme",
+          icon: "hero-document",
+          path: "document-creator/testing/pdfme",
+          priority: 691,
+          level: :admin,
+          permission: module_key(),
+          parent: :admin_document_creator,
+          live_view: {PhoenixKitDocForge.Web.EditorPdfmeTestLive, :index}
+        },
+        %Tab{
+          id: :admin_document_creator_testing_tiptap,
+          label: "TipTap",
+          icon: "hero-cursor-arrow-rays",
+          path: "document-creator/testing/tiptap",
+          priority: 692,
+          level: :admin,
+          permission: module_key(),
+          parent: :admin_document_creator,
+          live_view: {PhoenixKitDocForge.Web.EditorTiptapTestLive, :index}
+        }
+      ]
+    else
+      []
+    end
   end
 
   # ===========================================================================
@@ -278,11 +178,6 @@ defmodule PhoenixKitDocForge do
   @doc "Check if the ChromicPDF library is available."
   def chromic_pdf_available? do
     Code.ensure_loaded?(ChromicPDF)
-  end
-
-  @doc "Check if the Typst NIF is available."
-  def typst_available? do
-    Code.ensure_loaded?(Typst)
   end
 
   @doc "Check if Chrome or Chromium is installed on the system."

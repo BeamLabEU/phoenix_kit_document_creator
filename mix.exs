@@ -10,7 +10,8 @@ defmodule PhoenixKitDocForge.MixProject do
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      description: "PDF generation testing module for PhoenixKit — compare ChromicPDF vs Typst",
+      description:
+        "Document Creator module for PhoenixKit — visual template design and PDF generation",
       package: package(),
       dialyzer: [plt_add_apps: [:phoenix_kit]],
       name: "PhoenixKitDocForge",
@@ -33,12 +34,8 @@ defmodule PhoenixKitDocForge.MixProject do
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.0"},
 
-      # PDF generation — five approaches to compare
+      # PDF generation via headless Chrome
       {:chromic_pdf, "~> 1.17"},
-      {:typst, "~> 0.2.3"},
-      {:pdf, "~> 0.7"},
-      {:prawn_ex, "~> 0.1"},
-      {:mudbrick, "~> 0.9"},
 
       # Template engine for variable substitution (Liquid syntax)
       {:solid, "~> 1.2"},

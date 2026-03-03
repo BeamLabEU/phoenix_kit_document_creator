@@ -61,10 +61,11 @@ defmodule PhoenixKitDocForgeTest do
   end
 
   describe "admin_tabs/0" do
-    test "returns 16 tabs (overview + 5 pdf + 2 template + 8 editor + 1 editors overview)" do
+    test "returns base tabs (parent + builder + preview)" do
       tabs = PhoenixKitDocForge.admin_tabs()
       assert is_list(tabs)
-      assert length(tabs) == 16
+      # Base: 3 tabs. Testing tabs are compile-time conditional.
+      assert length(tabs) >= 3
     end
 
     test "parent tab has correct fields" do
@@ -76,9 +77,9 @@ defmodule PhoenixKitDocForgeTest do
       assert parent.group == :admin_modules
     end
 
-    test "parent tab has live_view for route generation" do
+    test "parent tab routes to GrapesJS editor" do
       [parent | _] = PhoenixKitDocForge.admin_tabs()
-      assert {PhoenixKitDocForge.Web.OverviewLive, :index} = parent.live_view
+      assert {PhoenixKitDocForge.Web.EditorGrapesjsTestLive, :index} = parent.live_view
     end
 
     test "subtabs reference parent" do
@@ -89,15 +90,15 @@ defmodule PhoenixKitDocForgeTest do
       end
     end
 
-    test "subtabs have live_view for route generation" do
-      [_parent | subtabs] = PhoenixKitDocForge.admin_tabs()
+    test "includes template builder and preview tabs" do
+      tabs = PhoenixKitDocForge.admin_tabs()
 
-      assert Enum.any?(subtabs, fn tab ->
-               match?({PhoenixKitDocForge.Web.ChromicTestLive, :index}, tab.live_view)
+      assert Enum.any?(tabs, fn tab ->
+               match?({PhoenixKitDocForge.Web.TemplateBuilderLive, :index}, tab.live_view)
              end)
 
-      assert Enum.any?(subtabs, fn tab ->
-               match?({PhoenixKitDocForge.Web.TypstTestLive, :index}, tab.live_view)
+      assert Enum.any?(tabs, fn tab ->
+               match?({PhoenixKitDocForge.Web.TemplatePreviewLive, :index}, tab.live_view)
              end)
     end
 
@@ -162,10 +163,6 @@ defmodule PhoenixKitDocForgeTest do
   describe "helper functions" do
     test "chromic_pdf_available?/0 returns boolean" do
       assert is_boolean(PhoenixKitDocForge.chromic_pdf_available?())
-    end
-
-    test "typst_available?/0 returns boolean" do
-      assert is_boolean(PhoenixKitDocForge.typst_available?())
     end
 
     test "chrome_installed?/0 returns boolean" do
