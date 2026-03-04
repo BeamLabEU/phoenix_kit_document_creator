@@ -1,4 +1,4 @@
-defmodule PhoenixKitDocForge.Web.EditorTiptapTestLive do
+defmodule PhoenixKitDocumentCreator.Web.EditorTiptapTestLive do
   @moduledoc """
   Test page for the TipTap WYSIWYG editor.
 
@@ -8,8 +8,8 @@ defmodule PhoenixKitDocForge.Web.EditorTiptapTestLive do
   """
   use Phoenix.LiveView
 
-  alias PhoenixKitDocForge.DocumentFormat
-  alias PhoenixKitDocForge.Web.EditorPdfHelpers
+  alias PhoenixKitDocumentCreator.DocumentFormat
+  alias PhoenixKitDocumentCreator.Web.EditorPdfHelpers
 
   @editor_info %{
     name: "TipTap",
@@ -41,7 +41,8 @@ defmodule PhoenixKitDocForge.Web.EditorTiptapTestLive do
        error: nil,
        last_generation_ms: nil,
        chrome_available:
-         PhoenixKitDocForge.chromic_pdf_available?() and PhoenixKitDocForge.chrome_installed?()
+         PhoenixKitDocumentCreator.chromic_pdf_available?() and
+           PhoenixKitDocumentCreator.chrome_installed?()
      )}
   end
 

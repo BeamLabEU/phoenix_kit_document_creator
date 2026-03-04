@@ -1,8 +1,8 @@
-defmodule PhoenixKitDocForge.Web.TestingLive do
+defmodule PhoenixKitDocumentCreator.Web.TestingLive do
   @moduledoc """
   Hidden testing hub for alternative editor evaluations.
 
-  Only registered when `config :phoenix_kit_doc_forge, :testing_editors, true`.
+  Only registered when `config :phoenix_kit_document_creator, :testing_editors, true`.
   Links to pdfme (JSON template designer) and TipTap (rich text editor).
   """
   use Phoenix.LiveView
@@ -79,8 +79,6 @@ defmodule PhoenixKitDocForge.Web.TestingLive do
             <div class="card-actions mt-4">
               <a
                 href={editor.path}
-                data-phx-link="redirect"
-                data-phx-link-state="push"
                 class="btn btn-primary btn-sm w-full"
               >
                 Open {editor.name}

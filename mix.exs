@@ -1,11 +1,11 @@
-defmodule PhoenixKitDocForge.MixProject do
+defmodule PhoenixKitDocumentCreator.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
 
   def project do
     [
-      app: :phoenix_kit_doc_forge,
+      app: :phoenix_kit_document_creator,
       version: @version,
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
@@ -14,7 +14,7 @@ defmodule PhoenixKitDocForge.MixProject do
         "Document Creator module for PhoenixKit — visual template design and PDF generation",
       package: package(),
       dialyzer: [plt_add_apps: [:phoenix_kit]],
-      name: "PhoenixKitDocForge",
+      name: "PhoenixKitDocumentCreator",
       docs: docs()
     ]
   end
@@ -56,7 +56,7 @@ defmodule PhoenixKitDocForge.MixProject do
 
   defp docs do
     [
-      main: "PhoenixKitDocForge",
+      main: "PhoenixKitDocumentCreator",
       source_ref: "v#{@version}"
     ]
   end

@@ -1,4 +1,4 @@
-defmodule PhoenixKitDocForge.DocumentFormat do
+defmodule PhoenixKitDocumentCreator.DocumentFormat do
   @moduledoc """
   Standardized document format for editor-agnostic storage.
 

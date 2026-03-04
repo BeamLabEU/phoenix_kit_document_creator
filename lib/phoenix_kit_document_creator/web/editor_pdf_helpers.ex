@@ -1,4 +1,4 @@
-defmodule PhoenixKitDocForge.Web.EditorPdfHelpers do
+defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   @moduledoc """
   Shared PDF generation helpers for editor test pages.
 
@@ -34,7 +34,7 @@ defmodule PhoenixKitDocForge.Web.EditorPdfHelpers do
     header_text = Keyword.get(opts, :header_text, "")
     footer_text = Keyword.get(opts, :footer_text, "")
 
-    with :ok <- PhoenixKitDocForge.ChromeSupervisor.ensure_started() do
+    with :ok <- PhoenixKitDocumentCreator.ChromeSupervisor.ensure_started() do
       cond do
         rich_content?(header_html) or rich_content?(footer_html) ->
           generate_with_rich_template(html, header_html, footer_html)

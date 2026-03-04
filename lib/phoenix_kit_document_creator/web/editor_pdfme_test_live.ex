@@ -1,4 +1,4 @@
-defmodule PhoenixKitDocForge.Web.EditorPdfmeTestLive do
+defmodule PhoenixKitDocumentCreator.Web.EditorPdfmeTestLive do
   @moduledoc """
   Test page for the pdfme template designer.
 

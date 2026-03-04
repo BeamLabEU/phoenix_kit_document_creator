@@ -1,4 +1,4 @@
-defmodule PhoenixKitDocForge.ChromeSupervisor do
+defmodule PhoenixKitDocumentCreator.ChromeSupervisor do
   @moduledoc """
   Lightweight supervisor wrapper that starts ChromicPDF lazily on first use.
 
@@ -40,7 +40,8 @@ defmodule PhoenixKitDocForge.ChromeSupervisor do
   end
 
   defp start_chromic_pdf do
-    if PhoenixKitDocForge.chromic_pdf_available?() and PhoenixKitDocForge.chrome_installed?() do
+    if PhoenixKitDocumentCreator.chromic_pdf_available?() and
+         PhoenixKitDocumentCreator.chrome_installed?() do
       case maybe_start_supervisor() do
         :ok ->
           case Supervisor.start_child(__MODULE__, {ChromicPDF, []}) do

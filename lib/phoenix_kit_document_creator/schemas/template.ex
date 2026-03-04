@@ -1,0 +1,91 @@
+defmodule PhoenixKitDocumentCreator.Schemas.Template do
+  @moduledoc """
+  Schema for document templates.
+
+  Templates contain GrapesJS-designed content with `{{ variable }}` placeholders.
+  Documents are created from templates by filling in the variable values.
+  """
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  @type t :: %__MODULE__{}
+
+  @primary_key {:uuid, UUIDv7, autogenerate: true}
+  @foreign_key_type UUIDv7
+
+  @statuses ~w(draft published archived)
+
+  schema "phoenix_kit_doc_templates" do
+    field(:name, :string)
+    field(:slug, :string)
+    field(:description, :string)
+    field(:status, :string, default: "draft")
+
+    field(:content_html, :string, default: "")
+    field(:content_css, :string, default: "")
+    field(:content_native, :map)
+
+    field(:variables, {:array, :map}, default: [])
+
+    belongs_to(:header_footer, PhoenixKitDocumentCreator.Schemas.HeaderFooter,
+      foreign_key: :header_footer_uuid,
+      references: :uuid,
+      type: UUIDv7
+    )
+
+    field(:config, :map, default: %{"paper_size" => "a4", "orientation" => "portrait"})
+    field(:data, :map, default: %{})
+    field(:thumbnail, :string)
+    field(:created_by_uuid, Ecto.UUID)
+
+    timestamps(type: :utc_datetime)
+  end
+
+  @required_fields [:name]
+  @optional_fields [
+    :slug,
+    :description,
+    :status,
+    :content_html,
+    :content_css,
+    :content_native,
+    :variables,
+    :header_footer_uuid,
+    :config,
+    :data,
+    :thumbnail,
+    :created_by_uuid
+  ]
+
+  def changeset(template, attrs) do
+    template
+    |> cast(attrs, @required_fields ++ @optional_fields)
+    |> validate_required(@required_fields)
+    |> validate_length(:name, min: 1, max: 255)
+    |> validate_length(:slug, max: 255)
+    |> validate_inclusion(:status, @statuses)
+    |> maybe_generate_slug()
+    |> unique_constraint(:slug)
+  end
+
+  defp maybe_generate_slug(changeset) do
+    case get_change(changeset, :slug) do
+      nil ->
+        case get_change(changeset, :name) do
+          nil -> changeset
+          name -> put_change(changeset, :slug, slugify(name))
+        end
+
+      _ ->
+        changeset
+    end
+  end
+
+  defp slugify(name) do
+    name
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9\s-]/, "")
+    |> String.replace(~r/[\s-]+/, "-")
+    |> String.trim("-")
+  end
+end

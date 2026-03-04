@@ -1,4 +1,4 @@
-defmodule PhoenixKitDocForge do
+defmodule PhoenixKitDocumentCreator do
   @moduledoc """
   Document Creator module for PhoenixKit.
 
@@ -9,7 +9,7 @@ defmodule PhoenixKitDocForge do
 
   Add to your parent app's `mix.exs`:
 
-      {:phoenix_kit_doc_forge, path: "../phoenix_kit_doc_forge"}
+      {:phoenix_kit_document_creator, path: "../phoenix_kit_document_creator"}
 
   Then `mix deps.get`. The module auto-discovers via beam scanning.
   Enable it in Admin > Modules.
@@ -18,7 +18,7 @@ defmodule PhoenixKitDocForge do
 
   Alternative editors (pdfme, TipTap) are available behind a config flag:
 
-      config :phoenix_kit_doc_forge, :testing_editors, true
+      config :phoenix_kit_document_creator, :testing_editors, true
 
   These load from CDN — no extra mix dependencies.
   """
@@ -28,7 +28,7 @@ defmodule PhoenixKitDocForge do
   alias PhoenixKit.Dashboard.Tab
   alias PhoenixKit.Settings
 
-  @testing_editors Application.compile_env(:phoenix_kit_doc_forge, :testing_editors, false)
+  @testing_editors Application.compile_env(:phoenix_kit_document_creator, :testing_editors, false)
 
   # ===========================================================================
   # Required callbacks
@@ -62,7 +62,7 @@ defmodule PhoenixKitDocForge do
   # ===========================================================================
 
   @impl PhoenixKit.Module
-  def version, do: "0.1.0"
+  def version, do: "0.2.0"
 
   @impl PhoenixKit.Module
   def permission_metadata do
@@ -77,7 +77,7 @@ defmodule PhoenixKitDocForge do
   @impl PhoenixKit.Module
   def children do
     if chromic_pdf_available?() do
-      [{PhoenixKitDocForge.ChromeSupervisor, []}]
+      [{PhoenixKitDocumentCreator.ChromeSupervisor, []}]
     else
       []
     end
@@ -102,29 +102,54 @@ defmodule PhoenixKitDocForge do
         group: :admin_modules,
         subtab_display: :when_active,
         highlight_with_subtabs: false,
-        live_view: {PhoenixKitDocForge.Web.EditorGrapesjsTestLive, :index}
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :index}
       },
       %Tab{
-        id: :admin_document_creator_builder,
-        label: "Template Builder",
-        icon: "hero-puzzle-piece",
-        path: "document-creator/template-builder",
+        id: :admin_document_creator_template_new,
+        label: "New Template",
+        icon: "hero-plus",
+        path: "document-creator/templates/new",
         priority: 651,
         level: :admin,
         permission: module_key(),
         parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.TemplateBuilderLive, :index}
+        visible: false,
+        live_view: {PhoenixKitDocumentCreator.Web.TemplateEditorLive, :new}
       },
       %Tab{
-        id: :admin_document_creator_preview,
-        label: "Template Preview",
-        icon: "hero-eye",
-        path: "document-creator/template-preview",
+        id: :admin_document_creator_template_edit,
+        label: "Edit Template",
+        icon: "hero-pencil-square",
+        path: "document-creator/templates/:uuid/edit",
         priority: 652,
         level: :admin,
         permission: module_key(),
         parent: :admin_document_creator,
-        live_view: {PhoenixKitDocForge.Web.TemplatePreviewLive, :index}
+        visible: false,
+        live_view: {PhoenixKitDocumentCreator.Web.TemplateEditorLive, :edit}
+      },
+      %Tab{
+        id: :admin_document_creator_document_edit,
+        label: "Edit Document",
+        icon: "hero-pencil-square",
+        path: "document-creator/documents/:uuid/edit",
+        priority: 653,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        visible: false,
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentEditorLive, :edit}
+      },
+      %Tab{
+        id: :admin_document_creator_headers_footers,
+        label: "Headers & Footers",
+        icon: "hero-bars-3",
+        path: "document-creator/headers-footers",
+        priority: 660,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterLive, :index}
       }
     ]
   end
@@ -141,7 +166,7 @@ defmodule PhoenixKitDocForge do
           level: :admin,
           permission: module_key(),
           parent: :admin_document_creator,
-          live_view: {PhoenixKitDocForge.Web.TestingLive, :index}
+          live_view: {PhoenixKitDocumentCreator.Web.TestingLive, :index}
         },
         %Tab{
           id: :admin_document_creator_testing_pdfme,
@@ -152,7 +177,7 @@ defmodule PhoenixKitDocForge do
           level: :admin,
           permission: module_key(),
           parent: :admin_document_creator,
-          live_view: {PhoenixKitDocForge.Web.EditorPdfmeTestLive, :index}
+          live_view: {PhoenixKitDocumentCreator.Web.EditorPdfmeTestLive, :index}
         },
         %Tab{
           id: :admin_document_creator_testing_tiptap,
@@ -163,7 +188,7 @@ defmodule PhoenixKitDocForge do
           level: :admin,
           permission: module_key(),
           parent: :admin_document_creator,
-          live_view: {PhoenixKitDocForge.Web.EditorTiptapTestLive, :index}
+          live_view: {PhoenixKitDocumentCreator.Web.EditorTiptapTestLive, :index}
         }
       ]
     else

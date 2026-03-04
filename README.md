@@ -1,4 +1,4 @@
-# Doc Forge
+# Document Creator
 
 PDF generation testing module for [PhoenixKit](https://hex.pm/packages/phoenix_kit). Compare two approaches side-by-side before committing to one for production.
 
@@ -19,7 +19,7 @@ PDF generation testing module for [PhoenixKit](https://hex.pm/packages/phoenix_k
 1. Add to your parent app's `mix.exs`:
 
 ```elixir
-{:phoenix_kit_doc_forge, path: "../phoenix_kit_doc_forge"}
+{:phoenix_kit_document_creator, path: "../phoenix_kit_document_creator"}
 ```
 
 2. Fetch deps:
@@ -28,7 +28,7 @@ PDF generation testing module for [PhoenixKit](https://hex.pm/packages/phoenix_k
 mix deps.get
 ```
 
-3. Start your app, go to Admin > Modules, enable "Doc Forge".
+3. Start your app, go to Admin > Modules, enable "Document Creator".
 
 ### Prerequisites
 
@@ -43,7 +43,7 @@ mix deps.get
 
 ## Architecture Notes
 
-ChromicPDF is started **lazily** via `PhoenixKitDocForge.ChromeSupervisor` — Chrome only launches when you actually generate a PDF, not at app boot. This keeps things lightweight when the module is enabled but not actively used.
+ChromicPDF is started **lazily** via `PhoenixKitDocumentCreator.ChromeSupervisor` — Chrome only launches when you actually generate a PDF, not at app boot. This keeps things lightweight when the module is enabled but not actively used.
 
 The `chromic_pdf` dependency is marked `optional: true`, so the module compiles and loads even without Chrome installed. The overview page shows which tools are available.
 
