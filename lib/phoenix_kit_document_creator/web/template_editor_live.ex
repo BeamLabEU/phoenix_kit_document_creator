@@ -296,7 +296,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   def render(assigns) do
     ~H"""
     <.editor_scripts />
-    <div class="flex flex-col mx-auto px-4 py-6 gap-4">
+    <div class="flex flex-col mx-auto px-4 py-6 gap-4 h-[calc(100vh-4rem)]">
       <%!-- Header bar --%>
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
@@ -344,11 +344,11 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       </div>
 
       <%!-- Main layout: Editor + Settings sidebar --%>
-      <div class="flex gap-4" style="min-height: 700px;">
+      <div class="flex gap-4 flex-1">
         <%!-- GrapesJS Editor (left, takes most space) --%>
         <div class="flex-1 card bg-base-100 shadow-xl overflow-hidden">
-          <div id="grapesjs-wrapper" phx-hook="GrapesJSTemplateEditor" style="display:flex;width:100%;height:100%;">
-            <div id="editor-grapesjs" style="flex:1;min-height:700px;"></div>
+          <div id="grapesjs-wrapper" phx-hook="GrapesJSTemplateEditor" phx-update="ignore" style="display:flex;width:100%;height:100%;">
+            <div id="editor-grapesjs" style="flex:1;"></div>
             <div id="grapesjs-right-panel" class="bg-base-200 text-base-content border-l border-base-300" style="width:220px;min-width:220px;display:flex;flex-direction:column;">
               <div class="border-b border-base-300 text-base-content/70" style="padding:8px 12px;font-size:12px;font-weight:600;">
                 Document Elements

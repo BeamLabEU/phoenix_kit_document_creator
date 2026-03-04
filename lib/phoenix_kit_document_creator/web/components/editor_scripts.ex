@@ -424,7 +424,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
           ensureGrapesJS(function() {
             var editor = grapesjs.init({
               container: '#editor-grapesjs',
-              height: '700px',
+              height: '100%',
               width: 'auto',
               fromElement: false,
               components: '',
@@ -528,7 +528,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
           ensureGrapesJS(function() {
             var editor = grapesjs.init({
               container: '#doc-editor-grapesjs',
-              height: '700px',
+              height: '100%',
               width: 'auto',
               fromElement: false,
               components: '',
