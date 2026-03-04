@@ -103,12 +103,18 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
 
       function applyPaperSize(editor, size) {
         var dims = PAPER_SIZES[size] || PAPER_SIZES.a4;
+        // Set width on the frame-wrapper (outside the iframe) to avoid
+        // offsetting the body inside the iframe which breaks GrapesJS
+        // coordinate calculations for drag/resize.
         var frame = editor.Canvas.getFrameEl();
-        if (!frame) return;
-        // Only set min-height inside iframe body — don't touch frame-wrapper
-        // to avoid breaking GrapesJS tools overlay positioning
-        if (frame.contentDocument && frame.contentDocument.body) {
-          frame.contentDocument.body.style.minHeight = dims.height + 'px';
+        if (frame && frame.parentElement) {
+          frame.parentElement.style.width = dims.width + 'px';
+          frame.parentElement.style.margin = '0 auto';
+        }
+        // Set min-height on wrapper so content area has proper page height
+        var wrapper = editor.DomComponents.getWrapper();
+        if (wrapper) {
+          wrapper.addStyle({ 'min-height': dims.height + 'px' });
         }
       }
 
@@ -125,7 +131,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
       // ======================================================================
 
       var CANVAS_STYLES = [
-        'body { font-family: Inter, -apple-system, sans-serif; font-size: 14px; line-height: 1.7; color: #1a1a1a; padding: 40px 48px; max-width: 800px; margin: 0 auto !important; }',
+        'body { font-family: Inter, -apple-system, sans-serif; font-size: 14px; line-height: 1.7; color: #1a1a1a; margin: 0; padding: 0; }',
         'h1 { font-size: 28px; font-weight: 700; margin: 0 0 12px 0; line-height: 1.3; }',
         'h2 { font-size: 20px; font-weight: 600; margin: 24px 0 8px 0; line-height: 1.3; }',
         'h3 { font-size: 16px; font-weight: 600; margin: 20px 0 6px 0; }',
@@ -266,6 +272,87 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
         editor.on('component:selected', function(component) {
           if (component.get('type') !== 'wrapper' && !component.get('resizable')) {
             component.set('resizable', true);
+          }
+        });
+
+        // Constrain drag to page boundaries.
+        // CSS overflow:hidden clips visually during drag;
+        // component:drag:end snaps position back within bounds on release.
+        // Uses addStyle to merge with (not overwrite) paper-size styles.
+        editor.on('load', function() {
+          var wrapper = editor.DomComponents.getWrapper();
+          if (wrapper) {
+            wrapper.addStyle({
+              position: 'relative',
+              overflow: 'hidden',
+              padding: '40px 48px'
+            });
+          }
+        });
+
+        // Clamp a component's position and size within the wrapper
+        function clampToWrapper(target) {
+          if (!target || target.get('type') === 'wrapper') return;
+          var el = target.getEl();
+          if (!el) return;
+
+          var wrapperEl = el.closest('[data-gjs-type="wrapper"]');
+          if (!wrapperEl) return;
+
+          var wrapperW = wrapperEl.clientWidth;
+          var wrapperH = wrapperEl.clientHeight;
+          var style = target.getStyle();
+          var left = parseInt(style.left) || 0;
+          var top = parseInt(style.top) || 0;
+          var width = el.offsetWidth;
+          var height = el.offsetHeight;
+          var updates = {};
+
+          // Clamp size so it doesn't exceed wrapper from its position
+          var maxW = wrapperW - Math.max(left, 0);
+          var maxH = wrapperH - Math.max(top, 0);
+          if (width > maxW) updates.width = maxW + 'px';
+          if (height > maxH) updates.height = maxH + 'px';
+
+          // Clamp position
+          var effectiveW = updates.width ? maxW : width;
+          var effectiveH = updates.height ? maxH : height;
+          var clampedLeft = Math.max(0, Math.min(left, wrapperW - effectiveW));
+          var clampedTop = Math.max(0, Math.min(top, wrapperH - effectiveH));
+          if (clampedLeft !== left) updates.left = clampedLeft + 'px';
+          if (clampedTop !== top) updates.top = clampedTop + 'px';
+
+          if (Object.keys(updates).length > 0) {
+            target.addStyle(updates);
+          }
+        }
+
+        editor.on('component:drag:end', function(model) {
+          clampToWrapper(model && model.target ? model.target : model);
+        });
+
+        // Clamp size only (not position) after resize ends
+        editor.on('component:resize', function() {
+          var target = editor.getSelected();
+          if (!target || target.get('type') === 'wrapper') return;
+          var el = target.getEl();
+          if (!el) return;
+
+          var wrapperEl = el.closest('[data-gjs-type="wrapper"]');
+          if (!wrapperEl) return;
+
+          var style = target.getStyle();
+          var left = parseInt(style.left) || 0;
+          var top = parseInt(style.top) || 0;
+          var maxW = wrapperEl.clientWidth - Math.max(left, 0);
+          var maxH = wrapperEl.clientHeight - Math.max(top, 0);
+          var updates = {};
+
+          if (el.offsetWidth > maxW) updates.width = maxW + 'px';
+          if (el.offsetHeight > maxH) updates.height = maxH + 'px';
+
+          if (Object.keys(updates).length > 0) {
+            target.addStyle(updates);
           }
         });
       }
