@@ -463,7 +463,10 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       phoenix_kit_current_user={assigns[:phoenix_kit_current_user]}
     />
 
-    <%!-- GrapesJS editor styles --%>
+    <style>
+      .gjs-off-prv { background-color: oklch(var(--color-base-200)) !important; color: oklch(var(--color-base-content)) !important; }
+      #editor-grapesjs { --gjs-left-width: 0px; }
+    </style>
     """
   end
 end

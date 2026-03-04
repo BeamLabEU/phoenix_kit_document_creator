@@ -125,7 +125,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
       // ======================================================================
 
       var CANVAS_STYLES = [
-        'body { font-family: Inter, -apple-system, sans-serif; font-size: 14px; line-height: 1.7; color: #1a1a1a; padding: 40px 48px; max-width: 800px; margin: 0 auto; }',
+        'body { font-family: Inter, -apple-system, sans-serif; font-size: 14px; line-height: 1.7; color: #1a1a1a; padding: 40px 48px; max-width: 800px; margin: 0 auto !important; }',
         'h1 { font-size: 28px; font-weight: 700; margin: 0 0 12px 0; line-height: 1.3; }',
         'h2 { font-size: 20px; font-weight: 600; margin: 24px 0 8px 0; line-height: 1.3; }',
         'h3 { font-size: 16px; font-weight: 600; margin: 20px 0 6px 0; }',
@@ -342,6 +342,16 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
               fromElement: false,
               components: '',
               storageManager: false,
+              showDevices: false,
+              styleManager: { sectors: [] },
+              panels: { defaults: [
+                { id: 'commands', buttons: [{}] },
+                { id: 'options', buttons: [
+                  { id: 'sw-visibility', command: 'sw-visibility', active: true, label: '<svg viewBox="0 0 24 24" width="18"><path fill="currentColor" d="M15 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V9l-6-6zM5 19V5h9v5h5v9H5z"/></svg>' },
+                  { id: 'preview', command: 'preview', label: '<svg viewBox="0 0 24 24" width="18"><path fill="currentColor" d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zM12 17c-2.8 0-5-2.2-5-5s2.2-5 5-5 5 2.2 5 5-2.2 5-5 5zm0-8c-1.7 0-3 1.3-3 3s1.3 3 3 3 3-1.3 3-3-1.3-3-3-3z"/></svg>' },
+                  { id: 'fullscreen', command: 'fullscreen', label: '<svg viewBox="0 0 24 24" width="18"><path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>' }
+                ]}
+              ]},
               blockManager: { appendTo: '#grapesjs-blocks-panel' },
               selectorManager: { componentFirst: true },
               canvas: {
@@ -436,6 +446,16 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
               fromElement: false,
               components: '',
               storageManager: false,
+              showDevices: false,
+              styleManager: { sectors: [] },
+              panels: { defaults: [
+                { id: 'commands', buttons: [{}] },
+                { id: 'options', buttons: [
+                  { id: 'sw-visibility', command: 'sw-visibility', active: true, label: '<svg viewBox="0 0 24 24" width="18"><path fill="currentColor" d="M15 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V9l-6-6zM5 19V5h9v5h5v9H5z"/></svg>' },
+                  { id: 'preview', command: 'preview', label: '<svg viewBox="0 0 24 24" width="18"><path fill="currentColor" d="M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zM12 17c-2.8 0-5-2.2-5-5s2.2-5 5-5 5 2.2 5 5-2.2 5-5 5zm0-8c-1.7 0-3 1.3-3 3s1.3 3 3 3 3-1.3 3-3-1.3-3-3-3z"/></svg>' },
+                  { id: 'fullscreen', command: 'fullscreen', label: '<svg viewBox="0 0 24 24" width="18"><path fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>' }
+                ]}
+              ]},
               blockManager: { appendTo: '#doc-grapesjs-blocks-panel' },
               selectorManager: { componentFirst: true },
               canvas: {
