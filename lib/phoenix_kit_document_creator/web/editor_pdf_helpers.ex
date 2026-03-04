@@ -28,6 +28,13 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   Returns `{:ok, base64_pdf}` or `{:error, reason}`.
   """
+  @paper_size_map %{
+    "a4" => :a4,
+    "letter" => :us_letter,
+    "legal" => :legal,
+    "tabloid" => :tabloid
+  }
+
   def generate_pdf(html, opts \\ []) do
     header_html = Keyword.get(opts, :header_html, "")
     footer_html = Keyword.get(opts, :footer_html, "")
@@ -35,27 +42,31 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
     footer_text = Keyword.get(opts, :footer_text, "")
 
     with :ok <- PhoenixKitDocumentCreator.ChromeSupervisor.ensure_started() do
+      size = resolve_paper_size(Keyword.get(opts, :paper_size, "a4"))
+
       cond do
         rich_content?(header_html) or rich_content?(footer_html) ->
-          generate_with_rich_template(html, header_html, footer_html)
+          generate_with_rich_template(html, header_html, footer_html, size)
 
         has_text?(header_text) or has_text?(footer_text) ->
-          generate_with_text_template(html, header_text, footer_text)
+          generate_with_text_template(html, header_text, footer_text, size)
 
         true ->
-          ChromicPDF.print_to_pdf({:html, @body_styles <> html})
+          ChromicPDF.print_to_pdf({:html, @body_styles <> html},
+            print_to_pdf: %{paperWidth: paper_width(size), paperHeight: paper_height(size)}
+          )
       end
     end
   end
 
   # --- Rich HTML header/footer ---
 
-  defp generate_with_rich_template(html, header_html, footer_html) do
+  defp generate_with_rich_template(html, header_html, footer_html, size) do
     header = if rich_content?(header_html), do: rich_header_wrapper(header_html), else: ""
     footer = if rich_content?(footer_html), do: rich_footer_wrapper(footer_html), else: ""
 
     template_opts =
-      [content: @body_styles <> html, size: :a4]
+      [content: @body_styles <> html, size: size]
       |> maybe_add(:header, header)
       |> maybe_add(:footer, footer)
       |> maybe_add(:header_height, if(header != "", do: "25mm"))
@@ -102,12 +113,12 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   # --- Plain text header/footer (backward compatible) ---
 
-  defp generate_with_text_template(html, header_text, footer_text) do
+  defp generate_with_text_template(html, header_text, footer_text, size) do
     header = if has_text?(header_text), do: text_header_template(header_text), else: ""
     footer = if has_text?(footer_text), do: text_footer_template(footer_text), else: ""
 
     template_opts =
-      [content: @body_styles <> html, size: :a4]
+      [content: @body_styles <> html, size: size]
       |> maybe_add(:header, header)
       |> maybe_add(:footer, footer)
       |> maybe_add(:header_height, if(header != "", do: "20mm"))
@@ -152,4 +163,23 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   end
 
   defp escape_html(_), do: ""
+
+  defp resolve_paper_size(name) when is_binary(name) do
+    Map.get(@paper_size_map, name, :a4)
+  end
+
+  defp resolve_paper_size(_), do: :a4
+
+  # Dimensions in inches for ChromicPDF's print_to_pdf paperWidth/paperHeight
+  defp paper_width(:a4), do: 8.27
+  defp paper_width(:us_letter), do: 8.5
+  defp paper_width(:legal), do: 8.5
+  defp paper_width(:tabloid), do: 11.0
+  defp paper_width(_), do: 8.27
+
+  defp paper_height(:a4), do: 11.69
+  defp paper_height(:us_letter), do: 11.0
+  defp paper_height(:legal), do: 14.0
+  defp paper_height(:tabloid), do: 17.0
+  defp paper_height(_), do: 11.69
 end

@@ -177,16 +177,20 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   def handle_event("generate_pdf_with_content", %{"html" => html} = params, socket) do
     header_footer = load_header_footer(socket.assigns.template)
 
+    paper_size = Map.get(params, "paper_size", "a4")
+
     pdf_opts =
       if header_footer do
         [
           header_html: header_footer.header_html || "",
-          footer_html: header_footer.footer_html || ""
+          footer_html: header_footer.footer_html || "",
+          paper_size: paper_size
         ]
       else
         [
           header_html: Map.get(params, "header_html", ""),
-          footer_html: Map.get(params, "footer_html", "")
+          footer_html: Map.get(params, "footer_html", ""),
+          paper_size: paper_size
         ]
       end
 
@@ -296,9 +300,9 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   def render(assigns) do
     ~H"""
     <.editor_scripts />
-    <div class="flex flex-col mx-auto px-4 py-6 gap-4 h-[calc(100vh-4rem)]">
+    <div class="flex flex-col mx-auto px-4 py-6 gap-4">
       <%!-- Header bar --%>
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between sticky top-0 z-10 bg-base-100 py-2 -mt-2">
         <div class="flex items-center gap-3">
           <a
             href="document-creator"
@@ -344,7 +348,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       </div>
 
       <%!-- Main layout: Editor + Settings sidebar --%>
-      <div class="flex gap-4 flex-1">
+      <div class="flex gap-4">
         <%!-- GrapesJS Editor (left, takes most space) --%>
         <div class="flex-1 card bg-base-100 shadow-xl overflow-hidden">
           <div id="grapesjs-wrapper" phx-hook="GrapesJSTemplateEditor" phx-update="ignore" style="display:flex;width:100%;height:100%;">
@@ -415,6 +419,18 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
                     selected={@template && get_in(@template.config, ["paper_size"]) == "letter"}
                   >
                     US Letter (8.5 × 11 in)
+                  </option>
+                  <option
+                    value="legal"
+                    selected={@template && get_in(@template.config, ["paper_size"]) == "legal"}
+                  >
+                    US Legal (8.5 × 14 in)
+                  </option>
+                  <option
+                    value="tabloid"
+                    selected={@template && get_in(@template.config, ["paper_size"]) == "tabloid"}
+                  >
+                    Tabloid (11 × 17 in)
                   </option>
                 </select>
               </div>

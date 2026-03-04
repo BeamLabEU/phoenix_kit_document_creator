@@ -112,23 +112,27 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   # ── PDF ────────────────────────────────────────────────────────────
 
   def handle_event("generate_pdf", _params, socket) do
+    paper_size = get_in(socket.assigns.document.config, ["paper_size"]) || "a4"
+
     {:noreply,
      socket
      |> assign(generating_pdf: true, error: nil)
-     |> push_event("request-content-for-pdf", %{})}
+     |> push_event("request-content-for-pdf", %{paper_size: paper_size})}
   end
 
-  def handle_event("generate_pdf_with_content", %{"html" => html}, socket) do
+  def handle_event("generate_pdf_with_content", %{"html" => html} = params, socket) do
     header_footer = load_header_footer(socket.assigns.document)
+    paper_size = Map.get(params, "paper_size", "a4")
 
     pdf_opts =
       if header_footer do
         [
           header_html: header_footer.header_html || "",
-          footer_html: header_footer.footer_html || ""
+          footer_html: header_footer.footer_html || "",
+          paper_size: paper_size
         ]
       else
-        []
+        [paper_size: paper_size]
       end
 
     case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
@@ -198,9 +202,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   def render(assigns) do
     ~H"""
     <.editor_scripts />
-    <div class="flex flex-col mx-auto px-4 py-6 gap-4 h-[calc(100vh-4rem)]">
+    <div class="flex flex-col mx-auto px-4 py-6 gap-4">
       <%!-- Header bar --%>
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between sticky top-0 z-10 bg-base-100 py-2 -mt-2">
         <div class="flex items-center gap-3">
           <a
             href="document-creator"
@@ -244,7 +248,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
       </div>
 
       <%!-- Main layout: Editor + sidebar --%>
-      <div class="flex gap-4 flex-1">
+      <div class="flex gap-4">
         <%!-- GrapesJS Editor --%>
         <div class="flex-1 card bg-base-100 shadow-xl overflow-hidden">
           <div id="doc-grapesjs-wrapper" phx-hook="GrapesJSDocumentEditor" phx-update="ignore" style="display:flex;width:100%;height:100%;">

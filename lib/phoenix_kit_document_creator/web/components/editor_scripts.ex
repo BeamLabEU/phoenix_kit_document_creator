@@ -97,8 +97,10 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
       // ======================================================================
 
       var PAPER_SIZES = {
-        a4:     { width: 794, height: 1123 },  // 210mm × 297mm
-        letter: { width: 816, height: 1056 }   // 8.5in × 11in
+        a4:      { width: 794, height: 1123 },  // 210mm × 297mm
+        letter:  { width: 816, height: 1056 },  // 8.5in × 11in
+        legal:   { width: 816, height: 1344 },  // 8.5in × 14in
+        tabloid: { width: 1056, height: 1632 }   // 11in × 17in
       };
 
       function applyPaperSize(editor, size) {
@@ -110,11 +112,21 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
         if (frame && frame.parentElement) {
           frame.parentElement.style.width = dims.width + 'px';
           frame.parentElement.style.margin = '0 auto';
+          frame.parentElement.style.height = dims.height + 'px';
+        }
+        // Also set iframe height to match
+        if (frame) {
+          frame.style.height = dims.height + 'px';
         }
         // Set min-height on wrapper so content area has proper page height
         var wrapper = editor.DomComponents.getWrapper();
         if (wrapper) {
           wrapper.addStyle({ 'min-height': dims.height + 'px' });
+        }
+        // Resize the canvas container to fit
+        var canvas = editor.Canvas.getElement();
+        if (canvas) {
+          canvas.style.height = dims.height + 'px';
         }
       }
 
@@ -424,7 +436,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
           ensureGrapesJS(function() {
             var editor = grapesjs.init({
               container: '#editor-grapesjs',
-              height: '100%',
+              height: 'auto',
               width: 'auto',
               fromElement: false,
               components: '',
@@ -497,8 +509,10 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
             var ed = self._editor;
             var html = ed.getHtml();
             var css = ed.getCss();
+            var paperSel = document.getElementById('template-paper-size');
             self.pushEvent("generate_pdf_with_content", {
-              html: css ? html + '<style>' + css + '</style>' : html
+              html: css ? html + '<style>' + css + '</style>' : html,
+              paper_size: paperSel ? paperSel.value : 'a4'
             });
           });
 
@@ -528,7 +542,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
           ensureGrapesJS(function() {
             var editor = grapesjs.init({
               container: '#doc-editor-grapesjs',
-              height: '100%',
+              height: 'auto',
               width: 'auto',
               fromElement: false,
               components: '',
@@ -593,13 +607,14 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
             });
           });
 
-          self.handleEvent("request-content-for-pdf", function() {
+          self.handleEvent("request-content-for-pdf", function(payload) {
             if (!self._editor) return;
             var ed = self._editor;
             var html = ed.getHtml();
             var css = ed.getCss();
             self.pushEvent("generate_pdf_with_content", {
-              html: css ? html + '<style>' + css + '</style>' : html
+              html: css ? html + '<style>' + css + '</style>' : html,
+              paper_size: (payload && payload.paper_size) || 'a4'
             });
           });
 
