@@ -7,7 +7,10 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
   - `:header_edit` / `:footer_edit` — loads existing record by UUID for editing
 
   The first save of a new record persists it and redirects to the edit URL.
-  Contains a single mini GrapesJS editor for visual layout design.
+
+  Shows a full page preview at paper dimensions where only the header or
+  footer region is editable via GrapesJS. The rest of the page is a greyed-out
+  non-interactive placeholder for visual context.
   """
   use Phoenix.LiveView
 
@@ -23,6 +26,7 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
      assign(socket,
        record: nil,
        type: nil,
+       paper_size: "a4",
        saving: false,
        error: nil,
        saved_flash: nil
@@ -40,15 +44,21 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
   defp apply_action(socket, :footer_edit, params), do: load_record(socket, "footer", params)
 
   defp new_record(socket, type) do
-    record = %HeaderFooter{type: type, name: "Untitled #{String.capitalize(type)}", height: "25mm"}
+    record = %HeaderFooter{type: type, name: "Untitled #{String.capitalize(type)}", height: "25mm", data: %{}}
 
     socket
     |> assign(
       page_title: "New #{String.capitalize(type)}",
       record: record,
-      type: type
+      type: type,
+      paper_size: "a4"
     )
-    |> push_event("init-hf-editor", %{native: nil})
+    |> push_event("init-hf-editor", %{
+      native: nil,
+      type: type,
+      height: "25mm",
+      paper_size: "a4"
+    })
   end
 
   defp load_record(socket, type, %{"uuid" => uuid}) do
@@ -59,14 +69,20 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
         |> redirect(to: hf_list_path(type))
 
       record ->
+        paper_size = get_in(record.data || %{}, ["paper_size"]) || "a4"
+
         socket
         |> assign(
           page_title: "Edit: #{record.name}",
           record: record,
-          type: type
+          type: type,
+          paper_size: paper_size
         )
         |> push_event("init-hf-editor", %{
-          native: record.native
+          native: record.native,
+          type: type,
+          height: record.height,
+          paper_size: paper_size
         })
     end
   end
@@ -96,12 +112,15 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
         _ -> nil
       end
 
+    existing_data = (record.data || %{})
+
     attrs = %{
       name: Map.get(params, "name", record.name),
       html: Map.get(params, "html", ""),
       css: Map.get(params, "css", ""),
       native: native,
-      height: Map.get(params, "height", record.height)
+      height: Map.get(params, "height", record.height),
+      data: Map.merge(existing_data, %{"paper_size" => Map.get(params, "paper_size", "a4")})
     }
 
     is_new = socket.assigns.live_action in [:header_new, :footer_new]
@@ -139,9 +158,9 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
   def render(assigns) do
     ~H"""
     <.editor_scripts />
-    <div id="hf-hook-container" phx-hook="GrapesJSHFEditor" class="flex flex-col mx-auto max-w-5xl px-4 py-6 gap-4">
+    <div id="hf-hook-container" phx-hook="GrapesJSHFEditor" class="flex flex-col mx-auto px-4 py-6 gap-4">
       <%!-- Header bar --%>
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between sticky top-16 z-10 bg-base-100 py-2 -mt-2">
         <div class="flex items-center gap-3">
           <a href={hf_list_path(@type)} class="btn btn-ghost btn-sm btn-square">
             <span class="hero-arrow-left w-5 h-5" />
@@ -170,91 +189,124 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
         <span>{@error}</span>
       </div>
 
-      <%!-- Settings row --%>
-      <div :if={@record} class="card bg-base-100 shadow-xl">
-        <div class="card-body p-4">
-          <div class="flex gap-4 items-end">
-            <div class="form-control flex-1">
-              <label class="label py-1"><span class="label-text text-xs">Name</span></label>
-              <input
-                type="text"
-                id="hf-name"
-                class="input input-bordered input-sm w-full"
-                value={@record.name}
-              />
-            </div>
-            <div class="form-control w-28">
-              <label class="label py-1"><span class="label-text text-xs">Height</span></label>
-              <input
-                type="text"
-                id="hf-height"
-                class="input input-bordered input-sm"
-                value={@record.height}
-              />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <%!-- Editor --%>
-      <div class="card bg-base-100 shadow-xl">
-        <div class="card-body p-4 space-y-2">
-          <h3 class="font-semibold text-sm">{String.capitalize(@type || "")} Design</h3>
+      <%!-- Main layout: Page preview + Sidebar --%>
+      <div class="flex gap-4">
+        <%!-- Page preview (left) --%>
+        <div class="flex-1 overflow-x-auto">
           <div
-            id="hf-editor-wrapper"
+            id="hf-page-frame"
             phx-update="ignore"
-            style="display:flex;border:1px solid oklch(var(--bc) / 0.2);border-radius:0.5rem;overflow:hidden;position:relative;"
+            data-type={@type}
+            style="display:flex;flex-direction:column;width:794px;height:1123px;margin:0 auto;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,0.12);border-radius:4px;overflow:hidden;position:relative;"
           >
-            <div id="hf-editor-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;background:oklch(var(--b1, 1 0 0));">
+            <div id="hf-editor-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;background:#fff;">
               <span class="loading loading-spinner loading-md"></span>
             </div>
-            <div id="hf-editor" class="hf-mini-editor" style="flex:1;height:200px;"></div>
-            <div
-              id="hf-editor-blocks"
-              class="hf-blocks-panel"
-              style="width:120px;border-left:1px solid oklch(var(--bc) / 0.15);overflow-y:auto;"
-            >
-            </div>
+
+            <%= if @type == "header" do %>
+              <div id="hf-editor" class="hf-mini-editor" style="height:95px;flex-shrink:0;flex-grow:0;overflow:hidden;"></div>
+              <div id="hf-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;"></div>
+              <div id="hf-body-placeholder" style="flex:1 1 auto;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 10px,#f3f4f6 10px,#f3f4f6 20px);display:flex;align-items:center;justify-content:center;pointer-events:none;user-select:none;">
+                <span style="color:#9ca3af;font-size:14px;font-style:italic;">Document body</span>
+              </div>
+            <% else %>
+              <div id="hf-body-placeholder" style="flex:1 1 auto;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 10px,#f3f4f6 10px,#f3f4f6 20px);display:flex;align-items:center;justify-content:center;pointer-events:none;user-select:none;">
+                <span style="color:#9ca3af;font-size:14px;font-style:italic;">Document body</span>
+              </div>
+              <div id="hf-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;"></div>
+              <div id="hf-editor" class="hf-mini-editor" style="height:95px;flex-shrink:0;flex-grow:0;overflow:hidden;"></div>
+            <% end %>
           </div>
         </div>
-      </div>
 
-      <p class="text-xs text-base-content/50">
-        Drag elements from the blocks panel. Use absolute positioning to place elements freely.
-        The "Page #" block inserts page number placeholders for PDF output.
-      </p>
+        <%!-- Sidebar (right) --%>
+        <div class="w-72 flex-shrink-0 space-y-4 sticky top-28 self-start max-h-[calc(100vh-8rem)] overflow-y-auto">
+          <%!-- Settings card --%>
+          <div class="card bg-base-100 shadow-xl">
+            <div class="card-body p-4 space-y-3">
+              <h3 class="font-semibold text-sm">{String.capitalize(@type || "")} Settings</h3>
+
+              <div class="form-control">
+                <label class="label py-1"><span class="label-text text-xs">Name</span></label>
+                <input
+                  type="text"
+                  id="hf-name"
+                  class="input input-bordered input-sm w-full"
+                  value={@record && @record.name || ""}
+                />
+              </div>
+
+              <div class="form-control">
+                <label class="label py-1"><span class="label-text text-xs">Height</span></label>
+                <input
+                  type="text"
+                  id="hf-height"
+                  class="input input-bordered input-sm w-full"
+                  value={@record && @record.height || "25mm"}
+                />
+              </div>
+
+              <div class="form-control">
+                <label class="label py-1"><span class="label-text text-xs">Paper Size</span></label>
+                <select id="hf-paper-size" class="select select-bordered select-sm w-full">
+                  <option value="a4" selected={@paper_size == "a4"}>A4 (210 x 297 mm)</option>
+                  <option value="letter" selected={@paper_size == "letter"}>US Letter (8.5 x 11 in)</option>
+                  <option value="legal" selected={@paper_size == "legal"}>US Legal (8.5 x 14 in)</option>
+                  <option value="tabloid" selected={@paper_size == "tabloid"}>Tabloid (11 x 17 in)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <%!-- Elements (blocks) card --%>
+          <div class="card bg-base-100 shadow-xl">
+            <div class="card-body p-4 space-y-2">
+              <h3 class="font-semibold text-sm">Elements</h3>
+              <div id="hf-editor-blocks"></div>
+            </div>
+          </div>
+
+          <p class="text-xs text-base-content/50">
+            Drag elements from the Elements panel into the {String.downcase(@type || "")} area.
+            The "Page #" block inserts page number placeholders for PDF output.
+          </p>
+        </div>
+      </div>
     </div>
 
-    <%!-- Mini GrapesJS editor styles --%>
+    <%!-- GrapesJS editor styles --%>
     <style>
-      .hf-mini-editor .gjs-editor,
+      .hf-mini-editor .gjs-editor {
+        background: #fff !important;
+        position: relative !important;
+      }
       .hf-mini-editor .gjs-cv-canvas {
         background: #fff !important;
+        width: 100% !important;
+        height: 100% !important;
+        top: 0 !important;
+        position: absolute !important;
       }
-      .hf-mini-editor .gjs-cv-canvas { width: 100% !important; }
       .hf-mini-editor .gjs-pn-panels,
       .hf-mini-editor .gjs-com-badge,
       .hf-mini-editor .gjs-toolbar {
         display: none !important;
       }
-      .hf-blocks-panel {
-        background: #f8f9fa !important;
+      #hf-editor-blocks .gjs-blocks-cs {
+        display: flex; flex-direction: column; gap: 3px;
       }
-      .hf-blocks-panel .gjs-blocks-cs {
-        display: flex; flex-direction: column; gap: 3px; padding: 6px;
-      }
-      .hf-blocks-panel .gjs-block {
+      #hf-editor-blocks .gjs-block {
         width: 100% !important; padding: 6px 8px !important;
         border: 1px solid #e0e0e0 !important; border-radius: 4px !important;
         background: #fff !important; cursor: grab; text-align: center;
         font-size: 10px !important; min-height: 0 !important;
       }
-      .hf-blocks-panel .gjs-block:hover {
+      #hf-editor-blocks .gjs-block:hover {
         border-color: oklch(var(--p)) !important;
         background: oklch(var(--p) / 0.05) !important;
       }
-      .hf-blocks-panel .gjs-block svg { fill: #555; }
-      .hf-blocks-panel .gjs-block-label {
+      #hf-editor-blocks .gjs-block svg { fill: #555; }
+      #hf-editor-blocks .gjs-block-label {
         color: #1a1a1a !important; font-size: 10px !important;
       }
     </style>

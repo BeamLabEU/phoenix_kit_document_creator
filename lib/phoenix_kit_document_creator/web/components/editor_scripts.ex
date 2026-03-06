@@ -732,7 +732,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
       };
 
       // ======================================================================
-      // Hook 3: GrapesJSHeaderFooter
+      // Hook 3: GrapesJSHFEditor (full-page header/footer editor)
       // ======================================================================
 
       var HF_CANVAS_STYLES = [
@@ -743,13 +743,53 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
         '[data-gjs-type]:hover { outline: 1px dashed #c7c7c7 !important; }'
       ].join('\n');
 
-      function initMiniGrapesjs(containerId) {
-        var el = document.getElementById(containerId);
+      // Convert CSS height string (e.g. "25mm", "100px") to pixels at 96 DPI
+      function parseHeightToPx(heightStr) {
+        if (!heightStr) return 25 * 3.7795;
+        var val = parseFloat(heightStr);
+        if (isNaN(val)) return 25 * 3.7795;
+        if (heightStr.indexOf('px') !== -1) return val;
+        // Default: treat as mm (1mm = 3.7795px at 96 DPI)
+        return val * 3.7795;
+      }
+
+      // Update page frame, editor region, and body placeholder dimensions
+      function updateHFLayout(paperSize, heightStr) {
+        var dims = PAPER_SIZES[paperSize] || PAPER_SIZES.a4;
+        var hfPx = Math.round(parseHeightToPx(heightStr));
+        // Clamp: header/footer can't exceed page height
+        if (hfPx > dims.height) hfPx = dims.height;
+        var bodyPx = Math.max(0, dims.height - hfPx);
+
+        var pageFrame = document.getElementById('hf-page-frame');
+        if (pageFrame) {
+          pageFrame.style.width = dims.width + 'px';
+          pageFrame.style.height = dims.height + 'px';
+        }
+
+        var editorEl = document.getElementById('hf-editor');
+        if (editorEl) {
+          editorEl.style.height = hfPx + 'px';
+          editorEl.style.flexShrink = '0';
+          editorEl.style.flexGrow = '0';
+          editorEl.style.overflow = 'hidden';
+        }
+
+        var bodyEl = document.getElementById('hf-body-placeholder');
+        if (bodyEl) bodyEl.style.flex = '1 1 auto';
+      }
+
+      function initPageAwareHFEditor(opts) {
+        var el = document.getElementById(opts.containerId);
         if (!el) return null;
-        var blocksId = containerId + '-blocks';
+
+        // Set initial dimensions
+        updateHFLayout(opts.paperSize, opts.height);
+
+        var hfPx = Math.round(parseHeightToPx(opts.height));
         var mini = grapesjs.init({
-          container: '#' + containerId,
-          height: '200px',
+          container: '#' + opts.containerId,
+          height: hfPx + 'px',
           width: 'auto',
           fromElement: false,
           components: '',
@@ -757,7 +797,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
           dragMode: 'absolute',
           deviceManager: { devices: [] },
           panels: { defaults: [] },
-          blockManager: { appendTo: '#' + blocksId },
+          blockManager: { appendTo: '#' + opts.blocksId },
           selectorManager: { componentFirst: true },
           styleManager: { sectors: [] }
         });
@@ -797,18 +837,85 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
         mini.on('load', function() {
           var wrapper = mini.DomComponents.getWrapper();
           wrapper.setStyle({ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' });
+
+          // Hide panels and force canvas to fill the entire container (no top gap)
+          var panelsEl = el.querySelector('.gjs-pn-panels');
+          if (panelsEl) panelsEl.style.display = 'none';
+
           var editorEl = el.querySelector('.gjs-editor');
-          if (editorEl) editorEl.style.background = '#fff';
+          if (editorEl) {
+            editorEl.style.background = '#fff';
+            editorEl.style.position = 'relative';
+          }
+
           var cvCanvas = el.querySelector('.gjs-cv-canvas');
-          if (cvCanvas) { cvCanvas.style.background = '#fff'; cvCanvas.style.width = '100%'; }
+          if (cvCanvas) {
+            cvCanvas.style.background = '#fff';
+            cvCanvas.style.width = '100%';
+            cvCanvas.style.height = '100%';
+            cvCanvas.style.top = '0';
+            cvCanvas.style.position = 'absolute';
+          }
+
           var frame = mini.Canvas.getFrameEl();
           if (frame && frame.contentDocument) {
             var style = frame.contentDocument.createElement('style');
             style.textContent = HF_CANVAS_STYLES;
             frame.contentDocument.head.appendChild(style);
           }
-          var panelsEl = el.querySelector('.gjs-pn-panels');
-          if (panelsEl) panelsEl.style.display = 'none';
+        });
+
+        // Clamp drag within wrapper bounds
+        mini.on('component:drag:end', function(model) {
+          var target = model && model.target ? model.target : model;
+          if (!target || target.get('type') === 'wrapper') return;
+          var tel = target.getEl();
+          if (!tel) return;
+          var wrapperEl = tel.closest('[data-gjs-type="wrapper"]');
+          if (!wrapperEl) return;
+
+          var wW = wrapperEl.clientWidth;
+          var wH = wrapperEl.clientHeight;
+          var st = target.getStyle();
+          var l = parseInt(st.left) || 0;
+          var t = parseInt(st.top) || 0;
+          var w = tel.offsetWidth;
+          var h = tel.offsetHeight;
+          var upd = {};
+
+          var maxW = wW - Math.max(l, 0);
+          var maxH = wH - Math.max(t, 0);
+          if (w > maxW) upd.width = maxW + 'px';
+          if (h > maxH) upd.height = maxH + 'px';
+
+          var eW = upd.width ? maxW : w;
+          var eH = upd.height ? maxH : h;
+          var cL = Math.max(0, Math.min(l, wW - eW));
+          var cT = Math.max(0, Math.min(t, wH - eH));
+          if (cL !== l) upd.left = cL + 'px';
+          if (cT !== t) upd.top = cT + 'px';
+
+          if (Object.keys(upd).length > 0) target.addStyle(upd);
+        });
+
+        // Clamp resize within wrapper bounds
+        mini.on('component:resize', function() {
+          var target = mini.getSelected();
+          if (!target || target.get('type') === 'wrapper') return;
+          var tel = target.getEl();
+          if (!tel) return;
+          var wrapperEl = tel.closest('[data-gjs-type="wrapper"]');
+          if (!wrapperEl) return;
+
+          var st = target.getStyle();
+          var l = parseInt(st.left) || 0;
+          var t = parseInt(st.top) || 0;
+          var maxW = wrapperEl.clientWidth - Math.max(l, 0);
+          var maxH = wrapperEl.clientHeight - Math.max(t, 0);
+          var upd = {};
+          if (tel.offsetWidth > maxW) upd.width = maxW + 'px';
+          if (tel.offsetHeight > maxH) upd.height = maxH + 'px';
+          if (Object.keys(upd).length > 0) target.addStyle(upd);
         });
 
         return mini;
@@ -827,13 +934,22 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
         mounted() {
           var self = this;
           self._editor = null;
+          self._paperSize = 'a4';
 
           self.handleEvent("init-hf-editor", function(payload) {
             ensureGrapesJS(function() {
               if (self._editor) { try { self._editor.destroy(); } catch(_) {} }
 
+              self._paperSize = payload.paper_size || 'a4';
+
               setTimeout(function() {
-                self._editor = initMiniGrapesjs('hf-editor');
+                self._editor = initPageAwareHFEditor({
+                  containerId: 'hf-editor',
+                  blocksId: 'hf-editor-blocks',
+                  type: payload.type || 'header',
+                  paperSize: self._paperSize,
+                  height: payload.height || '25mm'
+                });
 
                 if (self._editor) {
                   self._editor.on('load', function() {
@@ -849,6 +965,31 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
             });
           });
 
+          // Height change listener — resize editor region on blur/enter
+          var heightInput = document.getElementById('hf-height');
+          if (heightInput) {
+            heightInput.addEventListener('change', function() {
+              updateHFLayout(self._paperSize, heightInput.value);
+              if (self._editor) {
+                requestAnimationFrame(function() { self._editor.refresh(); });
+              }
+            });
+          }
+
+          // Paper size change listener — resize entire page frame
+          var paperSelect = document.getElementById('hf-paper-size');
+          if (paperSelect) {
+            paperSelect.addEventListener('change', function() {
+              self._paperSize = paperSelect.value;
+              var height = document.getElementById('hf-height')?.value || '25mm';
+              updateHFLayout(self._paperSize, height);
+              if (self._editor) {
+                requestAnimationFrame(function() { self._editor.refresh(); });
+              }
+            });
+          }
+
+          // Save handler — include paper_size
           self.handleEvent("request-hf-save-data", function() {
             var data = getEditorData(self._editor);
             self.pushEvent("save_record", {
@@ -856,7 +997,8 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
               html: data.html,
               css: data.css,
               native: data.native,
-              height: document.getElementById('hf-height')?.value || '25mm'
+              height: document.getElementById('hf-height')?.value || '25mm',
+              paper_size: document.getElementById('hf-paper-size')?.value || 'a4'
             });
           });
         },
