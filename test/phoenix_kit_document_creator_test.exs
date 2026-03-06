@@ -61,12 +61,12 @@ defmodule PhoenixKitDocumentCreatorTest do
   end
 
   describe "admin_tabs/0" do
-    test "returns base tabs (5 minimum)" do
+    test "returns base tabs (8 minimum)" do
       tabs = PhoenixKitDocumentCreator.admin_tabs()
       assert is_list(tabs)
-      # Base: 5 tabs (landing, template new, template edit, document edit, headers/footers).
+      # Base: 10 tabs (landing, template new/edit, document edit, headers list/new/edit, footers list/new/edit).
       # Testing tabs are compile-time conditional.
-      assert length(tabs) >= 5
+      assert length(tabs) >= 8
     end
 
     test "parent tab has correct fields" do
@@ -103,7 +103,11 @@ defmodule PhoenixKitDocumentCreatorTest do
              end)
 
       assert Enum.any?(tabs, fn tab ->
-               match?({PhoenixKitDocumentCreator.Web.HeaderFooterLive, :index}, tab.live_view)
+               match?({PhoenixKitDocumentCreator.Web.HeaderFooterLive, :headers}, tab.live_view)
+             end)
+
+      assert Enum.any?(tabs, fn tab ->
+               match?({PhoenixKitDocumentCreator.Web.HeaderFooterLive, :footers}, tab.live_view)
              end)
     end
 

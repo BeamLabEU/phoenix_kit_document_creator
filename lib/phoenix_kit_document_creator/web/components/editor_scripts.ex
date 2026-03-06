@@ -105,29 +105,90 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
 
       function applyPaperSize(editor, size) {
         var dims = PAPER_SIZES[size] || PAPER_SIZES.a4;
-        // Set width on the frame-wrapper (outside the iframe) to avoid
-        // offsetting the body inside the iframe which breaks GrapesJS
-        // coordinate calculations for drag/resize.
+        editor._paperDims = dims;
+        updatePageLayout(editor);
+      }
+
+      // Update all height-related surfaces and page dividers
+      function updatePageLayout(editor) {
+        var dims = editor._paperDims || PAPER_SIZES.a4;
+        var pages = editor._pageCount || 1;
+        var totalHeight = dims.height * pages;
+
+        // Set width and total height on the frame-wrapper (outside the iframe)
         var frame = editor.Canvas.getFrameEl();
         if (frame && frame.parentElement) {
           frame.parentElement.style.width = dims.width + 'px';
           frame.parentElement.style.margin = '0 auto';
-          frame.parentElement.style.height = dims.height + 'px';
+          frame.parentElement.style.height = totalHeight + 'px';
         }
-        // Also set iframe height to match
         if (frame) {
-          frame.style.height = dims.height + 'px';
+          frame.style.height = totalHeight + 'px';
         }
-        // Set min-height on wrapper so content area has proper page height
+        // Set min-height on wrapper
         var wrapper = editor.DomComponents.getWrapper();
         if (wrapper) {
-          wrapper.addStyle({ 'min-height': dims.height + 'px' });
+          wrapper.addStyle({ 'min-height': totalHeight + 'px' });
         }
         // Resize the canvas container to fit
         var canvas = editor.Canvas.getElement();
         if (canvas) {
-          canvas.style.height = dims.height + 'px';
+          canvas.style.height = totalHeight + 'px';
         }
+        // Draw page dividers inside the iframe
+        updatePageDividers(editor, dims, pages);
+      }
+
+      function updatePageDividers(editor, dims, pages) {
+        var frame = editor.Canvas.getFrameEl();
+        if (!frame || !frame.contentDocument) return;
+        var doc = frame.contentDocument;
+
+        // Remove existing dividers
+        var old = doc.querySelectorAll('.gjs-page-divider');
+        for (var i = 0; i < old.length; i++) old[i].remove();
+
+        // Add dividers between pages
+        for (var p = 1; p < pages; p++) {
+          var divider = doc.createElement('div');
+          divider.className = 'gjs-page-divider';
+          divider.style.cssText = [
+            'position: absolute',
+            'left: 0',
+            'width: 100%',
+            'top: ' + (dims.height * p) + 'px',
+            'height: 0',
+            'border-top: 2px dashed #cbd5e1',
+            'pointer-events: none',
+            'z-index: 1',
+            'box-sizing: border-box'
+          ].join(';');
+          // Page label
+          var label = doc.createElement('span');
+          label.style.cssText = [
+            'position: absolute',
+            'right: 8px',
+            'top: 4px',
+            'font-size: 10px',
+            'color: #94a3b8',
+            'font-family: sans-serif',
+            'pointer-events: none'
+          ].join(';');
+          label.textContent = 'Page ' + p + ' / ' + (p + 1);
+          divider.appendChild(label);
+          doc.body.appendChild(divider);
+        }
+      }
+
+      function addPage(editor) {
+        editor._pageCount = (editor._pageCount || 1) + 1;
+        updatePageLayout(editor);
+      }
+
+      function removePage(editor) {
+        if ((editor._pageCount || 1) <= 1) return;
+        editor._pageCount--;
+        updatePageLayout(editor);
       }
 
       function setupPaperSizeListener(editor, selectId) {
@@ -458,6 +519,8 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
               }
             });
 
+            editor._pageCount = 1;
+            editor._paperDims = PAPER_SIZES.a4;
             injectCanvasStyles(editor, { paperSizeSelectId: 'template-paper-size' });
             addDocumentBlocks(editor, { templateVariables: true });
             setupDragAndResize(editor);
@@ -465,27 +528,43 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
             setupTheme(document.getElementById('grapesjs-wrapper'));
             self._editor = editor;
 
+            // Listen for add/remove page events from the LiveView button
+            self.el.addEventListener('add-page', function() { addPage(editor); });
+            self.el.addEventListener('remove-page', function() { removePage(editor); });
+
             if (self._pendingLoad) {
               var p = self._pendingLoad;
               self._pendingLoad = null;
               if (p.type === 'project') editor.loadProjectData(p.data);
               else if (p.type === 'html') editor.setComponents(p.data);
+              if (p.page_count) {
+                editor._pageCount = parseInt(p.page_count) || 1;
+                updatePageLayout(editor);
+              }
             }
           });
 
           self.handleEvent("load-project", function(payload) {
             if (self._editor && payload.data) {
               self._editor.loadProjectData(payload.data);
+              if (payload.page_count) {
+                self._editor._pageCount = parseInt(payload.page_count) || 1;
+                updatePageLayout(self._editor);
+              }
             } else {
-              self._pendingLoad = { type: 'project', data: payload.data };
+              self._pendingLoad = { type: 'project', data: payload.data, page_count: payload.page_count };
             }
           });
 
           self.handleEvent("editor-set-content", function(payload) {
             if (self._editor) {
               self._editor.setComponents(payload.html || '');
+              if (payload.page_count) {
+                self._editor._pageCount = parseInt(payload.page_count) || 1;
+                updatePageLayout(self._editor);
+              }
             } else {
-              self._pendingLoad = { type: 'html', data: payload.html || '' };
+              self._pendingLoad = { type: 'html', data: payload.html || '', page_count: payload.page_count };
             }
           });
 
@@ -499,8 +578,10 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
               name: document.getElementById('template-name')?.value || '',
               description: document.getElementById('template-description')?.value || '',
               status: document.getElementById('template-status')?.value || 'draft',
-              header_footer_uuid: document.getElementById('template-header-footer')?.value || '',
-              paper_size: document.getElementById('template-paper-size')?.value || 'a4'
+              header_uuid: document.getElementById('template-header')?.value || '',
+              footer_uuid: document.getElementById('template-footer')?.value || '',
+              paper_size: document.getElementById('template-paper-size')?.value || 'a4',
+              page_count: String(ed._pageCount || 1)
             });
           });
 
@@ -564,6 +645,8 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
               }
             });
 
+            editor._pageCount = 1;
+            editor._paperDims = PAPER_SIZES.a4;
             injectCanvasStyles(editor, { paperSizeSelectId: 'doc-paper-size' });
             addDocumentBlocks(editor, { templateVariables: false });
             setupDragAndResize(editor);
@@ -571,27 +654,43 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
             setupTheme(document.getElementById('doc-grapesjs-wrapper'));
             self._editor = editor;
 
+            // Listen for add/remove page events from the LiveView button
+            self.el.addEventListener('add-page', function() { addPage(editor); });
+            self.el.addEventListener('remove-page', function() { removePage(editor); });
+
             if (self._pendingLoad) {
               var p = self._pendingLoad;
               self._pendingLoad = null;
               if (p.type === 'project') editor.loadProjectData(p.data);
               else if (p.type === 'html') editor.setComponents(p.data);
+              if (p.page_count) {
+                editor._pageCount = parseInt(p.page_count) || 1;
+                updatePageLayout(editor);
+              }
             }
           });
 
           self.handleEvent("load-project", function(payload) {
             if (self._editor && payload.data) {
               self._editor.loadProjectData(payload.data);
+              if (payload.page_count) {
+                self._editor._pageCount = parseInt(payload.page_count) || 1;
+                updatePageLayout(self._editor);
+              }
             } else {
-              self._pendingLoad = { type: 'project', data: payload.data };
+              self._pendingLoad = { type: 'project', data: payload.data, page_count: payload.page_count };
             }
           });
 
           self.handleEvent("editor-set-content", function(payload) {
             if (self._editor) {
               self._editor.setComponents(payload.html || '');
+              if (payload.page_count) {
+                self._editor._pageCount = parseInt(payload.page_count) || 1;
+                updatePageLayout(self._editor);
+              }
             } else {
-              self._pendingLoad = { type: 'html', data: payload.html || '' };
+              self._pendingLoad = { type: 'html', data: payload.html || '', page_count: payload.page_count };
             }
           });
 
@@ -603,7 +702,8 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
               css: ed.getCss(),
               native: JSON.stringify(ed.getProjectData()),
               name: document.getElementById('doc-name')?.value || '',
-              status: document.getElementById('doc-status')?.value || ''
+              status: document.getElementById('doc-status')?.value || '',
+              page_count: String(ed._pageCount || 1)
             });
           });
 
@@ -723,56 +823,46 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
         };
       }
 
-      window.PhoenixKitHooks.GrapesJSHeaderFooter = {
+      window.PhoenixKitHooks.GrapesJSHFEditor = {
         mounted() {
           var self = this;
-          self._headerEditor = null;
-          self._footerEditor = null;
+          self._editor = null;
 
-          self.handleEvent("init-hf-editors", function(payload) {
+          self.handleEvent("init-hf-editor", function(payload) {
             ensureGrapesJS(function() {
-              if (self._headerEditor) { try { self._headerEditor.destroy(); } catch(_) {} }
-              if (self._footerEditor) { try { self._footerEditor.destroy(); } catch(_) {} }
+              if (self._editor) { try { self._editor.destroy(); } catch(_) {} }
 
               setTimeout(function() {
-                self._headerEditor = initMiniGrapesjs('hf-header-editor');
-                self._footerEditor = initMiniGrapesjs('hf-footer-editor');
+                self._editor = initMiniGrapesjs('hf-editor');
 
-                if (payload.header_native && self._headerEditor) {
-                  setTimeout(function() { self._headerEditor.loadProjectData(payload.header_native); }, 300);
-                }
-                if (payload.footer_native && self._footerEditor) {
-                  setTimeout(function() { self._footerEditor.loadProjectData(payload.footer_native); }, 300);
+                if (self._editor) {
+                  self._editor.on('load', function() {
+                    var loader = document.getElementById('hf-editor-loading');
+                    if (loader) loader.style.display = 'none';
+                  });
+
+                  if (payload.native) {
+                    setTimeout(function() { self._editor.loadProjectData(payload.native); }, 300);
+                  }
                 }
               }, 100);
             });
           });
 
-          self.handleEvent("destroy-hf-editors", function() {
-            if (self._headerEditor) { try { self._headerEditor.destroy(); } catch(_) {} self._headerEditor = null; }
-            if (self._footerEditor) { try { self._footerEditor.destroy(); } catch(_) {} self._footerEditor = null; }
-          });
-
           self.handleEvent("request-hf-save-data", function() {
-            var hd = getEditorData(self._headerEditor);
-            var fd = getEditorData(self._footerEditor);
-            self.pushEvent("save_header_footer", {
+            var data = getEditorData(self._editor);
+            self.pushEvent("save_record", {
               name: document.getElementById('hf-name')?.value || '',
-              header_html: hd.html,
-              header_css: hd.css,
-              header_native: hd.native,
-              footer_html: fd.html,
-              footer_css: fd.css,
-              footer_native: fd.native,
-              header_height: document.getElementById('hf-header-height')?.value || '25mm',
-              footer_height: document.getElementById('hf-footer-height')?.value || '20mm'
+              html: data.html,
+              css: data.css,
+              native: data.native,
+              height: document.getElementById('hf-height')?.value || '25mm'
             });
           });
         },
 
         destroyed() {
-          if (this._headerEditor) { try { this._headerEditor.destroy(); } catch(_) {} this._headerEditor = null; }
-          if (this._footerEditor) { try { this._footerEditor.destroy(); } catch(_) {} this._footerEditor = null; }
+          if (this._editor) { try { this._editor.destroy(); } catch(_) {} this._editor = null; }
         }
       };
 
@@ -780,7 +870,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorScripts do
       if (window.liveSocket && window.liveSocket.hooks) {
         window.liveSocket.hooks.GrapesJSTemplateEditor = window.PhoenixKitHooks.GrapesJSTemplateEditor;
         window.liveSocket.hooks.GrapesJSDocumentEditor = window.PhoenixKitHooks.GrapesJSDocumentEditor;
-        window.liveSocket.hooks.GrapesJSHeaderFooter = window.PhoenixKitHooks.GrapesJSHeaderFooter;
+        window.liveSocket.hooks.GrapesJSHFEditor = window.PhoenixKitHooks.GrapesJSHFEditor;
       }
     })();
     </script>

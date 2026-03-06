@@ -7,6 +7,8 @@ defmodule PhoenixKitDocumentCreator.Web.TestingLive do
   """
   use Phoenix.LiveView
 
+  alias PhoenixKitDocumentCreator.Paths
+
   @editors [
     %{
       id: "pdfme",
@@ -20,8 +22,7 @@ defmodule PhoenixKitDocumentCreator.Web.TestingLive do
         "Tables with pagination",
         "Barcodes / QR codes",
         "Headers & footers (staticSchema)"
-      ],
-      path: "testing/pdfme"
+      ]
     },
     %{
       id: "tiptap",
@@ -35,8 +36,7 @@ defmodule PhoenixKitDocumentCreator.Web.TestingLive do
         "JSON + HTML output",
         "Custom toolbar",
         "MIT license"
-      ],
-      path: "testing/tiptap"
+      ]
     }
   ]
 
@@ -44,6 +44,9 @@ defmodule PhoenixKitDocumentCreator.Web.TestingLive do
   def mount(_params, _session, socket) do
     {:ok, assign(socket, page_title: "Testing Editors", editors: @editors)}
   end
+
+  defp editor_path("pdfme"), do: Paths.testing_pdfme()
+  defp editor_path("tiptap"), do: Paths.testing_tiptap()
 
   @impl true
   def render(assigns) do
@@ -78,7 +81,7 @@ defmodule PhoenixKitDocumentCreator.Web.TestingLive do
             </div>
             <div class="card-actions mt-4">
               <a
-                href={editor.path}
+                href={editor_path(editor.id)}
                 class="btn btn-primary btn-sm w-full"
               >
                 Open {editor.name}

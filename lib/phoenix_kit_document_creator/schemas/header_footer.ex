@@ -1,9 +1,10 @@
 defmodule PhoenixKitDocumentCreator.Schemas.HeaderFooter do
   @moduledoc """
-  Schema for reusable header/footer designs.
+  Schema for reusable header or footer designs.
 
-  Each header/footer stores GrapesJS project data (`*_native`) for round-trip
-  editing, plus the rendered HTML/CSS for PDF generation.
+  Each record is either a `"header"` or `"footer"` (determined by the `type` field).
+  Stores GrapesJS project data (`native`) for round-trip editing, plus rendered
+  HTML/CSS for PDF generation.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -13,18 +14,16 @@ defmodule PhoenixKitDocumentCreator.Schemas.HeaderFooter do
   @primary_key {:uuid, UUIDv7, autogenerate: true}
   @foreign_key_type UUIDv7
 
+  @types ~w(header footer)
+
   schema "phoenix_kit_doc_headers_footers" do
     field(:name, :string)
+    field(:type, :string)
 
-    field(:header_html, :string, default: "")
-    field(:header_css, :string, default: "")
-    field(:header_native, :map)
-    field(:footer_html, :string, default: "")
-    field(:footer_css, :string, default: "")
-    field(:footer_native, :map)
-
-    field(:header_height, :string, default: "25mm")
-    field(:footer_height, :string, default: "20mm")
+    field(:html, :string, default: "")
+    field(:css, :string, default: "")
+    field(:native, :map)
+    field(:height, :string, default: "25mm")
 
     field(:data, :map, default: %{})
     field(:created_by_uuid, Ecto.UUID)
@@ -32,16 +31,12 @@ defmodule PhoenixKitDocumentCreator.Schemas.HeaderFooter do
     timestamps(type: :utc_datetime)
   end
 
-  @required_fields [:name]
+  @required_fields [:name, :type]
   @optional_fields [
-    :header_html,
-    :header_css,
-    :header_native,
-    :footer_html,
-    :footer_css,
-    :footer_native,
-    :header_height,
-    :footer_height,
+    :html,
+    :css,
+    :native,
+    :height,
     :data,
     :created_by_uuid
   ]
@@ -51,7 +46,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.HeaderFooter do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_length(:name, min: 1, max: 255)
-    |> validate_length(:header_height, max: 20)
-    |> validate_length(:footer_height, max: 20)
+    |> validate_inclusion(:type, @types)
+    |> validate_length(:height, max: 20)
   end
 end

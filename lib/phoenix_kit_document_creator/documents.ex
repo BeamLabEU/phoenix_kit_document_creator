@@ -1,6 +1,6 @@
 defmodule PhoenixKitDocumentCreator.Documents do
   @moduledoc """
-  Context module for managing templates, documents, and headers/footers.
+  Context module for managing templates, documents, headers, and footers.
   """
   import Ecto.Query, warn: false
 
@@ -12,23 +12,33 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Headers & Footers
   # ═══════════════════════════════════════════════════════════════════
 
-  def list_headers_footers do
+  def list_headers do
     HeaderFooter
+    |> where(type: "header")
     |> order_by(asc: :name)
     |> repo().all()
   end
 
-  def get_header_footer(uuid) do
-    repo().get(HeaderFooter, uuid)
+  def list_footers do
+    HeaderFooter
+    |> where(type: "footer")
+    |> order_by(asc: :name)
+    |> repo().all()
   end
 
-  def get_header_footer!(uuid) do
-    repo().get!(HeaderFooter, uuid)
-  end
+  def get_header_footer(uuid), do: repo().get(HeaderFooter, uuid)
 
-  def create_header_footer(attrs) do
+  def get_header_footer!(uuid), do: repo().get!(HeaderFooter, uuid)
+
+  def create_header(attrs) do
     %HeaderFooter{}
-    |> HeaderFooter.changeset(attrs)
+    |> HeaderFooter.changeset(Map.put(attrs, :type, "header"))
+    |> repo().insert()
+  end
+
+  def create_footer(attrs) do
+    %HeaderFooter{}
+    |> HeaderFooter.changeset(Map.put(attrs, :type, "footer"))
     |> repo().insert()
   end
 
@@ -157,7 +167,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
           content_css: template.content_css,
           content_native: template.content_native,
           variable_values: variable_values,
-          header_footer_uuid: template.header_footer_uuid,
+          header_uuid: template.header_uuid,
+          footer_uuid: template.footer_uuid,
           config: template.config,
           created_by_uuid: Keyword.get(opts, :created_by_uuid)
         }

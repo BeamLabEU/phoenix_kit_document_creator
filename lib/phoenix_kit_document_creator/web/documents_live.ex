@@ -13,6 +13,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   import PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal
 
   alias PhoenixKitDocumentCreator.Documents
+  alias PhoenixKitDocumentCreator.Paths
 
   @impl true
   def mount(_params, _session, socket) do
@@ -98,7 +99,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         {:noreply,
          socket
          |> assign(modal_open: false)
-         |> redirect(to: "document-creator/documents/#{doc.uuid}/edit")}
+         |> redirect(to: Paths.document_edit(doc.uuid))}
 
       {:error, _} ->
         {:noreply, socket}
@@ -125,7 +126,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         {:noreply,
          socket
          |> assign(modal_open: false)
-         |> redirect(to: "document-creator/documents/#{doc.uuid}/edit")}
+         |> redirect(to: Paths.document_edit(doc.uuid))}
 
       {:error, _reason} ->
         {:noreply, assign(socket, modal_creating: false)}
@@ -200,7 +201,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             </button>
           </div>
           <a
-            href="document-creator/templates/new"
+            href={Paths.template_new()}
             class="btn btn-ghost btn-sm"
           >
             <span class="hero-plus w-4 h-4" /> New Template
@@ -290,7 +291,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             </div>
             <div class="flex gap-2 mt-3">
               <a
-                href={"document-creator/documents/#{doc.uuid}/edit"}
+                href={Paths.document_edit(doc.uuid)}
                 class="btn btn-ghost btn-xs flex-1"
               >
                 <span class="hero-pencil-square w-3 h-3" /> Edit
@@ -344,7 +345,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <span class="hero-document-text w-12 h-12 text-base-content/20" />
         <p class="text-sm text-base-content/50 mt-2">No templates yet</p>
         <a
-          href="document-creator/templates/new"
+          href={Paths.template_new()}
           class="btn btn-primary btn-sm mt-3"
         >
           Create First Template
@@ -403,7 +404,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   <span class="hero-document-plus w-3 h-3" /> Use
                 </button>
                 <a
-                  href={"document-creator/templates/#{tpl.uuid}/edit"}
+                  href={Paths.template_edit(tpl.uuid)}
                   class="btn btn-ghost btn-xs"
                 >
                   <span class="hero-pencil-square w-3 h-3" /> Edit
@@ -452,7 +453,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             <td>
               <div class="flex gap-1 justify-end">
                 <a
-                  href={"document-creator/documents/#{doc.uuid}/edit"}
+                  href={Paths.document_edit(doc.uuid)}
                   class="btn btn-ghost btn-xs"
                 >
                   <span class="hero-pencil-square w-3 h-3" /> Edit

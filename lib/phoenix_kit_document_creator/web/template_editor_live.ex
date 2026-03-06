@@ -11,19 +11,25 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   import PhoenixKitDocumentCreator.Web.Components.EditorScripts
 
   alias PhoenixKitDocumentCreator.Documents
+  alias PhoenixKitDocumentCreator.Paths
   alias PhoenixKitDocumentCreator.DocumentFormat
   alias PhoenixKitDocumentCreator.Web.EditorPdfHelpers
 
   @impl true
   def mount(_params, _session, socket) do
-    headers_footers =
-      if connected?(socket), do: Documents.list_headers_footers(), else: []
+    {headers, footers} =
+      if connected?(socket),
+        do: {Documents.list_headers(), Documents.list_footers()},
+        else: {[], []}
 
     {:ok,
      assign(socket,
        template: nil,
        changeset: nil,
-       headers_footers: headers_footers,
+       headers: headers,
+       footers: footers,
+       selected_header: nil,
+       selected_footer: nil,
        detected_variables: [],
        saving: false,
        generating_pdf: false,
@@ -55,7 +61,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       nil ->
         socket
         |> put_flash(:error, "Template not found")
-        |> redirect(to: "document-creator")
+        |> redirect(to: Paths.index())
 
       template ->
         changeset = PhoenixKitDocumentCreator.Schemas.Template.changeset(template, %{})
@@ -66,19 +72,24 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
           page_title: "Edit: #{template.name}",
           template: template,
           changeset: changeset,
-          detected_variables: variables
+          detected_variables: variables,
+          selected_header: find_in_list(socket.assigns.headers, template.header_uuid),
+          selected_footer: find_in_list(socket.assigns.footers, template.footer_uuid)
         )
         |> maybe_load_project_data(template)
     end
   end
 
-  defp maybe_load_project_data(socket, %{content_native: native}) when is_map(native) do
-    push_event(socket, "load-project", %{data: native})
+  defp maybe_load_project_data(socket, %{content_native: native, config: config})
+       when is_map(native) do
+    page_count = get_in(config || %{}, ["page_count"]) || "1"
+    push_event(socket, "load-project", %{data: native, page_count: page_count})
   end
 
-  defp maybe_load_project_data(socket, %{content_html: html})
+  defp maybe_load_project_data(socket, %{content_html: html, config: config})
        when is_binary(html) and html != "" do
-    push_event(socket, "editor-set-content", %{html: html})
+    page_count = get_in(config || %{}, ["page_count"]) || "1"
+    push_event(socket, "editor-set-content", %{html: html, page_count: page_count})
   end
 
   defp maybe_load_project_data(socket, _template), do: socket
@@ -122,8 +133,10 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       |> maybe_put(params, "name", :name)
       |> maybe_put(params, "description", :description)
       |> maybe_put(params, "status", :status)
-      |> maybe_put(params, "header_footer_uuid", :header_footer_uuid)
+      |> maybe_put(params, "header_uuid", :header_uuid)
+      |> maybe_put(params, "footer_uuid", :footer_uuid)
       |> maybe_put_config(params, "paper_size")
+      |> maybe_put_config(params, "page_count")
 
     result =
       case socket.assigns.live_action do
@@ -148,7 +161,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
         socket =
           if socket.assigns.live_action == :new do
-            redirect(socket, to: "document-creator/templates/#{template.uuid}/edit")
+            redirect(socket, to: Paths.template_edit(template.uuid))
           else
             socket
           end
@@ -175,24 +188,16 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   end
 
   def handle_event("generate_pdf_with_content", %{"html" => html} = params, socket) do
-    header_footer = load_header_footer(socket.assigns.template)
-
+    template = socket.assigns.template
+    header = load_record(template.header_uuid)
+    footer = load_record(template.footer_uuid)
     paper_size = Map.get(params, "paper_size", "a4")
 
-    pdf_opts =
-      if header_footer do
-        [
-          header_html: header_footer.header_html || "",
-          footer_html: header_footer.footer_html || "",
-          paper_size: paper_size
-        ]
-      else
-        [
-          header_html: Map.get(params, "header_html", ""),
-          footer_html: Map.get(params, "footer_html", ""),
-          paper_size: paper_size
-        ]
-      end
+    pdf_opts = [
+      header_html: (header && header.html) || "",
+      footer_html: (footer && footer.html) || "",
+      paper_size: paper_size
+    ]
 
     case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
       {:ok, pdf_binary} ->
@@ -233,6 +238,14 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     {:noreply, assign(socket, changeset: changeset)}
   end
 
+  def handle_event("select_header", %{"header_uuid" => uuid}, socket) do
+    {:noreply, assign(socket, selected_header: find_in_list(socket.assigns.headers, uuid))}
+  end
+
+  def handle_event("select_footer", %{"footer_uuid" => uuid}, socket) do
+    {:noreply, assign(socket, selected_footer: find_in_list(socket.assigns.footers, uuid))}
+  end
+
   def handle_event("dismiss_flash", _params, socket) do
     {:noreply, assign(socket, saved_flash: nil)}
   end
@@ -262,11 +275,11 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
   # ── Helpers ────────────────────────────────────────────────────────
 
-  defp load_header_footer(%{header_footer_uuid: uuid}) when is_binary(uuid) do
+  defp load_record(uuid) when is_binary(uuid) and uuid != "" do
     Documents.get_header_footer(uuid)
   end
 
-  defp load_header_footer(_), do: nil
+  defp load_record(_), do: nil
 
   defp maybe_put(attrs, params, form_key, attr_key) do
     case Map.get(params, form_key) do
@@ -286,6 +299,24 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     end
   end
 
+  defp hf_preview_html(html, css) do
+    css_tag = if css && css != "", do: "<style>#{css}</style>", else: ""
+
+    """
+    <!DOCTYPE html>
+    <html><head>
+    <style>body{margin:0;padding:4px 8px;font-family:Helvetica,Arial,sans-serif;font-size:9px;overflow:hidden;}</style>
+    #{css_tag}
+    </head><body>#{html}</body></html>
+    """
+  end
+
+  defp find_in_list(list, uuid) when is_binary(uuid) and uuid != "" do
+    Enum.find(list, &(&1.uuid == uuid))
+  end
+
+  defp find_in_list(_, _), do: nil
+
   defp humanize(name) do
     name
     |> String.replace("_", " ")
@@ -302,10 +333,10 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     <.editor_scripts />
     <div class="flex flex-col mx-auto px-4 py-6 gap-4">
       <%!-- Header bar --%>
-      <div class="flex items-center justify-between sticky top-0 z-10 bg-base-100 py-2 -mt-2">
+      <div class="flex items-center justify-between sticky top-16 z-10 bg-base-100 py-2 -mt-2">
         <div class="flex items-center gap-3">
           <a
-            href="document-creator"
+            href={Paths.index()}
             class="btn btn-ghost btn-sm btn-square"
           >
             <span class="hero-arrow-left w-5 h-5" />
@@ -320,6 +351,18 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
           </div>
         </div>
         <div class="flex gap-2">
+          <button
+            class="btn btn-ghost btn-sm"
+            onclick={"document.getElementById('grapesjs-wrapper').dispatchEvent(new Event('remove-page'))"}
+          >
+            <span class="hero-minus w-4 h-4" />
+          </button>
+          <button
+            class="btn btn-ghost btn-sm"
+            onclick={"document.getElementById('grapesjs-wrapper').dispatchEvent(new Event('add-page'))"}
+          >
+            <span class="hero-plus w-4 h-4" />
+          </button>
           <button
             class="btn btn-secondary btn-sm"
             phx-click="generate_pdf"
@@ -350,7 +393,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       <%!-- Main layout: Editor + Settings sidebar --%>
       <div class="flex gap-4">
         <%!-- GrapesJS Editor (left, takes most space) --%>
-        <div class="flex-1 card bg-base-100 shadow-xl overflow-hidden">
+        <div class="flex-1">
           <div id="grapesjs-wrapper" phx-hook="GrapesJSTemplateEditor" phx-update="ignore" style="display:flex;width:100%;height:100%;">
             <div id="editor-grapesjs" style="flex:1;"></div>
             <div id="grapesjs-right-panel" class="bg-base-200 text-base-content border-l border-base-300" style="width:220px;min-width:220px;display:flex;flex-direction:column;">
@@ -363,7 +406,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
         </div>
 
         <%!-- Settings sidebar (right) --%>
-        <div class="w-72 flex-shrink-0 space-y-4">
+        <div class="w-72 flex-shrink-0 space-y-4 sticky top-28 self-start max-h-[calc(100vh-8rem)] overflow-y-auto">
           <%!-- Template settings --%>
           <div class="card bg-base-100 shadow-xl">
             <div class="card-body p-4 space-y-3">
@@ -437,18 +480,66 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
               <div class="form-control">
                 <label class="label py-1">
-                  <span class="label-text text-xs">Header / Footer</span>
+                  <span class="label-text text-xs">Header</span>
                 </label>
-                <select id="template-header-footer" class="select select-bordered select-sm w-full">
-                  <option value="">None</option>
-                  <option
-                    :for={hf <- @headers_footers}
-                    value={hf.uuid}
-                    selected={@template && @template.header_footer_uuid == hf.uuid}
-                  >
-                    {hf.name}
-                  </option>
-                </select>
+                <form phx-change="select_header">
+                  <select name="header_uuid" id="template-header" class="select select-bordered select-sm w-full">
+                    <option value="">None</option>
+                    <option
+                      :for={h <- @headers}
+                      value={h.uuid}
+                      selected={@template && @template.header_uuid == h.uuid}
+                    >
+                      {h.name}
+                    </option>
+                  </select>
+                </form>
+              </div>
+
+              <%!-- Header preview --%>
+              <div :if={@selected_header && @selected_header.html != ""} class="space-y-1">
+                <iframe
+                  srcdoc={hf_preview_html(@selected_header.html, @selected_header.css)}
+                  class="w-full border border-base-300 rounded bg-white"
+                  style="height:60px;pointer-events:none;"
+                  sandbox=""
+                  scrolling="no"
+                />
+                <a href={Paths.header_edit(@selected_header.uuid)} class="link link-primary text-xs" target="_blank">
+                  Edit header
+                </a>
+              </div>
+
+              <div class="form-control">
+                <label class="label py-1">
+                  <span class="label-text text-xs">Footer</span>
+                </label>
+                <form phx-change="select_footer">
+                  <select name="footer_uuid" id="template-footer" class="select select-bordered select-sm w-full">
+                    <option value="">None</option>
+                    <option
+                      :for={f <- @footers}
+                      value={f.uuid}
+                      selected={@template && @template.footer_uuid == f.uuid}
+                    >
+                      {f.name}
+                    </option>
+                  </select>
+                </form>
+              </div>
+
+              <%!-- Footer preview --%>
+              <div :if={@selected_footer && @selected_footer.html != ""} class="space-y-1">
+                <iframe
+                  srcdoc={hf_preview_html(@selected_footer.html, @selected_footer.css)}
+                  class="w-full border border-base-300 rounded bg-white"
+                  style="height:60px;pointer-events:none;"
+                  sandbox=""
+                  scrolling="no"
+                />
+                <a href={Paths.footer_edit(@selected_footer.uuid)} class="link link-primary text-xs" target="_blank">
+                  Edit footer
+                </a>
               </div>
             </div>
           </div>
@@ -482,6 +573,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     <style>
       .gjs-off-prv { background-color: oklch(var(--color-base-200)) !important; color: oklch(var(--color-base-content)) !important; }
       #editor-grapesjs { --gjs-left-width: 0px; }
+      #grapesjs-right-panel { position: sticky; top: 7rem; align-self: flex-start; max-height: calc(100vh - 8rem); overflow-y: auto; }
     </style>
     """
   end

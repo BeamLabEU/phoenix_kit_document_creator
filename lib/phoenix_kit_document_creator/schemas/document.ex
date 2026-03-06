@@ -30,8 +30,14 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
 
     field(:variable_values, :map, default: %{})
 
-    belongs_to(:header_footer, PhoenixKitDocumentCreator.Schemas.HeaderFooter,
-      foreign_key: :header_footer_uuid,
+    belongs_to(:header, PhoenixKitDocumentCreator.Schemas.HeaderFooter,
+      foreign_key: :header_uuid,
+      references: :uuid,
+      type: UUIDv7
+    )
+
+    belongs_to(:footer, PhoenixKitDocumentCreator.Schemas.HeaderFooter,
+      foreign_key: :footer_uuid,
       references: :uuid,
       type: UUIDv7
     )
@@ -51,7 +57,8 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     :content_css,
     :content_native,
     :variable_values,
-    :header_footer_uuid,
+    :header_uuid,
+    :footer_uuid,
     :config,
     :status,
     :data,

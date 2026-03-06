@@ -65,6 +65,9 @@ defmodule PhoenixKitDocumentCreator do
   def version, do: "0.2.0"
 
   @impl PhoenixKit.Module
+  def migration_module, do: PhoenixKitDocumentCreator.Migration
+
+  @impl PhoenixKit.Module
   def permission_metadata do
     %{
       key: module_key(),
@@ -141,15 +144,74 @@ defmodule PhoenixKitDocumentCreator do
         live_view: {PhoenixKitDocumentCreator.Web.DocumentEditorLive, :edit}
       },
       %Tab{
-        id: :admin_document_creator_headers_footers,
-        label: "Headers & Footers",
-        icon: "hero-bars-3",
-        path: "document-creator/headers-footers",
+        id: :admin_document_creator_headers,
+        label: "Headers",
+        icon: "hero-bars-arrow-up",
+        path: "document-creator/headers",
         priority: 660,
         level: :admin,
         permission: module_key(),
         parent: :admin_document_creator,
-        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterLive, :index}
+        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterLive, :headers}
+      },
+      %Tab{
+        id: :admin_document_creator_header_new,
+        label: "New Header",
+        icon: "hero-plus",
+        path: "document-creator/headers/new",
+        priority: 661,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        visible: false,
+        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive, :header_new}
+      },
+      %Tab{
+        id: :admin_document_creator_header_edit,
+        label: "Edit Header",
+        icon: "hero-pencil-square",
+        path: "document-creator/headers/:uuid/edit",
+        priority: 662,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        visible: false,
+        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive, :header_edit}
+      },
+      %Tab{
+        id: :admin_document_creator_footers,
+        label: "Footers",
+        icon: "hero-bars-arrow-down",
+        path: "document-creator/footers",
+        priority: 665,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterLive, :footers}
+      },
+      %Tab{
+        id: :admin_document_creator_footer_new,
+        label: "New Footer",
+        icon: "hero-plus",
+        path: "document-creator/footers/new",
+        priority: 666,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        visible: false,
+        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive, :footer_new}
+      },
+      %Tab{
+        id: :admin_document_creator_footer_edit,
+        label: "Edit Footer",
+        icon: "hero-pencil-square",
+        path: "document-creator/footers/:uuid/edit",
+        priority: 667,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        visible: false,
+        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive, :footer_edit}
       }
     ]
   end

@@ -11,6 +11,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   import PhoenixKitDocumentCreator.Web.Components.EditorScripts
 
   alias PhoenixKitDocumentCreator.Documents
+  alias PhoenixKitDocumentCreator.Paths
   alias PhoenixKitDocumentCreator.Web.EditorPdfHelpers
 
   @impl true
@@ -33,7 +34,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
         {:noreply,
          socket
          |> put_flash(:error, "Document not found")
-         |> redirect(to: "document-creator")}
+         |> redirect(to: Paths.index())}
 
       document ->
         {:noreply,
@@ -46,13 +47,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
     end
   end
 
-  defp maybe_load_project_data(socket, %{content_native: native}) when is_map(native) do
-    push_event(socket, "load-project", %{data: native})
+  defp maybe_load_project_data(socket, %{content_native: native, config: config})
+       when is_map(native) do
+    page_count = get_in(config || %{}, ["page_count"]) || "1"
+    push_event(socket, "load-project", %{data: native, page_count: page_count})
   end
 
-  defp maybe_load_project_data(socket, %{content_html: html})
+  defp maybe_load_project_data(socket, %{content_html: html, config: config})
        when is_binary(html) and html != "" do
-    push_event(socket, "editor-set-content", %{html: html})
+    page_count = get_in(config || %{}, ["page_count"]) || "1"
+    push_event(socket, "editor-set-content", %{html: html, page_count: page_count})
   end
 
   defp maybe_load_project_data(socket, _), do: socket
@@ -94,6 +98,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
         status -> Map.put(attrs, :status, status)
       end
 
+    attrs =
+      case Map.get(params, "page_count") do
+        nil -> attrs
+        "" -> attrs
+        pc ->
+          config = Map.get(attrs, :config) || socket.assigns.document.config || %{}
+          Map.put(attrs, :config, Map.put(config, "page_count", pc))
+      end
+
     case Documents.update_document(socket.assigns.document, attrs) do
       {:ok, document} ->
         {:noreply,
@@ -121,19 +134,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   end
 
   def handle_event("generate_pdf_with_content", %{"html" => html} = params, socket) do
-    header_footer = load_header_footer(socket.assigns.document)
+    doc = socket.assigns.document
+    header = load_record(doc.header_uuid)
+    footer = load_record(doc.footer_uuid)
     paper_size = Map.get(params, "paper_size", "a4")
 
-    pdf_opts =
-      if header_footer do
-        [
-          header_html: header_footer.header_html || "",
-          footer_html: header_footer.footer_html || "",
-          paper_size: paper_size
-        ]
-      else
-        [paper_size: paper_size]
-      end
+    pdf_opts = [
+      header_html: (header && header.html) || "",
+      footer_html: (footer && footer.html) || "",
+      paper_size: paper_size
+    ]
 
     case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
       {:ok, pdf_binary} ->
@@ -190,11 +200,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
 
   # ── Helpers ────────────────────────────────────────────────────────
 
-  defp load_header_footer(%{header_footer_uuid: uuid}) when is_binary(uuid) do
+  defp load_record(uuid) when is_binary(uuid) and uuid != "" do
     Documents.get_header_footer(uuid)
   end
 
-  defp load_header_footer(_), do: nil
+  defp load_record(_), do: nil
 
   # ── Render ─────────────────────────────────────────────────────────
 
@@ -204,10 +214,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
     <.editor_scripts />
     <div class="flex flex-col mx-auto px-4 py-6 gap-4">
       <%!-- Header bar --%>
-      <div class="flex items-center justify-between sticky top-0 z-10 bg-base-100 py-2 -mt-2">
+      <div class="flex items-center justify-between sticky top-16 z-10 bg-base-100 py-2 -mt-2">
         <div class="flex items-center gap-3">
           <a
-            href="document-creator"
+            href={Paths.index()}
             class="btn btn-ghost btn-sm btn-square"
           >
             <span class="hero-arrow-left w-5 h-5" />
@@ -220,6 +230,18 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
           </div>
         </div>
         <div class="flex gap-2">
+          <button
+            class="btn btn-ghost btn-sm"
+            onclick={"document.getElementById('doc-grapesjs-wrapper').dispatchEvent(new Event('remove-page'))"}
+          >
+            <span class="hero-minus w-4 h-4" />
+          </button>
+          <button
+            class="btn btn-ghost btn-sm"
+            onclick={"document.getElementById('doc-grapesjs-wrapper').dispatchEvent(new Event('add-page'))"}
+          >
+            <span class="hero-plus w-4 h-4" />
+          </button>
           <button
             class="btn btn-secondary btn-sm"
             phx-click="generate_pdf"
@@ -250,7 +272,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
       <%!-- Main layout: Editor + sidebar --%>
       <div class="flex gap-4">
         <%!-- GrapesJS Editor --%>
-        <div class="flex-1 card bg-base-100 shadow-xl overflow-hidden">
+        <div class="flex-1">
           <div id="doc-grapesjs-wrapper" phx-hook="GrapesJSDocumentEditor" phx-update="ignore" style="display:flex;width:100%;height:100%;">
             <div id="doc-editor-grapesjs" style="flex:1;"></div>
             <div id="doc-grapesjs-right-panel" class="bg-base-200 text-base-content border-l border-base-300" style="width:220px;min-width:220px;display:flex;flex-direction:column;">
@@ -263,7 +285,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
         </div>
 
         <%!-- Sidebar --%>
-        <div class="w-64 flex-shrink-0 space-y-4">
+        <div class="w-64 flex-shrink-0 space-y-4 sticky top-28 self-start max-h-[calc(100vh-8rem)] overflow-y-auto">
           <div class="card bg-base-100 shadow-xl">
             <div class="card-body p-4 space-y-3">
               <h3 class="font-semibold text-sm">Document Settings</h3>
@@ -328,6 +350,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
     <style>
       .gjs-off-prv { background-color: oklch(var(--color-base-200)) !important; color: oklch(var(--color-base-content)) !important; }
       #doc-editor-grapesjs { --gjs-left-width: 0px; }
+      #doc-grapesjs-right-panel { position: sticky; top: 7rem; align-self: flex-start; max-height: calc(100vh - 8rem); overflow-y: auto; }
     </style>
     """
   end
