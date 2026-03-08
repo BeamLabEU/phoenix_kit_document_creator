@@ -334,18 +334,6 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     end
   end
 
-  defp hf_preview_html(html, css) do
-    css_tag = if css && css != "", do: "<style>#{css}</style>", else: ""
-
-    """
-    <!DOCTYPE html>
-    <html><head>
-    <style>body{margin:0;padding:4px 8px;font-family:Helvetica,Arial,sans-serif;font-size:9px;overflow:hidden;}</style>
-    #{css_tag}
-    </head><body>#{html}</body></html>
-    """
-  end
-
   defp push_hf_preview(socket, type, nil) do
     push_event(socket, "update-hf-region", %{type: Atom.to_string(type), html: "", css: "", height: "0"})
   end
@@ -454,7 +442,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
             <%!-- Page frame with header/footer regions --%>
             <div
               id="template-page-frame"
-              style="display:flex;flex-direction:column;width:794px;min-width:794px;height:1123px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,0.12);border-radius:4px;overflow:hidden;position:relative;"
+              style="display:flex;flex-direction:column;width:794px;min-width:794px;height:1123px;background:#fff;border-radius:4px 0 0 4px;overflow:hidden;position:relative;"
             >
               <%!-- Header region (non-editable, hidden by default) --%>
               <div id="template-header-region" style="flex-shrink:0;height:0px;overflow:hidden;display:none;position:relative;">
@@ -565,20 +553,6 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
                 </form>
               </div>
 
-              <%!-- Header preview --%>
-              <div :if={@selected_header && @selected_header.html != ""} class="space-y-1">
-                <iframe
-                  srcdoc={hf_preview_html(@selected_header.html, @selected_header.css)}
-                  class="w-full border border-base-300 rounded bg-white"
-                  style="height:60px;pointer-events:none;"
-                  sandbox=""
-                  scrolling="no"
-                />
-                <a href={Paths.header_edit(@selected_header.uuid)} class="link link-primary text-xs" target="_blank">
-                  Edit header
-                </a>
-              </div>
-
               <div class="form-control">
                 <label class="label py-1">
                   <span class="label-text text-xs">Footer</span>
@@ -597,19 +571,6 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
                 </form>
               </div>
 
-              <%!-- Footer preview --%>
-              <div :if={@selected_footer && @selected_footer.html != ""} class="space-y-1">
-                <iframe
-                  srcdoc={hf_preview_html(@selected_footer.html, @selected_footer.css)}
-                  class="w-full border border-base-300 rounded bg-white"
-                  style="height:60px;pointer-events:none;"
-                  sandbox=""
-                  scrolling="no"
-                />
-                <a href={Paths.footer_edit(@selected_footer.uuid)} class="link link-primary text-xs" target="_blank">
-                  Edit footer
-                </a>
-              </div>
             </div>
           </div>
 
