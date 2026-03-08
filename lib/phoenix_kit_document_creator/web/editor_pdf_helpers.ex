@@ -71,7 +71,14 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
         true ->
           ChromicPDF.print_to_pdf({:html, @body_styles <> html},
-            print_to_pdf: %{paperWidth: paper_width(size), paperHeight: paper_height(size)}
+            print_to_pdf: %{
+              paperWidth: paper_width(size),
+              paperHeight: paper_height(size),
+              marginTop: 0,
+              marginBottom: 0,
+              marginLeft: 0,
+              marginRight: 0
+            }
           )
       end
     end

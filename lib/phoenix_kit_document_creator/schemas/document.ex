@@ -13,8 +13,6 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
   @primary_key {:uuid, UUIDv7, autogenerate: true}
   @foreign_key_type UUIDv7
 
-  @statuses ~w(draft final)
-
   schema "phoenix_kit_doc_documents" do
     field(:name, :string)
 
@@ -43,7 +41,6 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     )
 
     field(:config, :map, default: %{"paper_size" => "a4", "orientation" => "portrait"})
-    field(:status, :string, default: "draft")
     field(:data, :map, default: %{})
     field(:created_by_uuid, Ecto.UUID)
 
@@ -60,7 +57,6 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     :header_uuid,
     :footer_uuid,
     :config,
-    :status,
     :data,
     :created_by_uuid
   ]
@@ -70,6 +66,5 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_length(:name, min: 1, max: 255)
-    |> validate_inclusion(:status, @statuses)
   end
 end

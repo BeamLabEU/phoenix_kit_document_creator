@@ -139,7 +139,6 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       template_attrs
       |> maybe_put(params, "name", :name)
       |> maybe_put(params, "description", :description)
-      |> maybe_put(params, "status", :status)
       |> maybe_put(params, "header_uuid", :header_uuid)
       |> maybe_put(params, "footer_uuid", :footer_uuid)
       |> maybe_put_config(params, "paper_size")
@@ -395,18 +394,21 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
           </div>
         </div>
         <div class="flex gap-2">
-          <button
-            class="btn btn-ghost btn-sm"
-            onclick={"document.getElementById('grapesjs-wrapper').dispatchEvent(new Event('remove-page'))"}
-          >
-            <span class="hero-minus w-4 h-4" />
-          </button>
-          <button
-            class="btn btn-ghost btn-sm"
-            onclick={"document.getElementById('grapesjs-wrapper').dispatchEvent(new Event('add-page'))"}
-          >
-            <span class="hero-plus w-4 h-4" />
-          </button>
+          <div class="flex items-center gap-1 border border-base-300 rounded-lg px-1">
+            <button
+              class="btn btn-ghost btn-xs btn-square"
+              onclick={"document.getElementById('grapesjs-wrapper').dispatchEvent(new Event('remove-page'))"}
+            >
+              <span class="hero-minus w-3 h-3" />
+            </button>
+            <span class="text-xs text-base-content/60 px-1">Pages</span>
+            <button
+              class="btn btn-ghost btn-xs btn-square"
+              onclick={"document.getElementById('grapesjs-wrapper').dispatchEvent(new Event('add-page'))"}
+            >
+              <span class="hero-plus w-3 h-3" />
+            </button>
+          </div>
           <button
             class="btn btn-secondary btn-sm"
             phx-click="generate_pdf"
@@ -437,7 +439,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       <%!-- Main layout: Editor + Settings sidebar --%>
       <div class="flex gap-4">
         <%!-- GrapesJS Editor (left, takes most space) --%>
-        <div class="flex-1 overflow-x-auto">
+        <div class="flex-1">
           <div id="grapesjs-wrapper" phx-hook="GrapesJSTemplateEditor" phx-update="ignore" style="display:flex;width:100%;">
             <%!-- Page frame with header/footer regions --%>
             <div
@@ -498,21 +500,6 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
                   rows="2"
                   placeholder="Optional description..."
                 >{if @template, do: @template.description || "", else: ""}</textarea>
-              </div>
-
-              <div class="form-control">
-                <label class="label py-1"><span class="label-text text-xs">Status</span></label>
-                <select id="template-status" class="select select-bordered select-sm w-full">
-                  <option value="draft" selected={@template && @template.status == "draft"}>
-                    Draft
-                  </option>
-                  <option value="published" selected={@template && @template.status == "published"}>
-                    Published
-                  </option>
-                  <option value="archived" selected={@template && @template.status == "archived"}>
-                    Archived
-                  </option>
-                </select>
               </div>
 
               <div class="form-control">
@@ -604,7 +591,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       .gjs-off-prv { background-color: oklch(var(--color-base-200)) !important; color: oklch(var(--color-base-content)) !important; }
       #editor-grapesjs { --gjs-left-width: 0px; }
       #editor-grapesjs .gjs-cv-canvas { top: 0 !important; }
-      #grapesjs-right-panel { align-self: stretch; }
+      #grapesjs-right-panel { position: sticky; top: 7rem; align-self: flex-start; max-height: calc(100vh - 7rem); overflow-y: auto; }
     </style>
     """
   end

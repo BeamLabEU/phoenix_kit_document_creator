@@ -13,13 +13,13 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   @primary_key {:uuid, UUIDv7, autogenerate: true}
   @foreign_key_type UUIDv7
 
-  @statuses ~w(draft published archived)
+  @statuses ~w(published trashed)
 
   schema "phoenix_kit_doc_templates" do
     field(:name, :string)
     field(:slug, :string)
     field(:description, :string)
-    field(:status, :string, default: "draft")
+    field(:status, :string, default: "published")
 
     field(:content_html, :string, default: "")
     field(:content_css, :string, default: "")

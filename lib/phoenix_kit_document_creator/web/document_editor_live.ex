@@ -89,13 +89,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
       end
 
     attrs =
-      case Map.get(params, "status") do
-        nil -> attrs
-        "" -> attrs
-        status -> Map.put(attrs, :status, status)
-      end
-
-    attrs =
       case Map.get(params, "page_count") do
         nil -> attrs
         "" -> attrs
@@ -225,9 +218,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
           </a>
           <div>
             <h1 class="text-xl font-bold">{@document && @document.name || "Document Editor"}</h1>
-            <p :if={@document} class="text-sm text-base-content/60">
-              Status: <span class={"badge badge-xs #{status_class(@document.status)}"}>{@document.status}</span>
-            </p>
           </div>
         </div>
         <div class="flex gap-2">
@@ -301,13 +291,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
                 />
               </div>
 
-              <div class="form-control">
-                <label class="label py-1"><span class="label-text text-xs">Status</span></label>
-                <select id="doc-status" class="select select-bordered select-sm w-full">
-                  <option value="draft" selected={@document && @document.status == "draft"}>Draft</option>
-                  <option value="final" selected={@document && @document.status == "final"}>Final</option>
-                </select>
-              </div>
             </div>
           </div>
 
@@ -356,7 +339,4 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
     """
   end
 
-  defp status_class("draft"), do: "badge-warning"
-  defp status_class("final"), do: "badge-info"
-  defp status_class(_), do: ""
 end

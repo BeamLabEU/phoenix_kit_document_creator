@@ -2,10 +2,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   @moduledoc """
   Main landing page for the Document Creator.
 
-  Two views:
-  - **Google Docs view**: Template gallery row at top, documents grid below.
-  - **Tabbed view**: Tab 1 = Templates, Tab 2 = Documents.
-
+  Shows templates and documents as card grids with scaled page previews.
   Includes a create-document modal (blank or from template with variable form).
   """
   use Phoenix.LiveView
@@ -14,6 +11,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.Paths
+
+  # Preview iframe is rendered at full page width (794px for A4) then CSS-scaled
+  # down by 0.23 to fit ~183px wide card preview area.
+  # Container: 183×258px, iframe: 794×1123px, scale(0.23)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -27,7 +28,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     {:ok,
      assign(socket,
        page_title: "Document Creator",
-       view_mode: "tabs",
        active_tab: "templates",
        templates: templates,
        documents: documents,
@@ -42,13 +42,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
      )}
   end
 
-  # ── View toggle ────────────────────────────────────────────────────
+  # ── Tab switch ──────────────────────────────────────────────────
 
   @impl true
-  def handle_event("switch_view", %{"mode" => mode}, socket) do
-    {:noreply, assign(socket, view_mode: mode)}
-  end
-
   def handle_event("switch_tab", %{"tab" => tab}, socket) do
     {:noreply, assign(socket, active_tab: tab)}
   end
@@ -178,32 +174,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     assigns = assign_modal_templates(assigns)
 
     ~H"""
-    <div class="flex flex-col mx-auto max-w-6xl px-4 py-6 gap-4">
+    <div class="flex flex-col mx-auto max-w-6xl px-4 py-6 gap-6">
       <%!-- Header --%>
       <div class="flex items-center justify-between">
         <h1 class="text-2xl font-bold">Document Creator</h1>
         <div class="flex gap-2">
-          <%!-- View toggle --%>
-          <div class="join">
-            <button
-              class={"join-item btn btn-sm #{if @view_mode == "docs", do: "btn-active", else: ""}"}
-              phx-click="switch_view"
-              phx-value-mode="docs"
-            >
-              <span class="hero-squares-2x2 w-4 h-4" />
-            </button>
-            <button
-              class={"join-item btn btn-sm #{if @view_mode == "tabs", do: "btn-active", else: ""}"}
-              phx-click="switch_view"
-              phx-value-mode="tabs"
-            >
-              <span class="hero-queue-list w-4 h-4" />
-            </button>
-          </div>
-          <a
-            href={Paths.template_new()}
-            class="btn btn-ghost btn-sm"
-          >
+          <a href={Paths.template_new()} class="btn btn-ghost btn-sm">
             <span class="hero-plus w-4 h-4" /> New Template
           </a>
           <button class="btn btn-primary btn-sm" phx-click="open_modal">
@@ -212,11 +188,33 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         </div>
       </div>
 
-      <%!-- View content --%>
-      <%= if @view_mode == "docs" do %>
-        {render_docs_view(assigns)}
+      <%!-- Tabs --%>
+      <div role="tablist" class="tabs tabs-bordered">
+        <button
+          role="tab"
+          class={"tab #{if @active_tab == "templates", do: "tab-active", else: ""}"}
+          phx-click="switch_tab"
+          phx-value-tab="templates"
+        >
+          Templates
+          <span class="badge badge-sm ml-1">{length(@templates)}</span>
+        </button>
+        <button
+          role="tab"
+          class={"tab #{if @active_tab == "documents", do: "tab-active", else: ""}"}
+          phx-click="switch_tab"
+          phx-value-tab="documents"
+        >
+          Documents
+          <span class="badge badge-sm ml-1">{length(@documents)}</span>
+        </button>
+      </div>
+
+      <%!-- Tab content --%>
+      <%= if @active_tab == "templates" do %>
+        {render_templates_grid(assigns)}
       <% else %>
-        {render_tabs_view(assigns)}
+        {render_documents_grid(assigns)}
       <% end %>
     </div>
 
@@ -228,198 +226,112 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       selected_template={@modal_selected_template}
       creating={@modal_creating}
     />
+
+    <style>
+      .page-preview-container {
+        width: 183px;
+        height: 258px;
+        overflow: hidden;
+        position: relative;
+        border-radius: 4px;
+        background: #fff;
+        border: 1px solid oklch(var(--color-base-content) / 0.2);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      }
+      .page-preview-container iframe {
+        width: 794px;
+        height: 1123px;
+        border: none;
+        pointer-events: none;
+        transform: scale(0.23);
+        transform-origin: top left;
+      }
+      .page-preview-empty {
+        width: 183px;
+        height: 258px;
+        border-radius: 4px;
+        background: oklch(var(--color-base-200));
+        border: 1px solid oklch(var(--color-base-300));
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+    </style>
     """
   end
 
-  # ── Google Docs view ───────────────────────────────────────────────
+  # ── Templates grid ──────────────────────────────────────────────
 
-  defp render_docs_view(assigns) do
-    published = Enum.filter(assigns.templates, &(&1.status == "published"))
-    assigns = Map.put(assigns, :published_templates, published)
-
-    ~H"""
-    <%!-- Template gallery row --%>
-    <div :if={@published_templates != []} class="space-y-2">
-      <h2 class="text-sm font-medium text-base-content/60 uppercase tracking-wide">
-        Start from a template
-      </h2>
-      <div class="flex gap-3 overflow-x-auto pb-2">
-        <button
-          :for={tpl <- @published_templates}
-          class="flex-shrink-0 w-40 p-3 rounded-lg border border-base-content/15 hover:border-primary hover:bg-primary/5 transition-all text-left"
-          phx-click="open_modal_with_template"
-          phx-value-uuid={tpl.uuid}
-        >
-          <div class="w-full h-20 bg-base-200 rounded mb-2 flex items-center justify-center">
-            <span class="hero-document-text w-8 h-8 text-base-content/20" />
-          </div>
-          <p class="text-sm font-medium truncate">{tpl.name}</p>
-          <p :if={tpl.description} class="text-xs text-base-content/50 truncate">{tpl.description}</p>
-        </button>
-      </div>
-    </div>
-
-    <%!-- Documents grid --%>
-    <div class="space-y-2">
-      <div class="flex items-center justify-between">
-        <h2 class="text-sm font-medium text-base-content/60 uppercase tracking-wide">
-          Recent Documents
-        </h2>
-      </div>
-
-      <div :if={@documents == []} class="card bg-base-100 shadow-sm">
-        <div class="card-body items-center text-center py-12">
-          <span class="hero-document-plus w-12 h-12 text-base-content/20" />
-          <p class="text-sm text-base-content/50 mt-2">No documents yet</p>
-          <button class="btn btn-primary btn-sm mt-3" phx-click="open_modal">
-            Create Your First Document
-          </button>
-        </div>
-      </div>
-
-      <div :if={@documents != []} class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <div :for={doc <- @documents} class="card bg-base-100 shadow-sm hover:shadow-md transition-shadow">
-          <div class="card-body p-4">
-            <div class="flex items-start justify-between">
-              <div class="flex-1 min-w-0">
-                <h3 class="font-medium truncate">{doc.name}</h3>
-                <p class="text-xs text-base-content/50 mt-1">
-                  {Calendar.strftime(doc.updated_at, "%b %d, %Y")}
-                </p>
-              </div>
-              <span class={"badge badge-sm #{status_badge_class(doc.status)}"}>{doc.status}</span>
-            </div>
-            <div class="flex gap-2 mt-3">
-              <a
-                href={Paths.document_edit(doc.uuid)}
-                class="btn btn-ghost btn-xs flex-1"
-              >
-                <span class="hero-pencil-square w-3 h-3" /> Edit
-              </a>
-              {render_delete_button(Map.merge(assigns, %{item_uuid: doc.uuid, item_type: "document"}))}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  # ── Tabbed view ────────────────────────────────────────────────────
-
-  defp render_tabs_view(assigns) do
-    ~H"""
-    <div role="tablist" class="tabs tabs-bordered">
-      <button
-        role="tab"
-        class={"tab #{if @active_tab == "templates", do: "tab-active", else: ""}"}
-        phx-click="switch_tab"
-        phx-value-tab="templates"
-      >
-        Templates
-        <span class="badge badge-sm ml-1">{length(@templates)}</span>
-      </button>
-      <button
-        role="tab"
-        class={"tab #{if @active_tab == "documents", do: "tab-active", else: ""}"}
-        phx-click="switch_tab"
-        phx-value-tab="documents"
-      >
-        Documents
-        <span class="badge badge-sm ml-1">{length(@documents)}</span>
-      </button>
-    </div>
-
-    <%= if @active_tab == "templates" do %>
-      {render_templates_tab(assigns)}
-    <% else %>
-      {render_documents_tab(assigns)}
-    <% end %>
-    """
-  end
-
-  defp render_templates_tab(assigns) do
+  defp render_templates_grid(assigns) do
     ~H"""
     <div :if={@templates == []} class="card bg-base-100 shadow-sm">
       <div class="card-body items-center text-center py-12">
         <span class="hero-document-text w-12 h-12 text-base-content/20" />
         <p class="text-sm text-base-content/50 mt-2">No templates yet</p>
-        <a
-          href={Paths.template_new()}
-          class="btn btn-primary btn-sm mt-3"
-        >
+        <a href={Paths.template_new()} class="btn btn-primary btn-sm mt-3">
           Create First Template
         </a>
       </div>
     </div>
 
-    <div :if={@templates != []} class="overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th>Variables</th>
-            <th>Updated</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr :for={tpl <- @templates} class="hover">
-            <td>
-              <div>
-                <p class="font-medium">{tpl.name}</p>
-                <p :if={tpl.description} class="text-xs text-base-content/50 truncate max-w-xs">
-                  {tpl.description}
-                </p>
-              </div>
-            </td>
-            <td>
-              <span class={"badge badge-sm #{status_badge_class(tpl.status)}"}>{tpl.status}</span>
-            </td>
-            <td>
-              <div class="flex flex-wrap gap-1">
-                <span
-                  :for={var <- Enum.take(tpl.variables || [], 3)}
-                  class="badge badge-xs badge-ghost"
-                >
-                  {var["name"] || var[:name]}
-                </span>
-                <span :if={length(tpl.variables || []) > 3} class="text-xs text-base-content/40">
-                  +{length(tpl.variables) - 3}
-                </span>
-              </div>
-            </td>
-            <td class="text-xs text-base-content/50">
-              {Calendar.strftime(tpl.updated_at, "%b %d, %Y")}
-            </td>
-            <td>
-              <div class="flex gap-1 justify-end">
-                <button
-                  :if={tpl.status == "published"}
-                  class="btn btn-ghost btn-xs"
-                  phx-click="open_modal_with_template"
-                  phx-value-uuid={tpl.uuid}
-                >
-                  <span class="hero-document-plus w-3 h-3" /> Use
-                </button>
-                <a
-                  href={Paths.template_edit(tpl.uuid)}
-                  class="btn btn-ghost btn-xs"
-                >
-                  <span class="hero-pencil-square w-3 h-3" /> Edit
-                </a>
-                {render_delete_button(Map.merge(assigns, %{item_uuid: tpl.uuid, item_type: "template"}))}
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div :if={@templates != []} class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+      <div
+        :for={tpl <- @templates}
+        class="group flex flex-col"
+        style="border: 1.5px solid currentColor; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 16px var(--color-neutral); background: oklch(var(--color-base-100)); padding-bottom: 12px;"
+      >
+        <%!-- Preview --%>
+        <a href={Paths.template_edit(tpl.uuid)} style="display:flex;justify-content:center;padding:16px 16px 24px 16px;background:oklch(var(--color-base-200));">
+          {render_page_preview(Map.merge(assigns, %{item: tpl}))}
+        </a>
+
+        <%!-- Info --%>
+        <div class="p-3 flex-1 flex flex-col">
+          <p class="font-medium text-sm truncate">{tpl.name}</p>
+          <p :if={tpl.description} class="text-xs text-base-content/50 truncate mt-0.5">
+            {tpl.description}
+          </p>
+          <div :if={(tpl.variables || []) != []} class="flex flex-wrap gap-1 mt-1.5">
+            <span
+              :for={var <- Enum.take(tpl.variables || [], 3)}
+              class="badge badge-xs badge-ghost"
+            >
+              {var["name"] || var[:name]}
+            </span>
+            <span :if={length(tpl.variables || []) > 3} class="text-xs text-base-content/40">
+              +{length(tpl.variables) - 3}
+            </span>
+          </div>
+          <p class="text-xs text-base-content/40 mt-auto pt-2">
+            {Calendar.strftime(tpl.updated_at, "%b %d, %Y")}
+          </p>
+        </div>
+
+        <%!-- Actions --%>
+        <div class="flex gap-1 px-2 pb-2 pt-1">
+          <button
+            class="flex-1 btn btn-ghost btn-xs py-2"
+            phx-click="open_modal_with_template"
+            phx-value-uuid={tpl.uuid}
+          >
+            <span class="hero-document-plus w-3 h-3" /> Use
+          </button>
+          <a
+            href={Paths.template_edit(tpl.uuid)}
+            class="flex-1 btn btn-ghost btn-xs py-2"
+          >
+            <span class="hero-pencil-square w-3 h-3" /> Edit
+          </a>
+          {render_delete_button(Map.merge(assigns, %{item_uuid: tpl.uuid, item_type: "template"}))}
+        </div>
+      </div>
     </div>
     """
   end
 
-  defp render_documents_tab(assigns) do
+  # ── Documents grid ──────────────────────────────────────────────
+
+  defp render_documents_grid(assigns) do
     ~H"""
     <div :if={@documents == []} class="card bg-base-100 shadow-sm">
       <div class="card-body items-center text-center py-12">
@@ -431,40 +343,65 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       </div>
     </div>
 
-    <div :if={@documents != []} class="overflow-x-auto">
-      <table class="table table-sm">
-        <thead>
-          <tr>
-            <th>Name</th>
-            <th>Status</th>
-            <th>Updated</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr :for={doc <- @documents} class="hover">
-            <td class="font-medium">{doc.name}</td>
-            <td>
-              <span class={"badge badge-sm #{status_badge_class(doc.status)}"}>{doc.status}</span>
-            </td>
-            <td class="text-xs text-base-content/50">
-              {Calendar.strftime(doc.updated_at, "%b %d, %Y")}
-            </td>
-            <td>
-              <div class="flex gap-1 justify-end">
-                <a
-                  href={Paths.document_edit(doc.uuid)}
-                  class="btn btn-ghost btn-xs"
-                >
-                  <span class="hero-pencil-square w-3 h-3" /> Edit
-                </a>
-                {render_delete_button(Map.merge(assigns, %{item_uuid: doc.uuid, item_type: "document"}))}
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <div :if={@documents != []} class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+      <div
+        :for={doc <- @documents}
+        class="group flex flex-col"
+        style="border: 1.5px solid currentColor; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 16px var(--color-neutral); background: oklch(var(--color-base-100)); padding-bottom: 12px;"
+      >
+        <%!-- Preview --%>
+        <a href={Paths.document_edit(doc.uuid)} style="display:flex;justify-content:center;padding:16px 16px 24px 16px;background:oklch(var(--color-base-200));">
+          {render_page_preview(Map.merge(assigns, %{item: doc}))}
+        </a>
+
+        <%!-- Info --%>
+        <div class="p-3 flex-1 flex flex-col">
+          <p class="font-medium text-sm truncate">{doc.name}</p>
+          <p class="text-xs text-base-content/40 mt-auto pt-2">
+            {Calendar.strftime(doc.updated_at, "%b %d, %Y")}
+          </p>
+        </div>
+
+        <%!-- Actions --%>
+        <div class="flex gap-1 px-2 pb-2 pt-1">
+          <a
+            href={Paths.document_edit(doc.uuid)}
+            class="flex-1 btn btn-ghost btn-xs py-2"
+          >
+            <span class="hero-pencil-square w-3 h-3" /> Edit
+          </a>
+          {render_delete_button(Map.merge(assigns, %{item_uuid: doc.uuid, item_type: "document"}))}
+        </div>
+      </div>
     </div>
+    """
+  end
+
+  # ── Page preview ────────────────────────────────────────────────
+
+  defp render_page_preview(assigns) do
+    html = assigns.item.content_html
+    css = assigns.item.content_css
+    has_content = is_binary(html) and String.trim(html) != ""
+    assigns = Map.put(assigns, :has_content, has_content)
+
+    assigns =
+      if has_content do
+        Map.put(assigns, :srcdoc, preview_srcdoc(html, css))
+      else
+        assigns
+      end
+
+    ~H"""
+    <%= if @has_content do %>
+      <div class="page-preview-container mx-auto">
+        <iframe srcdoc={@srcdoc} sandbox="" scrolling="no" tabindex="-1"></iframe>
+      </div>
+    <% else %>
+      <div class="page-preview-empty mx-auto">
+        <span class="hero-document-text w-10 h-10 text-base-content/15" />
+      </div>
+    <% end %>
     """
   end
 
@@ -474,17 +411,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     ~H"""
     <%= if @confirm_delete == @item_uuid do %>
       <button
-        class="btn btn-error btn-xs"
+        class="flex-1 btn btn-error btn-xs py-2"
         phx-click="delete"
         phx-value-uuid={@item_uuid}
         phx-value-type={@item_type}
       >
         Confirm
       </button>
-      <button class="btn btn-ghost btn-xs" phx-click="cancel_delete">Cancel</button>
+      <button class="flex-1 btn btn-ghost btn-xs py-2" phx-click="cancel_delete">Cancel</button>
     <% else %>
       <button
-        class="btn btn-ghost btn-xs text-error"
+        class="flex-1 btn btn-ghost btn-xs text-error py-2"
         phx-click="confirm_delete"
         phx-value-uuid={@item_uuid}
         phx-value-type={@item_type}
@@ -495,11 +432,28 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     """
   end
 
-  defp status_badge_class("published"), do: "badge-success"
-  defp status_badge_class("draft"), do: "badge-warning"
-  defp status_badge_class("archived"), do: "badge-ghost"
-  defp status_badge_class("final"), do: "badge-info"
-  defp status_badge_class(_), do: ""
+  # ── Helpers ─────────────────────────────────────────────────────────
+
+  defp preview_srcdoc(html, css) do
+    css_block = if is_binary(css) and css != "", do: "<style>#{css}</style>", else: ""
+
+    """
+    <!DOCTYPE html>
+    <html><head><meta charset="utf-8">
+    <style>
+      body { font-family: Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.6; color: #1a1a1a; margin: 0; padding: 0 40px; overflow: hidden; }
+      h1 { font-size: 22pt; margin: 0 0 4px 0; }
+      h2 { font-size: 14pt; color: #333; margin: 24px 0 8px 0; }
+      table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+      th { background: #f5f5f5; text-align: left; padding: 8px 12px; font-size: 10pt; border-bottom: 2px solid #ddd; }
+      td { padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 10pt; }
+      blockquote { border-left: 4px solid #ccc; margin: 16px 0; padding: 8px 16px; color: #555; }
+      img { max-width: 100%; height: auto; }
+    </style>
+    #{css_block}
+    </head><body>#{html}</body></html>
+    """
+  end
 
   defp assign_modal_templates(assigns) do
     if Map.has_key?(assigns, :modal_templates) do

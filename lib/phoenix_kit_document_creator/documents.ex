@@ -61,7 +61,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
     query =
       case Keyword.get(opts, :status) do
-        nil -> query
+        nil -> where(query, [t], t.status != "trashed")
         status -> where(query, [t], t.status == ^status)
       end
 
@@ -69,7 +69,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   def published_templates do
-    list_templates(status: "published")
+    list_templates()
   end
 
   def get_template(uuid) do
