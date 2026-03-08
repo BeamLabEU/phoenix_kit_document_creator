@@ -65,10 +65,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
 
   @impl true
   def handle_event("request_save", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(saving: true)
-     |> push_event("request-save-data", %{})}
+    {:noreply, push_event(socket, "request-save-data", %{})}
   end
 
   def handle_event("save_document", params, socket) do
@@ -107,6 +104,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
           Map.put(attrs, :config, Map.put(config, "page_count", pc))
       end
 
+    socket = assign(socket, saving: true)
+
     case Documents.update_document(socket.assigns.document, attrs) do
       {:ok, document} ->
         {:noreply,
@@ -142,6 +141,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
     pdf_opts = [
       header_html: (header && header.html) || "",
       footer_html: (footer && footer.html) || "",
+      header_height: header && header.height,
+      footer_height: footer && footer.height,
       paper_size: paper_size
     ]
 

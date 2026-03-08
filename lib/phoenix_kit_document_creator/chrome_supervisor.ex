@@ -44,7 +44,9 @@ defmodule PhoenixKitDocumentCreator.ChromeSupervisor do
          PhoenixKitDocumentCreator.chrome_installed?() do
       case maybe_start_supervisor() do
         :ok ->
-          case Supervisor.start_child(__MODULE__, {ChromicPDF, []}) do
+          chromic_opts = [session_pool: [init_timeout: 15_000, timeout: 15_000]]
+
+          case Supervisor.start_child(__MODULE__, {ChromicPDF, chromic_opts}) do
             {:ok, _pid} -> :ok
             {:error, {:already_started, _pid}} -> :ok
             {:error, reason} -> {:error, reason}

@@ -28,6 +28,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
        changeset: nil,
        headers: headers,
        footers: footers,
+       selected_paper_size: "a4",
        selected_header: nil,
        selected_footer: nil,
        detected_variables: [],
@@ -52,7 +53,8 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     |> assign(
       page_title: "New Template",
       template: template,
-      changeset: changeset
+      changeset: changeset,
+      selected_paper_size: "a4"
     )
   end
 
@@ -66,6 +68,9 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       template ->
         changeset = PhoenixKitDocumentCreator.Schemas.Template.changeset(template, %{})
         variables = DocumentFormat.extract_variables(template.content_html || "")
+        paper_size = get_in(template.config || %{}, ["paper_size"]) || "a4"
+        header = find_in_list(socket.assigns.headers, template.header_uuid)
+        footer = find_in_list(socket.assigns.footers, template.footer_uuid)
 
         socket
         |> assign(
@@ -73,10 +78,13 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
           template: template,
           changeset: changeset,
           detected_variables: variables,
-          selected_header: find_in_list(socket.assigns.headers, template.header_uuid),
-          selected_footer: find_in_list(socket.assigns.footers, template.footer_uuid)
+          selected_paper_size: paper_size,
+          selected_header: header,
+          selected_footer: footer
         )
         |> maybe_load_project_data(template)
+        |> push_hf_preview(:header, header)
+        |> push_hf_preview(:footer, footer)
     end
   end
 
@@ -98,10 +106,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
   @impl true
   def handle_event("request_save", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(saving: true)
-     |> push_event("request-save-data", %{})}
+    {:noreply, push_event(socket, "request-save-data", %{})}
   end
 
   def handle_event("save_template", params, socket) do
@@ -128,6 +133,8 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     }
 
     # Merge form fields if present
+    socket = assign(socket, saving: true)
+
     template_attrs =
       template_attrs
       |> maybe_put(params, "name", :name)
@@ -181,21 +188,20 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   # ── PDF generation ─────────────────────────────────────────────────
 
   def handle_event("generate_pdf", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(generating_pdf: true, error: nil)
-     |> push_event("request-content-for-pdf", %{})}
+    {:noreply, push_event(socket, "request-content-for-pdf", %{})}
   end
 
   def handle_event("generate_pdf_with_content", %{"html" => html} = params, socket) do
-    template = socket.assigns.template
-    header = load_record(template.header_uuid)
-    footer = load_record(template.footer_uuid)
+    socket = assign(socket, generating_pdf: true, error: nil)
+    header = socket.assigns.selected_header
+    footer = socket.assigns.selected_footer
     paper_size = Map.get(params, "paper_size", "a4")
 
     pdf_opts = [
       header_html: (header && header.html) || "",
       footer_html: (footer && footer.html) || "",
+      header_height: header && header.height,
+      footer_height: footer && footer.height,
       paper_size: paper_size
     ]
 
@@ -238,12 +244,47 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     {:noreply, assign(socket, changeset: changeset)}
   end
 
+  def handle_event("select_paper_size", %{"paper_size" => size}, socket) do
+    socket = assign(socket, selected_paper_size: size)
+
+    # Clear header/footer if they don't match the new paper size
+    socket =
+      if socket.assigns.selected_header && hf_paper_size(socket.assigns.selected_header) != size do
+        socket
+        |> assign(selected_header: nil)
+        |> push_hf_preview(:header, nil)
+      else
+        socket
+      end
+
+    socket =
+      if socket.assigns.selected_footer && hf_paper_size(socket.assigns.selected_footer) != size do
+        socket
+        |> assign(selected_footer: nil)
+        |> push_hf_preview(:footer, nil)
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_event("select_header", %{"header_uuid" => uuid}, socket) do
-    {:noreply, assign(socket, selected_header: find_in_list(socket.assigns.headers, uuid))}
+    header = find_in_list(socket.assigns.headers, uuid)
+
+    {:noreply,
+     socket
+     |> assign(selected_header: header)
+     |> push_hf_preview(:header, header)}
   end
 
   def handle_event("select_footer", %{"footer_uuid" => uuid}, socket) do
-    {:noreply, assign(socket, selected_footer: find_in_list(socket.assigns.footers, uuid))}
+    footer = find_in_list(socket.assigns.footers, uuid)
+
+    {:noreply,
+     socket
+     |> assign(selected_footer: footer)
+     |> push_hf_preview(:footer, footer)}
   end
 
   def handle_event("dismiss_flash", _params, socket) do
@@ -275,12 +316,6 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
   # ── Helpers ────────────────────────────────────────────────────────
 
-  defp load_record(uuid) when is_binary(uuid) and uuid != "" do
-    Documents.get_header_footer(uuid)
-  end
-
-  defp load_record(_), do: nil
-
   defp maybe_put(attrs, params, form_key, attr_key) do
     case Map.get(params, form_key) do
       nil -> attrs
@@ -311,11 +346,32 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     """
   end
 
+  defp push_hf_preview(socket, type, nil) do
+    push_event(socket, "update-hf-region", %{type: Atom.to_string(type), html: "", css: "", height: "0"})
+  end
+
+  defp push_hf_preview(socket, type, record) do
+    push_event(socket, "update-hf-region", %{
+      type: Atom.to_string(type),
+      html: record.html || "",
+      css: record.css || "",
+      height: record.height || "25mm"
+    })
+  end
+
   defp find_in_list(list, uuid) when is_binary(uuid) and uuid != "" do
     Enum.find(list, &(&1.uuid == uuid))
   end
 
   defp find_in_list(_, _), do: nil
+
+  defp hf_paper_size(record) do
+    get_in(record.data || %{}, ["paper_size"]) || "a4"
+  end
+
+  defp filtered_hf(list, paper_size) do
+    Enum.filter(list, fn record -> hf_paper_size(record) == paper_size end)
+  end
 
   defp humanize(name) do
     name
@@ -393,9 +449,32 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       <%!-- Main layout: Editor + Settings sidebar --%>
       <div class="flex gap-4">
         <%!-- GrapesJS Editor (left, takes most space) --%>
-        <div class="flex-1">
-          <div id="grapesjs-wrapper" phx-hook="GrapesJSTemplateEditor" phx-update="ignore" style="display:flex;width:100%;height:100%;">
-            <div id="editor-grapesjs" style="flex:1;"></div>
+        <div class="flex-1 overflow-x-auto">
+          <div id="grapesjs-wrapper" phx-hook="GrapesJSTemplateEditor" phx-update="ignore" style="display:flex;width:100%;">
+            <%!-- Page frame with header/footer regions --%>
+            <div
+              id="template-page-frame"
+              style="display:flex;flex-direction:column;width:794px;min-width:794px;height:1123px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,0.12);border-radius:4px;overflow:hidden;position:relative;"
+            >
+              <%!-- Header region (non-editable, hidden by default) --%>
+              <div id="template-header-region" style="flex-shrink:0;height:0px;overflow:hidden;display:none;position:relative;">
+                <iframe id="template-header-iframe" style="width:100%;height:100%;border:none;pointer-events:none;" sandbox="" scrolling="no"></iframe>
+                <div style="position:absolute;inset:0;background:rgba(0,0,0,0.03);pointer-events:none;"></div>
+              </div>
+              <div id="template-header-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;display:none;"></div>
+
+              <%!-- GrapesJS editable body area --%>
+              <div id="editor-grapesjs" style="flex:1 1 auto;overflow:hidden;"></div>
+
+              <%!-- Footer region (non-editable, hidden by default) --%>
+              <div id="template-footer-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;display:none;"></div>
+              <div id="template-footer-region" style="flex-shrink:0;height:0px;overflow:hidden;display:none;position:relative;">
+                <iframe id="template-footer-iframe" style="width:100%;height:100%;border:none;pointer-events:none;" sandbox="" scrolling="no"></iframe>
+                <div style="position:absolute;inset:0;background:rgba(0,0,0,0.03);pointer-events:none;"></div>
+              </div>
+            </div>
+
+            <%!-- Blocks panel --%>
             <div id="grapesjs-right-panel" class="bg-base-200 text-base-content border-l border-base-300" style="width:220px;min-width:220px;display:flex;flex-direction:column;">
               <div class="border-b border-base-300 text-base-content/70" style="padding:8px 12px;font-size:12px;font-weight:600;">
                 Document Elements
@@ -450,32 +529,22 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
               <div class="form-control">
                 <label class="label py-1"><span class="label-text text-xs">Paper Size</span></label>
-                <select id="template-paper-size" class="select select-bordered select-sm w-full">
-                  <option
-                    value="a4"
-                    selected={@template && get_in(@template.config, ["paper_size"]) == "a4"}
-                  >
-                    A4 (210 × 297 mm)
-                  </option>
-                  <option
-                    value="letter"
-                    selected={@template && get_in(@template.config, ["paper_size"]) == "letter"}
-                  >
-                    US Letter (8.5 × 11 in)
-                  </option>
-                  <option
-                    value="legal"
-                    selected={@template && get_in(@template.config, ["paper_size"]) == "legal"}
-                  >
-                    US Legal (8.5 × 14 in)
-                  </option>
-                  <option
-                    value="tabloid"
-                    selected={@template && get_in(@template.config, ["paper_size"]) == "tabloid"}
-                  >
-                    Tabloid (11 × 17 in)
-                  </option>
-                </select>
+                <form phx-change="select_paper_size">
+                  <select name="paper_size" id="template-paper-size" class="select select-bordered select-sm w-full">
+                    <option value="a4" selected={@selected_paper_size == "a4"}>
+                      A4 (210 × 297 mm)
+                    </option>
+                    <option value="letter" selected={@selected_paper_size == "letter"}>
+                      US Letter (8.5 × 11 in)
+                    </option>
+                    <option value="legal" selected={@selected_paper_size == "legal"}>
+                      US Legal (8.5 × 14 in)
+                    </option>
+                    <option value="tabloid" selected={@selected_paper_size == "tabloid"}>
+                      Tabloid (11 × 17 in)
+                    </option>
+                  </select>
+                </form>
               </div>
 
               <div class="form-control">
@@ -486,9 +555,9 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
                   <select name="header_uuid" id="template-header" class="select select-bordered select-sm w-full">
                     <option value="">None</option>
                     <option
-                      :for={h <- @headers}
+                      :for={h <- filtered_hf(@headers, @selected_paper_size)}
                       value={h.uuid}
-                      selected={@template && @template.header_uuid == h.uuid}
+                      selected={@selected_header && @selected_header.uuid == h.uuid}
                     >
                       {h.name}
                     </option>
@@ -518,9 +587,9 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
                   <select name="footer_uuid" id="template-footer" class="select select-bordered select-sm w-full">
                     <option value="">None</option>
                     <option
-                      :for={f <- @footers}
+                      :for={f <- filtered_hf(@footers, @selected_paper_size)}
                       value={f.uuid}
-                      selected={@template && @template.footer_uuid == f.uuid}
+                      selected={@selected_footer && @selected_footer.uuid == f.uuid}
                     >
                       {f.name}
                     </option>
@@ -573,7 +642,8 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     <style>
       .gjs-off-prv { background-color: oklch(var(--color-base-200)) !important; color: oklch(var(--color-base-content)) !important; }
       #editor-grapesjs { --gjs-left-width: 0px; }
-      #grapesjs-right-panel { position: sticky; top: 7rem; align-self: flex-start; max-height: calc(100vh - 8rem); overflow-y: auto; }
+      #editor-grapesjs .gjs-cv-canvas { top: 0 !important; }
+      #grapesjs-right-panel { align-self: stretch; }
     </style>
     """
   end

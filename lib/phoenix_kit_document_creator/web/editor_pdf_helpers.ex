@@ -5,6 +5,22 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   Provides header/footer support via ChromicPDF.Template.
   Supports both plain text headers/footers (`:header_text`/`:footer_text`)
   and rich HTML headers/footers (`:header_html`/`:footer_html`).
+
+  ## Units
+
+  Three unit systems are used across the stack, all based on the CSS
+  standard of 1in = 96px:
+
+    - **GrapesJS canvas** (`editor_hooks.js`): CSS pixels (e.g. A4 = 794×1123px)
+    - **ChromicPDF paper size** (this module): inches for `paperWidth`/`paperHeight`
+      as required by Chrome DevTools Protocol `Page.printToPDF`
+    - **Header/footer heights** (this module + `@page` margins): CSS unit strings
+      like `"25mm"`, passed through to `ChromicPDF.Template` which embeds them
+      in `@page { margin: ... }`
+
+  All three resolve to the same physical dimensions (1mm = 3.7795px = 1/25.4in).
+  Chrome headless uses the same 96 DPI standard as browsers, so the editor
+  preview matches the PDF output 1:1.
   """
 
   @body_styles """
@@ -40,13 +56,15 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
     footer_html = Keyword.get(opts, :footer_html, "")
     header_text = Keyword.get(opts, :header_text, "")
     footer_text = Keyword.get(opts, :footer_text, "")
+    header_height = Keyword.get(opts, :header_height)
+    footer_height = Keyword.get(opts, :footer_height)
 
     with :ok <- PhoenixKitDocumentCreator.ChromeSupervisor.ensure_started() do
       size = resolve_paper_size(Keyword.get(opts, :paper_size, "a4"))
 
       cond do
         rich_content?(header_html) or rich_content?(footer_html) ->
-          generate_with_rich_template(html, header_html, footer_html, size)
+          generate_with_rich_template(html, header_html, footer_html, size, header_height, footer_height)
 
         has_text?(header_text) or has_text?(footer_text) ->
           generate_with_text_template(html, header_text, footer_text, size)
@@ -61,7 +79,7 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   # --- Rich HTML header/footer ---
 
-  defp generate_with_rich_template(html, header_html, footer_html, size) do
+  defp generate_with_rich_template(html, header_html, footer_html, size, header_height, footer_height) do
     header = if rich_content?(header_html), do: rich_header_wrapper(header_html), else: ""
     footer = if rich_content?(footer_html), do: rich_footer_wrapper(footer_html), else: ""
 
@@ -69,8 +87,8 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
       [content: @body_styles <> html, size: size]
       |> maybe_add(:header, header)
       |> maybe_add(:footer, footer)
-      |> maybe_add(:header_height, if(header != "", do: "25mm"))
-      |> maybe_add(:footer_height, if(footer != "", do: "20mm"))
+      |> maybe_add(:header_height, if(header != "", do: header_height || "25mm"))
+      |> maybe_add(:footer_height, if(footer != "", do: footer_height || "20mm"))
 
     %{source: source, opts: print_opts} = ChromicPDF.Template.source_and_options(template_opts)
     ChromicPDF.print_to_pdf(source, print_opts)

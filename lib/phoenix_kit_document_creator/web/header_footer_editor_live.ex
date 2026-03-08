@@ -89,6 +89,7 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
 
   defp hf_list_path("header"), do: Paths.headers()
   defp hf_list_path("footer"), do: Paths.footers()
+  defp hf_list_path(_), do: Paths.index()
 
   defp hf_edit_path("header", uuid), do: Paths.header_edit(uuid)
   defp hf_edit_path("footer", uuid), do: Paths.footer_edit(uuid)
@@ -97,10 +98,7 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
 
   @impl true
   def handle_event("request_save", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(saving: true)
-     |> push_event("request-hf-save-data", %{})}
+    {:noreply, push_event(socket, "request-hf-save-data", %{})}
   end
 
   def handle_event("save_record", params, socket) do
@@ -124,6 +122,8 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
     }
 
     is_new = socket.assigns.live_action in [:header_new, :footer_new]
+
+    socket = assign(socket, saving: true)
 
     result =
       if is_new do
@@ -189,39 +189,48 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
         <span>{@error}</span>
       </div>
 
-      <%!-- Main layout: Page preview + Sidebar --%>
+      <%!-- Main layout: Page preview + Elements panel + Settings sidebar --%>
       <div class="flex gap-4">
-        <%!-- Page preview (left) --%>
+        <%!-- Page preview + Elements panel (left, inside phx-update="ignore") --%>
         <div class="flex-1 overflow-x-auto">
-          <div
-            id="hf-page-frame"
-            phx-update="ignore"
-            data-type={@type}
-            style="display:flex;flex-direction:column;width:794px;height:1123px;margin:0 auto;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,0.12);border-radius:4px;overflow:hidden;position:relative;"
-          >
-            <div id="hf-editor-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;background:#fff;">
-              <span class="loading loading-spinner loading-md"></span>
+          <div id="hf-editor-area" phx-update="ignore" style="display:flex;width:100%;">
+            <%!-- Page frame --%>
+            <div
+              id="hf-page-frame"
+              data-type={@type}
+              style="display:flex;flex-direction:column;width:794px;min-width:794px;height:1123px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,0.12);border-radius:4px;overflow:hidden;position:relative;"
+            >
+              <div id="hf-editor-loading" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;background:#fff;">
+                <span class="loading loading-spinner loading-md"></span>
+              </div>
+
+              <%= if @type == "header" do %>
+                <div id="hf-editor" class="hf-mini-editor" style="height:95px;flex-shrink:0;flex-grow:0;overflow:hidden;"></div>
+                <div id="hf-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;"></div>
+                <div id="hf-body-placeholder" style="flex:1 1 auto;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 10px,#f3f4f6 10px,#f3f4f6 20px);display:flex;align-items:center;justify-content:center;pointer-events:none;user-select:none;">
+                  <span style="color:#9ca3af;font-size:14px;font-style:italic;">Document body</span>
+                </div>
+              <% else %>
+                <div id="hf-body-placeholder" style="flex:1 1 auto;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 10px,#f3f4f6 10px,#f3f4f6 20px);display:flex;align-items:center;justify-content:center;pointer-events:none;user-select:none;">
+                  <span style="color:#9ca3af;font-size:14px;font-style:italic;">Document body</span>
+                </div>
+                <div id="hf-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;"></div>
+                <div id="hf-editor" class="hf-mini-editor" style="height:95px;flex-shrink:0;flex-grow:0;overflow:hidden;"></div>
+              <% end %>
             </div>
 
-            <%= if @type == "header" do %>
-              <div id="hf-editor" class="hf-mini-editor" style="height:95px;flex-shrink:0;flex-grow:0;overflow:hidden;"></div>
-              <div id="hf-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;"></div>
-              <div id="hf-body-placeholder" style="flex:1 1 auto;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 10px,#f3f4f6 10px,#f3f4f6 20px);display:flex;align-items:center;justify-content:center;pointer-events:none;user-select:none;">
-                <span style="color:#9ca3af;font-size:14px;font-style:italic;">Document body</span>
+            <%!-- Elements panel (right of page, matching template editor) --%>
+            <div id="hf-blocks-panel" class="bg-base-200 text-base-content border-l border-base-300" style="width:220px;min-width:220px;display:flex;flex-direction:column;">
+              <div class="border-b border-base-300 text-base-content/70" style="padding:8px 12px;font-size:12px;font-weight:600;">
+                Elements
               </div>
-            <% else %>
-              <div id="hf-body-placeholder" style="flex:1 1 auto;background:repeating-linear-gradient(45deg,#f9fafb,#f9fafb 10px,#f3f4f6 10px,#f3f4f6 20px);display:flex;align-items:center;justify-content:center;pointer-events:none;user-select:none;">
-                <span style="color:#9ca3af;font-size:14px;font-style:italic;">Document body</span>
-              </div>
-              <div id="hf-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;"></div>
-              <div id="hf-editor" class="hf-mini-editor" style="height:95px;flex-shrink:0;flex-grow:0;overflow:hidden;"></div>
-            <% end %>
+              <div id="hf-editor-blocks" style="flex:1;overflow-y:auto;"></div>
+            </div>
           </div>
         </div>
 
-        <%!-- Sidebar (right) --%>
+        <%!-- Settings sidebar (right) --%>
         <div class="w-72 flex-shrink-0 space-y-4 sticky top-28 self-start max-h-[calc(100vh-8rem)] overflow-y-auto">
-          <%!-- Settings card --%>
           <div class="card bg-base-100 shadow-xl">
             <div class="card-body p-4 space-y-3">
               <h3 class="font-semibold text-sm">{String.capitalize(@type || "")} Settings</h3>
@@ -258,14 +267,6 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
             </div>
           </div>
 
-          <%!-- Elements (blocks) card --%>
-          <div class="card bg-base-100 shadow-xl">
-            <div class="card-body p-4 space-y-2">
-              <h3 class="font-semibold text-sm">Elements</h3>
-              <div id="hf-editor-blocks"></div>
-            </div>
-          </div>
-
           <p class="text-xs text-base-content/50">
             Drag elements from the Elements panel into the {String.downcase(@type || "")} area.
             The "Page #" block inserts page number placeholders for PDF output.
@@ -292,22 +293,14 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
       .hf-mini-editor .gjs-toolbar {
         display: none !important;
       }
-      #hf-editor-blocks .gjs-blocks-cs {
-        display: flex; flex-direction: column; gap: 3px;
+      #hf-editor-blocks { padding: 4px; }
+      #hf-editor-blocks .gjs-block-category .gjs-title {
+        font-size: 11px !important; padding: 6px 8px !important;
+        border-bottom: 1px solid oklch(var(--bc) / 0.1) !important;
       }
       #hf-editor-blocks .gjs-block {
-        width: 100% !important; padding: 6px 8px !important;
-        border: 1px solid #e0e0e0 !important; border-radius: 4px !important;
-        background: #fff !important; cursor: grab; text-align: center;
-        font-size: 10px !important; min-height: 0 !important;
-      }
-      #hf-editor-blocks .gjs-block:hover {
-        border-color: oklch(var(--p)) !important;
-        background: oklch(var(--p) / 0.05) !important;
-      }
-      #hf-editor-blocks .gjs-block svg { fill: #555; }
-      #hf-editor-blocks .gjs-block-label {
-        color: #1a1a1a !important; font-size: 10px !important;
+        width: 100% !important; padding: 8px !important;
+        min-height: 0 !important; justify-content: flex-start !important;
       }
     </style>
     """
