@@ -36,7 +36,7 @@ defmodule PhoenixKitDocumentCreator.Migration do
   use Ecto.Migration
 
   @initial_version 1
-  @current_version 2
+  @current_version 4
   @default_prefix "public"
   @version_table "phoenix_kit_doc_headers_footers"
 

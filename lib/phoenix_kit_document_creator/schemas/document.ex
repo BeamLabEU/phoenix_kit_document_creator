@@ -28,20 +28,16 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
 
     field(:variable_values, :map, default: %{})
 
-    belongs_to(:header, PhoenixKitDocumentCreator.Schemas.HeaderFooter,
-      foreign_key: :header_uuid,
-      references: :uuid,
-      type: UUIDv7
-    )
-
-    belongs_to(:footer, PhoenixKitDocumentCreator.Schemas.HeaderFooter,
-      foreign_key: :footer_uuid,
-      references: :uuid,
-      type: UUIDv7
-    )
+    field(:header_html, :string, default: "")
+    field(:header_css, :string, default: "")
+    field(:header_height, :string, default: "25mm")
+    field(:footer_html, :string, default: "")
+    field(:footer_css, :string, default: "")
+    field(:footer_height, :string, default: "20mm")
 
     field(:config, :map, default: %{"paper_size" => "a4", "orientation" => "portrait"})
     field(:data, :map, default: %{})
+    field(:thumbnail, :string)
     field(:created_by_uuid, Ecto.UUID)
 
     timestamps(type: :utc_datetime)
@@ -54,10 +50,15 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     :content_css,
     :content_native,
     :variable_values,
-    :header_uuid,
-    :footer_uuid,
+    :header_html,
+    :header_css,
+    :header_height,
+    :footer_html,
+    :footer_css,
+    :footer_height,
     :config,
     :data,
+    :thumbnail,
     :created_by_uuid
   ]
 

@@ -9,6 +9,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   use Phoenix.LiveView
 
   import PhoenixKitDocumentCreator.Web.Components.EditorScripts
+  import PhoenixKitDocumentCreator.Web.Components.EditorPanel
 
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.Paths
@@ -43,7 +44,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
            page_title: document.name,
            document: document
          )
-         |> maybe_load_project_data(document)}
+         |> maybe_load_project_data(document)
+         |> push_hf_preview(:header, document)
+         |> push_hf_preview(:footer, document)}
     end
   end
 
@@ -101,6 +104,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
 
     case Documents.update_document(socket.assigns.document, attrs) do
       {:ok, document} ->
+        # Store preview HTML for iframe thumbnail
+        html = Map.get(params, "html", "")
+        css = Map.get(params, "css", "")
+
+        case EditorPdfHelpers.generate_thumbnail_html(html, css: css) do
+          {:ok, thumb_html} -> Documents.update_document(document, %{thumbnail: thumb_html})
+          _ -> :ok
+        end
+
         {:noreply,
          assign(socket,
            document: document,
@@ -109,8 +121,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
            saved_flash: "Document saved"
          )}
 
-      {:error, _changeset} ->
-        {:noreply, assign(socket, saving: false, error: "Save failed")}
+      {:error, changeset} ->
+        {:noreply, assign(socket, saving: false, error: format_changeset_errors(changeset))}
     end
   end
 
@@ -127,36 +139,45 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
 
   def handle_event("generate_pdf_with_content", %{"html" => html} = params, socket) do
     doc = socket.assigns.document
-    header = load_record(doc.header_uuid)
-    footer = load_record(doc.footer_uuid)
     paper_size = Map.get(params, "paper_size", "a4")
 
     pdf_opts = [
-      header_html: (header && header.html) || "",
-      footer_html: (footer && footer.html) || "",
-      header_height: header && header.height,
-      footer_height: footer && footer.height,
+      header_html: doc.header_html || "",
+      header_css: doc.header_css || "",
+      footer_html: doc.footer_html || "",
+      footer_css: doc.footer_css || "",
+      header_height: doc.header_height,
+      footer_height: doc.footer_height,
       paper_size: paper_size
     ]
 
-    case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
-      {:ok, pdf_binary} ->
-        filename =
-          (socket.assigns.document.name || "document")
-          |> String.downcase()
-          |> String.replace(~r/[^a-z0-9]+/, "-")
-          |> Kernel.<>(".pdf")
+    try do
+      case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
+        {:ok, pdf_binary} ->
+          filename =
+            (socket.assigns.document.name || "document")
+            |> String.downcase()
+            |> String.replace(~r/[^a-z0-9]+/, "-")
+            |> Kernel.<>(".pdf")
 
-        {:noreply,
-         socket
-         |> assign(generating_pdf: false)
-         |> push_event("download-pdf", %{base64: pdf_binary, filename: filename})}
+          {:noreply,
+           socket
+           |> assign(generating_pdf: false)
+           |> push_event("download-pdf", %{base64: pdf_binary, filename: filename})}
 
-      {:error, reason} ->
+        {:error, reason} ->
+          {:noreply,
+           assign(socket,
+             generating_pdf: false,
+             error: "PDF generation failed: #{inspect(reason)}"
+           )}
+      end
+    rescue
+      _e ->
         {:noreply,
          assign(socket,
            generating_pdf: false,
-           error: "PDF generation failed: #{inspect(reason)}"
+           error: "PDF generation failed — Chrome may still be starting up, please try again"
          )}
     end
   end
@@ -194,11 +215,37 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
 
   # ── Helpers ────────────────────────────────────────────────────────
 
-  defp load_record(uuid) when is_binary(uuid) and uuid != "" do
-    Documents.get_header_footer(uuid)
+  defp format_changeset_errors(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+      Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
+        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+      end)
+    end)
+    |> Enum.map(fn {field, errors} ->
+      "#{Phoenix.Naming.humanize(field)}: #{Enum.join(errors, ", ")}"
+    end)
+    |> Enum.join(". ")
+    |> then(&"Save failed — #{&1}")
   end
 
-  defp load_record(_), do: nil
+  defp push_hf_preview(socket, :header, doc) do
+    push_event(socket, "update-hf-region", %{
+      type: "header",
+      html: doc.header_html || "",
+      css: doc.header_css || "",
+      height: doc.header_height || "25mm"
+    })
+  end
+
+  defp push_hf_preview(socket, :footer, doc) do
+    push_event(socket, "update-hf-region", %{
+      type: "footer",
+      html: doc.footer_html || "",
+      css: doc.footer_css || "",
+      height: doc.footer_height || "20mm"
+    })
+  end
 
   # ── Render ─────────────────────────────────────────────────────────
 
@@ -223,13 +270,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
         <div class="flex gap-2">
           <button
             class="btn btn-ghost btn-sm"
-            onclick={"document.getElementById('doc-grapesjs-wrapper').dispatchEvent(new Event('remove-page'))"}
+            onclick={"document.getElementById('doc-wrapper').dispatchEvent(new Event('remove-page'))"}
           >
             <span class="hero-minus w-4 h-4" />
           </button>
           <button
             class="btn btn-ghost btn-sm"
-            onclick={"document.getElementById('doc-grapesjs-wrapper').dispatchEvent(new Event('add-page'))"}
+            onclick={"document.getElementById('doc-wrapper').dispatchEvent(new Event('add-page'))"}
           >
             <span class="hero-plus w-4 h-4" />
           </button>
@@ -263,17 +310,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
       <%!-- Main layout: Editor + sidebar --%>
       <div class="flex gap-4">
         <%!-- GrapesJS Editor --%>
-        <div class="flex-1">
-          <div id="doc-grapesjs-wrapper" phx-hook="GrapesJSDocumentEditor" phx-update="ignore" style="display:flex;width:100%;height:100%;">
-            <div id="doc-editor-grapesjs" style="flex:1;"></div>
-            <div id="doc-grapesjs-right-panel" class="bg-base-200 text-base-content border-l border-base-300" style="width:220px;min-width:220px;display:flex;flex-direction:column;">
-              <div class="border-b border-base-300 text-base-content/70" style="padding:8px 12px;font-size:12px;font-weight:600;">
-                Document Elements
-              </div>
-              <div id="doc-grapesjs-blocks-panel" style="flex:1;overflow-y:auto;"></div>
-            </div>
-          </div>
-        </div>
+        <.editor_panel
+          id="doc"
+          hook="GrapesJSDocumentEditor"
+          save_event="save_document"
+          template_vars={false}
+        />
 
         <%!-- Sidebar --%>
         <div class="w-64 flex-shrink-0 space-y-4 sticky top-28 self-start max-h-[calc(100vh-8rem)] overflow-y-auto">
@@ -331,11 +373,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
       phoenix_kit_current_user={assigns[:phoenix_kit_current_user]}
     />
 
-    <style>
-      .gjs-off-prv { background-color: oklch(var(--color-base-200)) !important; color: oklch(var(--color-base-content)) !important; }
-      #doc-editor-grapesjs { --gjs-left-width: 0px; }
-      #doc-grapesjs-right-panel { position: sticky; top: 7rem; align-self: flex-start; max-height: calc(100vh - 8rem); overflow-y: auto; }
-    </style>
     """
   end
 

@@ -9,6 +9,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   use Phoenix.LiveView
 
   import PhoenixKitDocumentCreator.Web.Components.EditorScripts
+  import PhoenixKitDocumentCreator.Web.Components.EditorPanel
 
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.Paths
@@ -154,6 +155,12 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       {:ok, template} ->
         detected = DocumentFormat.extract_variables(html)
 
+        # Store preview HTML for iframe thumbnail
+        case EditorPdfHelpers.generate_thumbnail_html(html, css: css) do
+          {:ok, thumb_html} -> Documents.update_template(template, %{thumbnail: thumb_html})
+          _ -> :ok
+        end
+
         socket =
           socket
           |> assign(
@@ -179,7 +186,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
          assign(socket,
            changeset: changeset,
            saving: false,
-           error: "Save failed — check the form fields"
+           error: format_changeset_errors(changeset)
          )}
     end
   end
@@ -198,30 +205,41 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
     pdf_opts = [
       header_html: (header && header.html) || "",
+      header_css: (header && header.css) || "",
       footer_html: (footer && footer.html) || "",
+      footer_css: (footer && footer.css) || "",
       header_height: header && header.height,
       footer_height: footer && footer.height,
       paper_size: paper_size
     ]
 
-    case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
-      {:ok, pdf_binary} ->
-        filename =
-          (socket.assigns.template.name || "template")
-          |> String.downcase()
-          |> String.replace(~r/[^a-z0-9]+/, "-")
-          |> Kernel.<>(".pdf")
+    try do
+      case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
+        {:ok, pdf_binary} ->
+          filename =
+            (socket.assigns.template.name || "template")
+            |> String.downcase()
+            |> String.replace(~r/[^a-z0-9]+/, "-")
+            |> Kernel.<>(".pdf")
 
-        {:noreply,
-         socket
-         |> assign(generating_pdf: false)
-         |> push_event("download-pdf", %{base64: pdf_binary, filename: filename})}
+          {:noreply,
+           socket
+           |> assign(generating_pdf: false)
+           |> push_event("download-pdf", %{base64: pdf_binary, filename: filename})}
 
-      {:error, reason} ->
+        {:error, reason} ->
+          {:noreply,
+           assign(socket,
+             generating_pdf: false,
+             error: "PDF generation failed: #{inspect(reason)}"
+           )}
+      end
+    rescue
+      _e ->
         {:noreply,
          assign(socket,
            generating_pdf: false,
-           error: "PDF generation failed: #{inspect(reason)}"
+           error: "PDF generation failed — Chrome may still be starting up, please try again"
          )}
     end
   end
@@ -315,6 +333,20 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
   # ── Helpers ────────────────────────────────────────────────────────
 
+  defp format_changeset_errors(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+      Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
+        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+      end)
+    end)
+    |> Enum.map(fn {field, errors} ->
+      "#{Phoenix.Naming.humanize(field)}: #{Enum.join(errors, ", ")}"
+    end)
+    |> Enum.join(". ")
+    |> then(&"Save failed — #{&1}")
+  end
+
   defp maybe_put(attrs, params, form_key, attr_key) do
     case Map.get(params, form_key) do
       nil -> attrs
@@ -397,14 +429,14 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
           <div class="flex items-center gap-1 border border-base-300 rounded-lg px-1">
             <button
               class="btn btn-ghost btn-xs btn-square"
-              onclick={"document.getElementById('grapesjs-wrapper').dispatchEvent(new Event('remove-page'))"}
+              onclick={"document.getElementById('template-wrapper').dispatchEvent(new Event('remove-page'))"}
             >
               <span class="hero-minus w-3 h-3" />
             </button>
             <span class="text-xs text-base-content/60 px-1">Pages</span>
             <button
               class="btn btn-ghost btn-xs btn-square"
-              onclick={"document.getElementById('grapesjs-wrapper').dispatchEvent(new Event('add-page'))"}
+              onclick={"document.getElementById('template-wrapper').dispatchEvent(new Event('add-page'))"}
             >
               <span class="hero-plus w-3 h-3" />
             </button>
@@ -439,40 +471,12 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       <%!-- Main layout: Editor + Settings sidebar --%>
       <div class="flex gap-4">
         <%!-- GrapesJS Editor (left, takes most space) --%>
-        <div class="flex-1">
-          <div id="grapesjs-wrapper" phx-hook="GrapesJSTemplateEditor" phx-update="ignore" style="display:flex;width:100%;">
-            <%!-- Page frame with header/footer regions --%>
-            <div
-              id="template-page-frame"
-              style="display:flex;flex-direction:column;width:794px;min-width:794px;height:1123px;background:#fff;border-radius:4px 0 0 4px;overflow:hidden;position:relative;"
-            >
-              <%!-- Header region (non-editable, hidden by default) --%>
-              <div id="template-header-region" style="flex-shrink:0;height:0px;overflow:hidden;display:none;position:relative;">
-                <iframe id="template-header-iframe" style="width:100%;height:100%;border:none;pointer-events:none;" sandbox="" scrolling="no"></iframe>
-                <div style="position:absolute;inset:0;background:rgba(0,0,0,0.03);pointer-events:none;"></div>
-              </div>
-              <div id="template-header-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;display:none;"></div>
-
-              <%!-- GrapesJS editable body area --%>
-              <div id="editor-grapesjs" style="flex:1 1 auto;overflow:hidden;"></div>
-
-              <%!-- Footer region (non-editable, hidden by default) --%>
-              <div id="template-footer-separator" style="border-top:2px dashed #cbd5e1;flex-shrink:0;display:none;"></div>
-              <div id="template-footer-region" style="flex-shrink:0;height:0px;overflow:hidden;display:none;position:relative;">
-                <iframe id="template-footer-iframe" style="width:100%;height:100%;border:none;pointer-events:none;" sandbox="" scrolling="no"></iframe>
-                <div style="position:absolute;inset:0;background:rgba(0,0,0,0.03);pointer-events:none;"></div>
-              </div>
-            </div>
-
-            <%!-- Blocks panel --%>
-            <div id="grapesjs-right-panel" class="bg-base-200 text-base-content border-l border-base-300" style="width:220px;min-width:220px;display:flex;flex-direction:column;">
-              <div class="border-b border-base-300 text-base-content/70" style="padding:8px 12px;font-size:12px;font-weight:600;">
-                Document Elements
-              </div>
-              <div id="grapesjs-blocks-panel" style="flex:1;overflow-y:auto;"></div>
-            </div>
-          </div>
-        </div>
+        <.editor_panel
+          id="template"
+          hook="GrapesJSTemplateEditor"
+          save_event="save_template"
+          template_vars={true}
+        />
 
         <%!-- Settings sidebar (right) --%>
         <div class="w-72 flex-shrink-0 space-y-4 sticky top-28 self-start max-h-[calc(100vh-8rem)] overflow-y-auto">
@@ -521,6 +525,10 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
                   </select>
                 </form>
               </div>
+
+              <p class="text-xs text-base-content/50 -mb-1">
+                Headers and footers are filtered by the selected paper size.
+              </p>
 
               <div class="form-control">
                 <label class="label py-1">
@@ -587,12 +595,6 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
       phoenix_kit_current_user={assigns[:phoenix_kit_current_user]}
     />
 
-    <style>
-      .gjs-off-prv { background-color: oklch(var(--color-base-200)) !important; color: oklch(var(--color-base-content)) !important; }
-      #editor-grapesjs { --gjs-left-width: 0px; }
-      #editor-grapesjs .gjs-cv-canvas { top: 0 !important; }
-      #grapesjs-right-panel { position: sticky; top: 7rem; align-self: flex-start; max-height: calc(100vh - 7rem); overflow-y: auto; }
-    </style>
     """
   end
 end

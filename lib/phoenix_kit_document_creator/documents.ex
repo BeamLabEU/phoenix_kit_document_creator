@@ -57,7 +57,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ═══════════════════════════════════════════════════════════════════
 
   def list_templates(opts \\ []) do
-    query = from(t in Template, order_by: [desc: :updated_at])
+    query = from(t in Template, order_by: [desc: :updated_at], preload: [:header, :footer])
 
     query =
       case Keyword.get(opts, :status) do
@@ -160,6 +160,9 @@ defmodule PhoenixKitDocumentCreator.Documents do
       %Template{} = template ->
         rendered_html = render_variables(template.content_html, variable_values)
 
+        header = load_header_footer(template.header_uuid)
+        footer = load_header_footer(template.footer_uuid)
+
         doc_attrs = %{
           name: Keyword.get(opts, :name, template.name),
           template_uuid: template.uuid,
@@ -167,8 +170,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
           content_css: template.content_css,
           content_native: template.content_native,
           variable_values: variable_values,
-          header_uuid: template.header_uuid,
-          footer_uuid: template.footer_uuid,
+          header_html: (header && header.html) || "",
+          header_css: (header && header.css) || "",
+          header_height: (header && header.height) || "25mm",
+          footer_html: (footer && footer.html) || "",
+          footer_css: (footer && footer.css) || "",
+          footer_height: (footer && footer.height) || "20mm",
           config: template.config,
           created_by_uuid: Keyword.get(opts, :created_by_uuid)
         }
@@ -176,6 +183,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
         create_document(doc_attrs)
     end
   end
+
+  defp load_header_footer(nil), do: nil
+  defp load_header_footer(""), do: nil
+  defp load_header_footer(uuid), do: get_header_footer(uuid)
 
   defp render_variables(html, variables) when is_binary(html) and map_size(variables) > 0 do
     case Solid.parse(html) do
