@@ -23,15 +23,24 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   preview matches the PDF output 1:1.
   """
 
+  # These styles must match CANVAS_STYLES in editor_hooks.js so the
+  # editor preview and PDF output look identical.
   @body_styles """
   <style>
-    body { font-family: Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.6; color: #1a1a1a; margin: 0; padding: 0; }
-    h1 { font-size: 22pt; margin: 0 0 4px 0; }
-    h2 { font-size: 14pt; color: #333; margin: 24px 0 8px 0; }
-    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-    th { background: #f5f5f5; text-align: left; padding: 8px 12px; font-size: 10pt; border-bottom: 2px solid #ddd; }
-    td { padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 10pt; }
-    blockquote { border-left: 4px solid #ccc; margin: 16px 0; padding: 8px 16px; color: #555; }
+    body { font-family: Inter, -apple-system, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.7; color: #1a1a1a; margin: 0; padding: 0; }
+    h1 { font-size: 28px; font-weight: 700; margin: 0 0 12px 0; line-height: 1.3; }
+    h2 { font-size: 20px; font-weight: 600; margin: 24px 0 8px 0; line-height: 1.3; }
+    h3 { font-size: 16px; font-weight: 600; margin: 20px 0 6px 0; }
+    p { margin: 0 0 12px 0; }
+    ul, ol { margin: 0 0 12px 0; padding-left: 24px; }
+    li { margin-bottom: 4px; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+    th { background: #f8f9fa; text-align: left; padding: 10px 14px; font-size: 13px; font-weight: 600; border-bottom: 2px solid #e0e0e0; }
+    td { padding: 10px 14px; border-bottom: 1px solid #eee; font-size: 13px; }
+    blockquote { border-left: 4px solid #d0d0d0; margin: 16px 0; padding: 8px 16px; color: #555; font-style: italic; }
+    hr { border: none; border-top: 2px solid #e0e0e0; margin: 24px 0; }
+    img { max-width: 100%; height: auto; border-radius: 4px; }
+    a { color: #2563eb; text-decoration: underline; }
   </style>
   """
 
