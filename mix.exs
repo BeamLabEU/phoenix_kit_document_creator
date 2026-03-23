@@ -8,8 +8,10 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       app: :phoenix_kit_document_creator,
       version: @version,
       elixir: "~> 1.15",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
+      aliases: aliases(),
       description:
         "Document Creator module for PhoenixKit — visual template design and PDF generation",
       package: package(),
@@ -22,6 +24,20 @@ defmodule PhoenixKitDocumentCreator.MixProject do
   def application do
     [
       extra_applications: [:logger]
+    ]
+  end
+
+  # test/support/ is compiled only in :test so DataCase and TestRepo
+  # don't leak into the published package.
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
+  defp aliases do
+    [
+      quality: ["format", "credo --strict", "dialyzer"],
+      "quality.ci": ["format --check-formatted", "credo --strict", "dialyzer"],
+      "test.setup": ["ecto.create --quiet", "ecto.migrate --quiet"],
+      "test.reset": ["ecto.drop --quiet", "test.setup"]
     ]
   end
 

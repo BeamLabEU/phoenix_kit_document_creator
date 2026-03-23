@@ -198,8 +198,11 @@ defmodule PhoenixKitDocumentCreator.Documents do
   defp render_variables(html, variables) when is_binary(html) and map_size(variables) > 0 do
     case Solid.parse(html) do
       {:ok, template} ->
-        Solid.render(template, variables)
-        |> to_string()
+        case Solid.render(template, variables) do
+          {:ok, result, _warnings} -> to_string(result)
+          result when is_list(result) -> to_string(result)
+          result -> to_string(result)
+        end
 
       {:error, _reason} ->
         # Fall back to simple regex substitution if Solid parsing fails
