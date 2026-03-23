@@ -1,6 +1,13 @@
 defmodule PhoenixKitDocumentCreator.Documents do
   @moduledoc """
   Context module for managing templates, documents, headers, and footers.
+
+  Provides CRUD operations for all three resource types plus the
+  `create_document_from_template/3` workflow that renders template variables
+  via Solid and bakes header/footer content (HTML, CSS, height) directly into
+  the new document. This means documents are fully self-contained after
+  creation — deleting the source template, header, or footer will not affect
+  existing documents.
   """
   import Ecto.Query, warn: false
 

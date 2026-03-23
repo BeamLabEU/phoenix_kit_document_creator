@@ -55,8 +55,8 @@ PDF (with optional header/footer)
 ```
 
 1. **Templates** store HTML, CSS, and GrapesJS native project data. Variables like `{{ client_name }}` are auto-detected from the content.
-2. **Documents** are created from templates by substituting variable values via Solid (Liquid template engine). The rendered HTML is stored so documents can be further edited.
-3. **Headers & Footers** are separate designs with configurable height (CSS units like `"25mm"`). They're assigned to templates/documents via FK and rendered in the PDF margins.
+2. **Documents** are created from templates by substituting variable values via Solid (Liquid template engine). The rendered HTML is stored so documents can be further edited. Header/footer content is baked into the document at creation time, making documents fully self-contained.
+3. **Headers & Footers** are separate designs with configurable height (CSS units like `"25mm"`). They're assigned to templates via FK. When a document is created, the header/footer HTML, CSS, and height are copied directly into the document so it remains independent of the original header/footer records.
 4. **PDF export** uses ChromicPDF with Chrome DevTools Protocol. Paper dimensions use the CSS standard (1in = 96px, 1mm = 3.7795px).
 
 ### Lazy Chrome startup
@@ -107,7 +107,7 @@ These load from CDN — no extra mix dependencies needed.
 
 ## Database Schema
 
-Three tables created by the migration system (currently at V03):
+Three tables created by the migration system (currently at V04):
 
 ### `phoenix_kit_doc_headers_footers`
 
@@ -154,14 +154,18 @@ Three tables created by the migration system (currently at V03):
 | `content_css` | text | CSS styles |
 | `content_native` | jsonb | GrapesJS project data |
 | `variable_values` | jsonb | Map of `{variable_name => value}` used during creation |
-| `header_uuid` | UUID (FK) | Optional header design |
-| `footer_uuid` | UUID (FK) | Optional footer design |
+| `header_html` | text | Baked header HTML (copied from header at creation time) |
+| `header_css` | text | Baked header CSS |
+| `header_height` | string | Header height CSS value (e.g., `"25mm"`) |
+| `footer_html` | text | Baked footer HTML (copied from footer at creation time) |
+| `footer_css` | text | Baked footer CSS |
+| `footer_height` | string | Footer height CSS value (e.g., `"20mm"`) |
 | `config` | jsonb | `{paper_size, orientation, page_count}` |
 | `data` | jsonb | Custom metadata |
 | `thumbnail` | text | Base64 data URI for preview |
 | `created_by_uuid` | UUID | Optional FK to users |
 
-Note: The `status` column exists in the database (added by V01 migration with default `"draft"`) but is not currently exposed in the Ecto schema — documents don't use status-based filtering.
+Note: The `status` column exists in the database (added by V01 migration with default `"draft"`) but is not currently exposed in the Ecto schema — documents don't use status-based filtering. The `header_uuid` and `footer_uuid` FK columns were removed in V04 — documents now store baked copies of header/footer content so they remain self-contained even if the original header/footer is deleted.
 
 ## Context API
 
@@ -375,6 +379,7 @@ Uses PhoenixKit's versioned migration pattern. Version tracked via SQL comment o
 | V01 | Initial tables: `headers_footers` (paired header/footer columns), `templates` (single `header_footer_uuid` FK), `documents` (single `header_footer_uuid` FK) |
 | V02 | Refactor headers/footers from paired columns to type-discriminated records (`type` = `"header"` or `"footer"`). Replace single `header_footer_uuid` FK with separate `header_uuid` + `footer_uuid` on templates and documents. |
 | V03 | Add `thumbnail` text column to templates and documents for page preview data URIs |
+| V04 | Bake header/footer content into documents: add `header_html`, `header_css`, `header_height`, `footer_html`, `footer_css`, `footer_height` columns, copy data from referenced header/footer records, then drop `header_uuid` and `footer_uuid` FK columns. Documents are now fully self-contained — deleting a header, footer, or template won't break existing documents. |
 
 ### Coordinator
 
@@ -428,6 +433,7 @@ lib/
       v01.ex                                   # Initial tables
       v02.ex                                   # Split headers/footers
       v03.ex                                   # Add thumbnails
+      v04.ex                                   # Bake header/footer content into documents
     web/
       documents_live.ex                        # Landing page (templates + documents tabs)
       template_editor_live.ex                  # GrapesJS template editor

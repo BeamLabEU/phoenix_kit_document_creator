@@ -1,10 +1,13 @@
 defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   @moduledoc """
-  Shared PDF generation helpers for editor test pages.
+  Shared PDF generation helpers used by all editor pages (template, document,
+  header/footer, and testing editors).
 
   Provides header/footer support via ChromicPDF.Template.
   Supports both plain text headers/footers (`:header_text`/`:footer_text`)
   and rich HTML headers/footers (`:header_html`/`:footer_html`).
+  Documents store baked header/footer content, so PDF generation reads
+  HTML, CSS, and height directly from the document record — no FK lookups needed.
 
   ## Units
 

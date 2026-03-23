@@ -4,6 +4,12 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
 
   A document clones content from a template (with variables filled in) and can
   then be independently edited and exported to PDF.
+
+  Header/footer content is baked directly into the document via the
+  `header_html`, `header_css`, `header_height`, `footer_html`, `footer_css`,
+  and `footer_height` fields. These are populated at creation time by
+  `Documents.create_document_from_template/3` and make each document fully
+  self-contained — no FK references to the headers_footers table are needed.
   """
   use Ecto.Schema
   import Ecto.Changeset
