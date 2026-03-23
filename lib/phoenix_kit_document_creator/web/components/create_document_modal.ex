@@ -19,7 +19,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
   def modal(assigns) do
     ~H"""
     <div :if={@open} class="modal modal-open">
-      <div class="modal-box max-w-2xl">
+      <div class="modal-box max-w-lg">
         <%= case @step do %>
           <% "choose" -> %>
             {render_choose(assigns)}
@@ -59,30 +59,38 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
         <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-2">
           Or use a template
         </p>
-        <div class="grid grid-cols-2 gap-3">
+        <div class="grid grid-cols-2 gap-3 max-w-md mx-auto">
           <button
             :for={tpl <- @templates}
-            class="text-left p-3 rounded-lg border border-base-content/15 hover:border-primary hover:bg-primary/5 transition-all"
+            class="text-left rounded-lg hover:border-primary hover:bg-primary/5 transition-all overflow-hidden cursor-pointer"
+            style="border: 1.5px solid currentColor; box-shadow: 0 4px 16px var(--color-neutral);"
             phx-click="modal_select_template"
             phx-value-uuid={tpl.uuid}
           >
-            <p class="font-medium text-sm truncate">{tpl.name}</p>
-            <p :if={tpl.description} class="text-xs text-base-content/50 line-clamp-2 mt-1">
-              {tpl.description}
-            </p>
-            <div :if={tpl.variables != []} class="flex flex-wrap gap-1 mt-2">
-              <span
-                :for={var <- Enum.take(tpl.variables, 3)}
-                class="badge badge-xs badge-ghost"
-              >
-                {var["name"] || var[:name]}
-              </span>
-              <span
-                :if={length(tpl.variables) > 3}
-                class="badge badge-xs badge-ghost"
-              >
-                +{length(tpl.variables) - 3} more
-              </span>
+            <%!-- Page preview --%>
+            <div style="display:flex;justify-content:center;padding:12px 12px 16px 12px;background:oklch(var(--color-base-200));">
+              {render_modal_preview(Map.put(assigns, :tpl, tpl))}
+            </div>
+            <%!-- Info --%>
+            <div class="p-3">
+              <p class="font-medium text-sm truncate">{tpl.name}</p>
+              <p :if={tpl.description} class="text-xs text-base-content/50 line-clamp-2 mt-1">
+                {tpl.description}
+              </p>
+              <div :if={tpl.variables != []} class="flex flex-wrap gap-1 mt-2">
+                <span
+                  :for={var <- Enum.take(tpl.variables, 3)}
+                  class="badge badge-xs badge-ghost"
+                >
+                  {var["name"] || var[:name]}
+                </span>
+                <span
+                  :if={length(tpl.variables) > 3}
+                  class="badge badge-xs badge-ghost"
+                >
+                  +{length(tpl.variables) - 3} more
+                </span>
+              </div>
             </div>
           </button>
         </div>
@@ -162,6 +170,28 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
     </form>
     """
   end
+
+  # ── Page preview ────────────────────────────────────────────────
+
+  defp render_modal_preview(assigns) do
+    thumbnail = assigns.tpl.thumbnail
+    has_thumbnail = is_binary(thumbnail) and thumbnail != ""
+    assigns = Map.merge(assigns, %{has_thumbnail: has_thumbnail, thumbnail: thumbnail})
+
+    ~H"""
+    <%= if @has_thumbnail do %>
+      <div style="width:160px;height:226px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid currentColor;box-shadow:0 2px 8px var(--color-neutral);position:relative;">
+        <iframe src={@thumbnail} scrolling="no" style="width:794px;height:1123px;border:none;pointer-events:none;transform:scale(0.2);transform-origin:top left;" />
+      </div>
+    <% else %>
+      <div style="width:160px;height:226px;border-radius:4px;background:oklch(var(--color-base-300));display:flex;align-items:center;justify-content:center;">
+        <span class="hero-document-text w-10 h-10 text-base-content/15" />
+      </div>
+    <% end %>
+    """
+  end
+
+  # ── Template variables ─────────────────────────────────────────
 
   defp extract_template_variables(nil), do: []
 

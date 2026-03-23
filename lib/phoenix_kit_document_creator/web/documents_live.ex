@@ -238,14 +238,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         border: 1px solid oklch(var(--color-base-content) / 0.2);
         box-shadow: 0 2px 8px rgba(0,0,0,0.15);
       }
-      .page-preview-container iframe {
-        width: 794px;
-        height: 1123px;
-        border: none;
-        pointer-events: none;
-        transform: scale(0.23);
-        transform-origin: top left;
-      }
       .page-preview-empty {
         width: 183px;
         height: 258px;
@@ -380,22 +372,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── Page preview ────────────────────────────────────────────────
 
   defp render_page_preview(assigns) do
-    html = assigns.item.content_html
-    css = assigns.item.content_css
-    has_content = is_binary(html) and String.trim(html) != ""
-    assigns = Map.put(assigns, :has_content, has_content)
-
-    assigns =
-      if has_content do
-        Map.put(assigns, :srcdoc, preview_srcdoc(html, css))
-      else
-        assigns
-      end
+    thumbnail = assigns.item.thumbnail
+    has_thumbnail = is_binary(thumbnail) and thumbnail != ""
+    assigns = Map.merge(assigns, %{has_thumbnail: has_thumbnail, thumbnail: thumbnail})
 
     ~H"""
-    <%= if @has_content do %>
+    <%= if @has_thumbnail do %>
       <div class="page-preview-container mx-auto">
-        <iframe srcdoc={@srcdoc} sandbox="" scrolling="no" tabindex="-1"></iframe>
+        <iframe src={@thumbnail} scrolling="no" style="width:794px;height:1123px;border:none;pointer-events:none;transform:scale(0.23);transform-origin:top left;" />
       </div>
     <% else %>
       <div class="page-preview-empty mx-auto">
@@ -433,27 +417,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
-
-  defp preview_srcdoc(html, css) do
-    css_block = if is_binary(css) and css != "", do: "<style>#{css}</style>", else: ""
-
-    """
-    <!DOCTYPE html>
-    <html><head><meta charset="utf-8">
-    <style>
-      body { font-family: Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.6; color: #1a1a1a; margin: 0; padding: 0 40px; overflow: hidden; }
-      h1 { font-size: 22pt; margin: 0 0 4px 0; }
-      h2 { font-size: 14pt; color: #333; margin: 24px 0 8px 0; }
-      table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-      th { background: #f5f5f5; text-align: left; padding: 8px 12px; font-size: 10pt; border-bottom: 2px solid #ddd; }
-      td { padding: 8px 12px; border-bottom: 1px solid #eee; font-size: 10pt; }
-      blockquote { border-left: 4px solid #ccc; margin: 16px 0; padding: 8px 16px; color: #555; }
-      img { max-width: 100%; height: auto; }
-    </style>
-    #{css_block}
-    </head><body>#{html}</body></html>
-    """
-  end
 
   defp assign_modal_templates(assigns) do
     if Map.has_key?(assigns, :modal_templates) do
