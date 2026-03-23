@@ -112,11 +112,13 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   # --- Rich HTML header/footer ---
 
   defp generate_with_rich_template(html, header_html, header_css, footer_html, footer_css, size, header_height, footer_height) do
-    header = if rich_content?(header_html), do: rich_hf_wrapper(:header, header_html, header_css), else: ""
-    footer = if rich_content?(footer_html), do: rich_hf_wrapper(:footer, footer_html, footer_css), else: ""
+    has_header = rich_content?(header_html)
+    has_footer = rich_content?(footer_html)
+    header = if has_header, do: rich_hf_wrapper(:header, header_html, header_css), else: "<span></span>"
+    footer = if has_footer, do: rich_hf_wrapper(:footer, footer_html, footer_css), else: "<span></span>"
 
-    h_height = if(header != "", do: header_height || "25mm", else: "0")
-    f_height = if(footer != "", do: footer_height || "20mm", else: "0")
+    h_height = if(has_header, do: header_height || "25mm", else: "0")
+    f_height = if(has_footer, do: footer_height || "20mm", else: "0")
 
     margin_top = css_to_inches(h_height)
     margin_bottom = css_to_inches(f_height)
@@ -137,27 +139,54 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
         marginBottom: margin_bottom,
         marginLeft: 0,
         marginRight: 0,
-        displayHeaderFooter: header != "" or footer != "",
+        displayHeaderFooter: has_header or has_footer,
         headerTemplate: ChromicPDF.Template.html_concat(hf_styles, header),
         footerTemplate: ChromicPDF.Template.html_concat(hf_styles, footer)
       }
     )
   end
 
-  defp rich_hf_wrapper(type, html, _css) do
-    # Note: we intentionally do NOT inject the GrapesJS CSS here.
-    # The CSS contains editor-context rules (height:100%, overflow:hidden,
-    # body margins) that conflict with Chrome's constrained header/footer
-    # rendering area and cause content to be clipped or hidden.
-    # The inline-styled wrapper div provides all the styling needed.
-    border = if type == :header, do: "border-bottom:1px solid #e0e0e0;", else: "border-top:1px solid #e0e0e0;"
+  defp rich_hf_wrapper(_type, html, css) do
+    css_block = sanitize_hf_css(css)
 
     """
-    <div style="width:100%;font-family:Helvetica,Arial,sans-serif;font-size:9pt;padding:4px 40px;color:#333;#{border}overflow:hidden;box-sizing:border-box;">
+    #{css_block}
+    <div style="width:100%;height:100%;font-family:Helvetica,Arial,sans-serif;font-size:9pt;color:#333;box-sizing:border-box;position:relative;">
       #{constrain_images(html)}
     </div>
     """
   end
+
+  # Strip GrapesJS editor-context CSS rules that break Chrome's header/footer
+  # rendering (body resets, universal selectors, wrapper height/overflow),
+  # but keep element-specific rules needed for positioning.
+  defp sanitize_hf_css(css) when is_binary(css) and css != "" do
+    sanitized =
+      css
+      # Remove * { ... } reset rules
+      |> String.replace(~r/\*\s*\{[^}]*\}/, "")
+      # Remove body { ... } rules
+      |> String.replace(~r/body\s*\{[^}]*\}/, "")
+      |> String.trim()
+
+    # Remove the wrapper element's rule (first ID selector — it's the
+    # stripped <body> wrapper and its height:100%/overflow:hidden breaks
+    # Chrome's header/footer rendering)
+    sanitized =
+      case Regex.run(~r/\A\s*(#\w+)\s*\{/, sanitized) do
+        [_, wrapper_id] ->
+          String.replace(sanitized, ~r/#{Regex.escape(wrapper_id)}\s*\{[^}]*\}/, "", global: false)
+        _ ->
+          sanitized
+      end
+
+    case String.trim(sanitized) do
+      "" -> ""
+      s -> "<style>#{s}</style>"
+    end
+  end
+
+  defp sanitize_hf_css(_), do: ""
 
   defp constrain_images(html) when is_binary(html) do
     Regex.replace(~r/<img([^>]*)>/i, html, fn full, attrs ->
