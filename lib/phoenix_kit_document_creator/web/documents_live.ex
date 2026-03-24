@@ -379,7 +379,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     ~H"""
     <%= if @has_thumbnail do %>
       <div class="page-preview-container mx-auto">
-        <iframe src={@thumbnail} scrolling="no" style="width:794px;height:1123px;border:none;pointer-events:none;transform:scale(0.23);transform-origin:top left;" />
+        <iframe src={@thumbnail} sandbox="" scrolling="no" style="width:794px;height:1123px;border:none;pointer-events:none;transform:scale(0.23);transform-origin:top left;" />
       </div>
     <% else %>
       <div class="page-preview-empty mx-auto">

@@ -107,7 +107,7 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   """
   def generate_thumbnail_html(html, opts \\ []) do
     css = Keyword.get(opts, :css, "")
-    css_block = if is_binary(css) and css != "", do: "<style>#{css}</style>", else: ""
+    css_block = sanitize_thumbnail_css(css)
     full_html = @body_styles <> css_block <> html
     {:ok, "data:text/html;base64," <> Base.encode64(full_html)}
   end
@@ -190,6 +190,23 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   end
 
   defp sanitize_hf_css(_), do: ""
+
+  # Strip @import and url() from thumbnail CSS to prevent data exfiltration.
+  # Thumbnails are also sandboxed (sandbox="") but this adds defense-in-depth.
+  defp sanitize_thumbnail_css(css) when is_binary(css) and css != "" do
+    sanitized =
+      css
+      |> String.replace(~r/@import\s[^;]*;/i, "")
+      |> String.replace(~r/url\s*\([^)]*\)/i, "url()")
+      |> String.trim()
+
+    case sanitized do
+      "" -> ""
+      s -> "<style>#{s}</style>"
+    end
+  end
+
+  defp sanitize_thumbnail_css(_), do: ""
 
   defp constrain_images(html) when is_binary(html) do
     Regex.replace(~r/<img([^>]*)>/i, html, fn full, attrs ->

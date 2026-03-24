@@ -61,8 +61,8 @@ repo_available =
       $$ LANGUAGE plpgsql VOLATILE;
       """)
 
-      # Run document creator migrations to create tables
-      Ecto.Migrator.up(TestRepo, 0, PhoenixKitDocumentCreator.Migration, log: false)
+      # Run test migration to create tables (production uses PhoenixKit V86)
+      Ecto.Migrator.up(TestRepo, 0, PhoenixKitDocumentCreator.Test.Migration, log: false)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true

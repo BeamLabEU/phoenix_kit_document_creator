@@ -64,8 +64,9 @@ defmodule PhoenixKitDocumentCreator do
   @impl PhoenixKit.Module
   def version, do: "0.2.0"
 
-  @impl PhoenixKit.Module
-  def migration_module, do: PhoenixKitDocumentCreator.Migration
+  # Migrations are handled by PhoenixKit core (V86).
+  # @impl PhoenixKit.Module
+  # def migration_module, do: nil
 
   @impl PhoenixKit.Module
   def permission_metadata do

@@ -181,7 +181,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
     ~H"""
     <%= if @has_thumbnail do %>
       <div style="width:160px;height:226px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid currentColor;box-shadow:0 2px 8px var(--color-neutral);position:relative;">
-        <iframe src={@thumbnail} scrolling="no" style="width:794px;height:1123px;border:none;pointer-events:none;transform:scale(0.2);transform-origin:top left;" />
+        <iframe src={@thumbnail} sandbox="" scrolling="no" style="width:794px;height:1123px;border:none;pointer-events:none;transform:scale(0.2);transform-origin:top left;" />
       </div>
     <% else %>
       <div style="width:160px;height:226px;border-radius:4px;background:oklch(var(--color-base-300));display:flex;align-items:center;justify-content:center;">
