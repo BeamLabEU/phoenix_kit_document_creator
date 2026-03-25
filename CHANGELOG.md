@@ -1,26 +1,12 @@
-## 0.2.0 - 2026-03-25
-
-### Fixed
-- Fix XSS/CSS injection vulnerabilities in editor rendering
-- Remove module-level migrations (host app manages migrations)
-- Fix editor canvas styles via data URI for consistent rendering
-- Fix header/footer PDF rendering: sanitize CSS, fix positioning, remove artifacts
-- Fix PDF header/footer heights and paper size filtering
+## 0.1.1 - 2026-03-25
 
 ### Added
-- Add PR review documentation structure (`dev_docs/pull_requests/`)
-- Add level 2 integration tests with test repo and SQL Sandbox
-- Add editor panel component with thumbnail previews
-- Add schema and PDF helper unit tests
-- Add baking pattern: header/footer content copied into documents at creation time
-- Add full-page preview in header/footer editor with paper size selector
-- Add versioned migration framework (V01-V04)
-- Add centralized path helpers module
-
-### Changed
-- Redesign header/footer editor with full-page preview
-- Replace listing tables with page preview cards
-- Simplify status system
+- Add MIT LICENSE file
+- Add CHANGELOG.md
+- Add `@source_url` and GitHub links to mix.exs package metadata
+- Add `precommit` mix alias (compile + quality)
+- Add PR documentation template
+- Add Versioning & Releases section to AGENTS.md
 
 ## 0.1.0 - 2026-03-24
 

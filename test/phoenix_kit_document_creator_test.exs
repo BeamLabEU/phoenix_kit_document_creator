@@ -64,6 +64,7 @@ defmodule PhoenixKitDocumentCreatorTest do
     test "returns base tabs (8 minimum)" do
       tabs = PhoenixKitDocumentCreator.admin_tabs()
       assert is_list(tabs)
+
       # Base: 10 tabs (landing, template new/edit, document edit, headers list/new/edit, footers list/new/edit).
       # Testing tabs are compile-time conditional.
       assert length(tabs) >= 8
@@ -128,7 +129,7 @@ defmodule PhoenixKitDocumentCreatorTest do
     test "returns a version string" do
       version = PhoenixKitDocumentCreator.version()
       assert is_binary(version)
-      assert version == "0.2.0"
+      assert version == "0.1.1"
     end
   end
 
