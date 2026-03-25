@@ -62,7 +62,7 @@ defmodule PhoenixKitDocumentCreator do
   # ===========================================================================
 
   @impl PhoenixKit.Module
-  def version, do: "0.1.1"
+  def version, do: "0.1.2"
 
   # Migrations are handled by PhoenixKit core (V86).
   # @impl PhoenixKit.Module

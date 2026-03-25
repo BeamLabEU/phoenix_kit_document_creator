@@ -1,3 +1,16 @@
+## 0.1.2 - 2026-03-25
+
+### Fixed
+- Fix all credo warnings (alias ordering, Enum.map_join, cyclomatic complexity)
+- Fix all dialyzer warnings (Solid.render pattern match, dead code branches)
+- Flatten nesting in ChromeSupervisor using `with`
+
+### Removed
+- Remove obsolete `mix phoenix_kit_document_creator.install` task
+
+### Added
+- Add PDF generation options research document
+
 ## 0.1.1 - 2026-03-25
 
 ### Added
