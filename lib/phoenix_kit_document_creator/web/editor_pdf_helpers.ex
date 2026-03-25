@@ -79,7 +79,16 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
       cond do
         rich_content?(header_html) or rich_content?(footer_html) ->
-          generate_with_rich_template(html, header_html, header_css, footer_html, footer_css, size, header_height, footer_height)
+          generate_with_rich_template(
+            html,
+            header_html,
+            header_css,
+            footer_html,
+            footer_css,
+            size,
+            header_height,
+            footer_height
+          )
 
         has_text?(header_text) or has_text?(footer_text) ->
           generate_with_text_template(html, header_text, footer_text, size)
@@ -114,11 +123,24 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   # --- Rich HTML header/footer ---
 
-  defp generate_with_rich_template(html, header_html, header_css, footer_html, footer_css, size, header_height, footer_height) do
+  defp generate_with_rich_template(
+         html,
+         header_html,
+         header_css,
+         footer_html,
+         footer_css,
+         size,
+         header_height,
+         footer_height
+       ) do
     has_header = rich_content?(header_html)
     has_footer = rich_content?(footer_html)
-    header = if has_header, do: rich_hf_wrapper(:header, header_html, header_css), else: "<span></span>"
-    footer = if has_footer, do: rich_hf_wrapper(:footer, footer_html, footer_css), else: "<span></span>"
+
+    header =
+      if has_header, do: rich_hf_wrapper(:header, header_html, header_css), else: "<span></span>"
+
+    footer =
+      if has_footer, do: rich_hf_wrapper(:footer, footer_html, footer_css), else: "<span></span>"
 
     h_height = if(has_header, do: header_height || "25mm", else: "0")
     f_height = if(has_footer, do: footer_height || "20mm", else: "0")
@@ -127,10 +149,11 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
     margin_bottom = css_to_inches(f_height)
 
     # Build header/footer template styles (font size, height constraints)
-    hf_styles = ChromicPDF.Template.header_footer_styles(
-      header_height: h_height,
-      footer_height: f_height
-    )
+    hf_styles =
+      ChromicPDF.Template.header_footer_styles(
+        header_height: h_height,
+        footer_height: f_height
+      )
 
     body_html = @body_styles <> html
 
@@ -178,7 +201,10 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
     sanitized =
       case Regex.run(~r/\A\s*(#\w+)\s*\{/, sanitized) do
         [_, wrapper_id] ->
-          String.replace(sanitized, ~r/#{Regex.escape(wrapper_id)}\s*\{[^}]*\}/, "", global: false)
+          String.replace(sanitized, ~r/#{Regex.escape(wrapper_id)}\s*\{[^}]*\}/, "",
+            global: false
+          )
+
         _ ->
           sanitized
       end
@@ -281,6 +307,7 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
     |> String.replace(~r/<body\b/s, "<div", global: false)
     |> String.replace("</body>", "</div>", global: false)
   end
+
   defp strip_body_wrapper(html), do: html
 
   defp has_text?(text), do: is_binary(text) and text != ""
@@ -320,20 +347,25 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   # Convert CSS length (e.g. "25mm", "1in", "2cm") to inches for Chrome protocol
   defp css_to_inches("0"), do: 0
+
   defp css_to_inches(val) when is_binary(val) do
     cond do
       String.ends_with?(val, "mm") ->
         {num, _} = Float.parse(String.trim_trailing(val, "mm"))
         num / 25.4
+
       String.ends_with?(val, "cm") ->
         {num, _} = Float.parse(String.trim_trailing(val, "cm"))
         num / 2.54
+
       String.ends_with?(val, "in") ->
         {num, _} = Float.parse(String.trim_trailing(val, "in"))
         num
+
       String.ends_with?(val, "px") ->
         {num, _} = Float.parse(String.trim_trailing(val, "px"))
         num / 96.0
+
       true ->
         # Default: assume mm
         case Float.parse(val) do
@@ -342,5 +374,6 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
         end
     end
   end
+
   defp css_to_inches(_), do: 0
 end

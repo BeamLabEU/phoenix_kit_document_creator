@@ -11,9 +11,11 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   import PhoenixKitDocumentCreator.Web.Components.EditorScripts
   import PhoenixKitDocumentCreator.Web.Components.EditorPanel
 
+  alias PhoenixKit.Modules.Storage
+  alias PhoenixKitDocumentCreator.DocumentFormat
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.Paths
-  alias PhoenixKitDocumentCreator.DocumentFormat
+  alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Web.EditorPdfHelpers
 
   @impl true
@@ -47,8 +49,8 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   end
 
   defp apply_action(socket, :new, _params) do
-    template = %PhoenixKitDocumentCreator.Schemas.Template{}
-    changeset = PhoenixKitDocumentCreator.Schemas.Template.changeset(template, %{})
+    template = %Template{}
+    changeset = Template.changeset(template, %{})
 
     socket
     |> assign(
@@ -67,7 +69,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
         |> redirect(to: Paths.index())
 
       template ->
-        changeset = PhoenixKitDocumentCreator.Schemas.Template.changeset(template, %{})
+        changeset = Template.changeset(template, %{})
         variables = DocumentFormat.extract_variables(template.content_html || "")
         paper_size = get_in(template.config || %{}, ["paper_size"]) || "a4"
         header = find_in_list(socket.assigns.headers, template.header_uuid)
@@ -111,84 +113,16 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   end
 
   def handle_event("save_template", params, socket) do
-    html = Map.get(params, "html", "")
-    css = Map.get(params, "css", "")
-
-    native =
-      case Jason.decode(Map.get(params, "native", "")) do
-        {:ok, decoded} -> decoded
-        _ -> nil
-      end
-
-    variables =
-      DocumentFormat.extract_variables(html)
-      |> Enum.map(fn name ->
-        %{"name" => name, "label" => humanize(name), "type" => "text"}
-      end)
-
-    template_attrs = %{
-      content_html: html,
-      content_css: css,
-      content_native: native,
-      variables: variables
-    }
-
-    # Merge form fields if present
     socket = assign(socket, saving: true)
-
-    template_attrs =
-      template_attrs
-      |> maybe_put(params, "name", :name)
-      |> maybe_put(params, "description", :description)
-      |> maybe_put(params, "header_uuid", :header_uuid)
-      |> maybe_put(params, "footer_uuid", :footer_uuid)
-      |> maybe_put_config(params, "paper_size")
-      |> maybe_put_config(params, "page_count")
+    attrs = build_template_attrs(params)
 
     result =
       case socket.assigns.live_action do
-        :new -> Documents.create_template(template_attrs)
-        :edit -> Documents.update_template(socket.assigns.template, template_attrs)
+        :new -> Documents.create_template(attrs)
+        :edit -> Documents.update_template(socket.assigns.template, attrs)
       end
 
-    case result do
-      {:ok, template} ->
-        detected = DocumentFormat.extract_variables(html)
-
-        # Store preview HTML for iframe thumbnail
-        case EditorPdfHelpers.generate_thumbnail_html(html, css: css) do
-          {:ok, thumb_html} -> Documents.update_template(template, %{thumbnail: thumb_html})
-          _ -> :ok
-        end
-
-        socket =
-          socket
-          |> assign(
-            template: template,
-            changeset: PhoenixKitDocumentCreator.Schemas.Template.changeset(template, %{}),
-            detected_variables: detected,
-            saving: false,
-            error: nil,
-            saved_flash: "Template saved"
-          )
-
-        socket =
-          if socket.assigns.live_action == :new do
-            redirect(socket, to: Paths.template_edit(template.uuid))
-          else
-            socket
-          end
-
-        {:noreply, socket}
-
-      {:error, changeset} ->
-        {:noreply,
-         assign(socket,
-           changeset: changeset,
-           saving: false,
-           error: format_changeset_errors(changeset)
-         )}
-    end
+    {:noreply, handle_save_result(result, params, socket)}
   end
 
   # ── PDF generation ─────────────────────────────────────────────────
@@ -199,49 +133,10 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
   def handle_event("generate_pdf_with_content", %{"html" => html} = params, socket) do
     socket = assign(socket, generating_pdf: true, error: nil)
-    header = socket.assigns.selected_header
-    footer = socket.assigns.selected_footer
-    paper_size = Map.get(params, "paper_size", "a4")
+    pdf_opts = build_pdf_opts(socket.assigns, params)
+    filename = sanitize_filename(socket.assigns.template.name || "template")
 
-    pdf_opts = [
-      header_html: (header && header.html) || "",
-      header_css: (header && header.css) || "",
-      footer_html: (footer && footer.html) || "",
-      footer_css: (footer && footer.css) || "",
-      header_height: header && header.height,
-      footer_height: footer && footer.height,
-      paper_size: paper_size
-    ]
-
-    try do
-      case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
-        {:ok, pdf_binary} ->
-          filename =
-            (socket.assigns.template.name || "template")
-            |> String.downcase()
-            |> String.replace(~r/[^a-z0-9]+/, "-")
-            |> Kernel.<>(".pdf")
-
-          {:noreply,
-           socket
-           |> assign(generating_pdf: false)
-           |> push_event("download-pdf", %{base64: pdf_binary, filename: filename})}
-
-        {:error, reason} ->
-          {:noreply,
-           assign(socket,
-             generating_pdf: false,
-             error: "PDF generation failed: #{inspect(reason)}"
-           )}
-      end
-    rescue
-      _e ->
-        {:noreply,
-         assign(socket,
-           generating_pdf: false,
-           error: "PDF generation failed — Chrome may still be starting up, please try again"
-         )}
-    end
+    {:noreply, do_generate_pdf(socket, html, pdf_opts, filename)}
   end
 
   # ── Media selector ────────────────────────────────────────────────
@@ -255,7 +150,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   def handle_event("validate", %{"template" => template_params}, socket) do
     changeset =
       socket.assigns.template
-      |> PhoenixKitDocumentCreator.Schemas.Template.changeset(template_params)
+      |> Template.changeset(template_params)
       |> Map.put(:action, :validate)
 
     {:noreply, assign(socket, changeset: changeset)}
@@ -318,7 +213,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   def handle_info({:media_selected, file_uuids}, socket) do
     url =
       case file_uuids do
-        [uuid | _] -> PhoenixKit.Modules.Storage.get_public_url_by_uuid(uuid)
+        [file_uuid | _] -> Storage.get_public_url_by_uuid(file_uuid)
         _ -> nil
       end
 
@@ -331,6 +226,111 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     end
   end
 
+  # ── Save helpers ──────────────────────────────────────────────────
+
+  defp build_template_attrs(params) do
+    html = Map.get(params, "html", "")
+    css = Map.get(params, "css", "")
+
+    native =
+      case Jason.decode(Map.get(params, "native", "")) do
+        {:ok, decoded} -> decoded
+        _ -> nil
+      end
+
+    variables =
+      Enum.map(DocumentFormat.extract_variables(html), fn name ->
+        %{"name" => name, "label" => humanize(name), "type" => "text"}
+      end)
+
+    %{content_html: html, content_css: css, content_native: native, variables: variables}
+    |> maybe_put(params, "name", :name)
+    |> maybe_put(params, "description", :description)
+    |> maybe_put(params, "header_uuid", :header_uuid)
+    |> maybe_put(params, "footer_uuid", :footer_uuid)
+    |> maybe_put_config(params, "paper_size")
+    |> maybe_put_config(params, "page_count")
+  end
+
+  defp handle_save_result({:ok, template}, params, socket) do
+    html = Map.get(params, "html", "")
+    css = Map.get(params, "css", "")
+    detected = DocumentFormat.extract_variables(html)
+
+    {:ok, thumb_html} = EditorPdfHelpers.generate_thumbnail_html(html, css: css)
+    Documents.update_template(template, %{thumbnail: thumb_html})
+
+    socket =
+      assign(socket,
+        template: template,
+        changeset: Template.changeset(template, %{}),
+        detected_variables: detected,
+        saving: false,
+        error: nil,
+        saved_flash: "Template saved"
+      )
+
+    if socket.assigns.live_action == :new do
+      redirect(socket, to: Paths.template_edit(template.uuid))
+    else
+      socket
+    end
+  end
+
+  defp handle_save_result({:error, changeset}, _params, socket) do
+    assign(socket,
+      changeset: changeset,
+      saving: false,
+      error: format_changeset_errors(changeset)
+    )
+  end
+
+  # ── PDF helpers ──────────────────────────────────────────────────
+
+  defp build_pdf_opts(assigns, params) do
+    hf_opts(:header, assigns.selected_header) ++
+      hf_opts(:footer, assigns.selected_footer) ++
+      [paper_size: Map.get(params, "paper_size", "a4")]
+  end
+
+  defp hf_opts(:header, nil), do: [header_html: "", header_css: "", header_height: nil]
+
+  defp hf_opts(:header, h),
+    do: [header_html: h.html || "", header_css: h.css || "", header_height: h.height]
+
+  defp hf_opts(:footer, nil), do: [footer_html: "", footer_css: "", footer_height: nil]
+
+  defp hf_opts(:footer, f),
+    do: [footer_html: f.html || "", footer_css: f.css || "", footer_height: f.height]
+
+  defp sanitize_filename(name) do
+    name
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "-")
+    |> Kernel.<>(".pdf")
+  end
+
+  defp do_generate_pdf(socket, html, pdf_opts, filename) do
+    case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
+      {:ok, pdf_binary} ->
+        socket
+        |> assign(generating_pdf: false)
+        |> push_event("download-pdf", %{base64: pdf_binary, filename: filename})
+
+      {:error, reason} ->
+        assign(socket,
+          generating_pdf: false,
+          error: "PDF generation failed: #{inspect(reason)}"
+        )
+    end
+  rescue
+    _e ->
+      assign(socket,
+        generating_pdf: false,
+        error: "PDF generation failed — Chrome may still be starting up, please try again"
+      )
+  end
+
   # ── Helpers ────────────────────────────────────────────────────────
 
   defp format_changeset_errors(changeset) do
@@ -340,10 +340,9 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
         opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
       end)
     end)
-    |> Enum.map(fn {field, errors} ->
+    |> Enum.map_join(". ", fn {field, errors} ->
       "#{Phoenix.Naming.humanize(field)}: #{Enum.join(errors, ", ")}"
     end)
-    |> Enum.join(". ")
     |> then(&"Save failed — #{&1}")
   end
 
@@ -357,8 +356,12 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
 
   defp maybe_put_config(attrs, params, key) do
     case Map.get(params, key) do
-      nil -> attrs
-      "" -> attrs
+      nil ->
+        attrs
+
+      "" ->
+        attrs
+
       value ->
         config = Map.get(attrs, :config) || %{}
         Map.put(attrs, :config, Map.put(config, key, value))
@@ -366,7 +369,12 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
   end
 
   defp push_hf_preview(socket, type, nil) do
-    push_event(socket, "update-hf-region", %{type: Atom.to_string(type), html: "", css: "", height: "0"})
+    push_event(socket, "update-hf-region", %{
+      type: Atom.to_string(type),
+      html: "",
+      css: "",
+      height: "0"
+    })
   end
 
   defp push_hf_preview(socket, type, record) do
@@ -396,8 +404,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     name
     |> String.replace("_", " ")
     |> String.split()
-    |> Enum.map(&String.capitalize/1)
-    |> Enum.join(" ")
+    |> Enum.map_join(" ", &String.capitalize/1)
   end
 
   # ── Render ─────────────────────────────────────────────────────────

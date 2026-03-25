@@ -51,7 +51,12 @@ defmodule PhoenixKitDocumentCreator.Schemas.DocumentTest do
     end
 
     test "accepts config map" do
-      cs = changeset(%{name: "Doc", config: %{"paper_size" => "letter", "orientation" => "landscape"}})
+      cs =
+        changeset(%{
+          name: "Doc",
+          config: %{"paper_size" => "letter", "orientation" => "landscape"}
+        })
+
       assert cs.valid?
     end
 

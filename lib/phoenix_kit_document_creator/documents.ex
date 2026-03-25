@@ -165,31 +165,47 @@ defmodule PhoenixKitDocumentCreator.Documents do
         {:error, :template_not_found}
 
       %Template{} = template ->
-        rendered_html = render_variables(template.content_html, variable_values)
-
-        header = load_header_footer(template.header_uuid)
-        footer = load_header_footer(template.footer_uuid)
-
-        doc_attrs = %{
-          name: Keyword.get(opts, :name, template.name),
-          template_uuid: template.uuid,
-          content_html: rendered_html,
-          content_css: template.content_css,
-          content_native: template.content_native,
-          variable_values: variable_values,
-          header_html: (header && header.html) || "",
-          header_css: (header && header.css) || "",
-          header_height: (header && header.height) || "25mm",
-          footer_html: (footer && footer.html) || "",
-          footer_css: (footer && footer.css) || "",
-          footer_height: (footer && footer.height) || "20mm",
-          config: template.config,
-          created_by_uuid: Keyword.get(opts, :created_by_uuid)
-        }
-
-        create_document(doc_attrs)
+        template
+        |> build_document_attrs(variable_values, opts)
+        |> create_document()
     end
   end
+
+  defp build_document_attrs(template, variable_values, opts) do
+    header = load_header_footer(template.header_uuid)
+    footer = load_header_footer(template.footer_uuid)
+
+    %{
+      name: Keyword.get(opts, :name, template.name),
+      template_uuid: template.uuid,
+      content_html: render_variables(template.content_html, variable_values),
+      content_css: template.content_css,
+      content_native: template.content_native,
+      variable_values: variable_values,
+      config: template.config,
+      created_by_uuid: Keyword.get(opts, :created_by_uuid)
+    }
+    |> Map.merge(bake_hf(:header, header))
+    |> Map.merge(bake_hf(:footer, footer))
+  end
+
+  defp bake_hf(:header, nil), do: %{header_html: "", header_css: "", header_height: "25mm"}
+
+  defp bake_hf(:header, hf),
+    do: %{
+      header_html: hf.html || "",
+      header_css: hf.css || "",
+      header_height: hf.height || "25mm"
+    }
+
+  defp bake_hf(:footer, nil), do: %{footer_html: "", footer_css: "", footer_height: "20mm"}
+
+  defp bake_hf(:footer, hf),
+    do: %{
+      footer_html: hf.html || "",
+      footer_css: hf.css || "",
+      footer_height: hf.height || "20mm"
+    }
 
   defp load_header_footer(nil), do: nil
   defp load_header_footer(""), do: nil
@@ -200,8 +216,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
       {:ok, template} ->
         case Solid.render(template, variables) do
           {:ok, result, _warnings} -> to_string(result)
-          result when is_list(result) -> to_string(result)
-          result -> to_string(result)
+          {:error, _errors, result} -> to_string(result)
         end
 
       {:error, _reason} ->

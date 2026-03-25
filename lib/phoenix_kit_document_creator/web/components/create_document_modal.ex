@@ -196,24 +196,26 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
   defp extract_template_variables(nil), do: []
 
   defp extract_template_variables(template) do
-    # Try structured variables first, fall back to HTML extraction
     case template.variables do
       vars when is_list(vars) and vars != [] ->
-        Enum.map(vars, fn var ->
-          %{
-            name: var["name"] || var[:name] || "",
-            label: var["label"] || var[:label] || humanize(var["name"] || ""),
-            type: parse_type(var["type"] || var[:type]),
-            default: var["default"] || var[:default]
-          }
-        end)
+        Enum.map(vars, &parse_variable/1)
 
       _ ->
-        DocumentFormat.extract_variables(template.content_html || "")
+        template.content_html
+        |> DocumentFormat.extract_variables()
         |> Enum.map(fn name ->
           %{name: name, label: humanize(name), type: :text, default: nil}
         end)
     end
+  end
+
+  defp parse_variable(var) do
+    %{
+      name: var["name"] || var[:name] || "",
+      label: var["label"] || var[:label] || humanize(var["name"] || ""),
+      type: parse_type(var["type"] || var[:type]),
+      default: var["default"] || var[:default]
+    }
   end
 
   defp parse_type("multiline"), do: :multiline
@@ -224,7 +226,6 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
     name
     |> String.replace("_", " ")
     |> String.split()
-    |> Enum.map(&String.capitalize/1)
-    |> Enum.join(" ")
+    |> Enum.map_join(" ", &String.capitalize/1)
   end
 end

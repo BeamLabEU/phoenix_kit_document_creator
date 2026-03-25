@@ -7,10 +7,15 @@ defmodule PhoenixKitDocumentCreator.Web.Components.EditorPanel do
   """
   use Phoenix.Component
 
-  attr :id, :string, required: true, doc: "Unique prefix for all element IDs"
-  attr :hook, :string, required: true, doc: "Phoenix hook name (GrapesJSTemplateEditor or GrapesJSDocumentEditor)"
-  attr :save_event, :string, required: true, doc: "LiveView event name for saving"
-  attr :template_vars, :boolean, default: false, doc: "Whether to show template variable blocks"
+  attr(:id, :string, required: true, doc: "Unique prefix for all element IDs")
+
+  attr(:hook, :string,
+    required: true,
+    doc: "Phoenix hook name (GrapesJSTemplateEditor or GrapesJSDocumentEditor)"
+  )
+
+  attr(:save_event, :string, required: true, doc: "LiveView event name for saving")
+  attr(:template_vars, :boolean, default: false, doc: "Whether to show template variable blocks")
 
   def editor_panel(assigns) do
     ~H"""

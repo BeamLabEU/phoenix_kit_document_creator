@@ -55,8 +55,7 @@ defmodule PhoenixKitDocumentCreator.Variable do
     name
     |> String.replace("_", " ")
     |> String.split()
-    |> Enum.map(&String.capitalize/1)
-    |> Enum.join(" ")
+    |> Enum.map_join(" ", &String.capitalize/1)
   end
 
   @doc "Guesses the variable type from its name."

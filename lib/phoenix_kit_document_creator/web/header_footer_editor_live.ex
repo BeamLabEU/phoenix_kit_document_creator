@@ -44,7 +44,12 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
   defp apply_action(socket, :footer_edit, params), do: load_record(socket, "footer", params)
 
   defp new_record(socket, type) do
-    record = %HeaderFooter{type: type, name: "Untitled #{String.capitalize(type)}", height: "25mm", data: %{}}
+    record = %HeaderFooter{
+      type: type,
+      name: "Untitled #{String.capitalize(type)}",
+      height: "25mm",
+      data: %{}
+    }
 
     socket
     |> assign(
@@ -110,7 +115,7 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
         _ -> nil
       end
 
-    existing_data = (record.data || %{})
+    existing_data = record.data || %{}
 
     attrs = %{
       name: Map.get(params, "name", record.name),
@@ -127,7 +132,11 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
 
     result =
       if is_new do
-        create_fn = if socket.assigns.type == "header", do: &Documents.create_header/1, else: &Documents.create_footer/1
+        create_fn =
+          if socket.assigns.type == "header",
+            do: &Documents.create_header/1,
+            else: &Documents.create_footer/1
+
         create_fn.(attrs)
       else
         Documents.update_header_footer(record, attrs)

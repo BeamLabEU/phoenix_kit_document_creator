@@ -11,6 +11,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   import PhoenixKitDocumentCreator.Web.Components.EditorScripts
   import PhoenixKitDocumentCreator.Web.Components.EditorPanel
 
+  alias PhoenixKit.Modules.Storage
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.Paths
   alias PhoenixKitDocumentCreator.Web.EditorPdfHelpers
@@ -72,46 +73,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   end
 
   def handle_event("save_document", params, socket) do
-    native =
-      case Jason.decode(Map.get(params, "native", "")) do
-        {:ok, decoded} -> decoded
-        _ -> nil
-      end
-
-    attrs = %{
-      content_html: Map.get(params, "html", ""),
-      content_css: Map.get(params, "css", ""),
-      content_native: native
-    }
-
-    attrs =
-      case Map.get(params, "name") do
-        nil -> attrs
-        "" -> attrs
-        name -> Map.put(attrs, :name, name)
-      end
-
-    attrs =
-      case Map.get(params, "page_count") do
-        nil -> attrs
-        "" -> attrs
-        pc ->
-          config = Map.get(attrs, :config) || socket.assigns.document.config || %{}
-          Map.put(attrs, :config, Map.put(config, "page_count", pc))
-      end
-
     socket = assign(socket, saving: true)
+    attrs = build_document_attrs(params, socket.assigns.document)
 
     case Documents.update_document(socket.assigns.document, attrs) do
       {:ok, document} ->
-        # Store preview HTML for iframe thumbnail
-        html = Map.get(params, "html", "")
-        css = Map.get(params, "css", "")
-
-        case EditorPdfHelpers.generate_thumbnail_html(html, css: css) do
-          {:ok, thumb_html} -> Documents.update_document(document, %{thumbnail: thumb_html})
-          _ -> :ok
-        end
+        maybe_update_thumbnail(document, params)
 
         {:noreply,
          assign(socket,
@@ -138,48 +105,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   end
 
   def handle_event("generate_pdf_with_content", %{"html" => html} = params, socket) do
-    doc = socket.assigns.document
-    paper_size = Map.get(params, "paper_size", "a4")
+    socket = assign(socket, generating_pdf: true, error: nil)
+    pdf_opts = build_pdf_opts(socket.assigns.document, params)
+    filename = sanitize_filename(socket.assigns.document.name || "document")
 
-    pdf_opts = [
-      header_html: doc.header_html || "",
-      header_css: doc.header_css || "",
-      footer_html: doc.footer_html || "",
-      footer_css: doc.footer_css || "",
-      header_height: doc.header_height,
-      footer_height: doc.footer_height,
-      paper_size: paper_size
-    ]
-
-    try do
-      case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
-        {:ok, pdf_binary} ->
-          filename =
-            (socket.assigns.document.name || "document")
-            |> String.downcase()
-            |> String.replace(~r/[^a-z0-9]+/, "-")
-            |> Kernel.<>(".pdf")
-
-          {:noreply,
-           socket
-           |> assign(generating_pdf: false)
-           |> push_event("download-pdf", %{base64: pdf_binary, filename: filename})}
-
-        {:error, reason} ->
-          {:noreply,
-           assign(socket,
-             generating_pdf: false,
-             error: "PDF generation failed: #{inspect(reason)}"
-           )}
-      end
-    rescue
-      _e ->
-        {:noreply,
-         assign(socket,
-           generating_pdf: false,
-           error: "PDF generation failed — Chrome may still be starting up, please try again"
-         )}
-    end
+    {:noreply, do_generate_pdf(socket, html, pdf_opts, filename)}
   end
 
   def handle_event("dismiss_flash", _params, socket) do
@@ -200,7 +130,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   def handle_info({:media_selected, file_uuids}, socket) do
     url =
       case file_uuids do
-        [uuid | _] -> PhoenixKit.Modules.Storage.get_public_url_by_uuid(uuid)
+        [file_uuid | _] -> Storage.get_public_url_by_uuid(file_uuid)
         _ -> nil
       end
 
@@ -213,6 +143,97 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
     end
   end
 
+  # ── Save helpers ─────────────────────────────────────────────────
+
+  defp build_document_attrs(params, document) do
+    native =
+      case Jason.decode(Map.get(params, "native", "")) do
+        {:ok, decoded} -> decoded
+        _ -> nil
+      end
+
+    attrs = %{
+      content_html: Map.get(params, "html", ""),
+      content_css: Map.get(params, "css", ""),
+      content_native: native
+    }
+
+    attrs = maybe_put_field(attrs, params, "name", :name)
+    maybe_put_page_count(attrs, params, document)
+  end
+
+  defp maybe_put_field(attrs, params, key, attr_key) do
+    case Map.get(params, key) do
+      nil -> attrs
+      "" -> attrs
+      value -> Map.put(attrs, attr_key, value)
+    end
+  end
+
+  defp maybe_put_page_count(attrs, params, document) do
+    case Map.get(params, "page_count") do
+      nil ->
+        attrs
+
+      "" ->
+        attrs
+
+      pc ->
+        config = Map.get(attrs, :config) || document.config || %{}
+        Map.put(attrs, :config, Map.put(config, "page_count", pc))
+    end
+  end
+
+  defp maybe_update_thumbnail(document, params) do
+    html = Map.get(params, "html", "")
+    css = Map.get(params, "css", "")
+
+    {:ok, thumb_html} = EditorPdfHelpers.generate_thumbnail_html(html, css: css)
+    Documents.update_document(document, %{thumbnail: thumb_html})
+  end
+
+  # ── PDF helpers ─────────────────────────────────────────────────
+
+  defp build_pdf_opts(doc, params) do
+    [
+      header_html: doc.header_html || "",
+      header_css: doc.header_css || "",
+      footer_html: doc.footer_html || "",
+      footer_css: doc.footer_css || "",
+      header_height: doc.header_height,
+      footer_height: doc.footer_height,
+      paper_size: Map.get(params, "paper_size", "a4")
+    ]
+  end
+
+  defp sanitize_filename(name) do
+    name
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "-")
+    |> Kernel.<>(".pdf")
+  end
+
+  defp do_generate_pdf(socket, html, pdf_opts, filename) do
+    case EditorPdfHelpers.generate_pdf(html, pdf_opts) do
+      {:ok, pdf_binary} ->
+        socket
+        |> assign(generating_pdf: false)
+        |> push_event("download-pdf", %{base64: pdf_binary, filename: filename})
+
+      {:error, reason} ->
+        assign(socket,
+          generating_pdf: false,
+          error: "PDF generation failed: #{inspect(reason)}"
+        )
+    end
+  rescue
+    _e ->
+      assign(socket,
+        generating_pdf: false,
+        error: "PDF generation failed — Chrome may still be starting up, please try again"
+      )
+  end
+
   # ── Helpers ────────────────────────────────────────────────────────
 
   defp format_changeset_errors(changeset) do
@@ -222,10 +243,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
         opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
       end)
     end)
-    |> Enum.map(fn {field, errors} ->
+    |> Enum.map_join(". ", fn {field, errors} ->
       "#{Phoenix.Naming.humanize(field)}: #{Enum.join(errors, ", ")}"
     end)
-    |> Enum.join(". ")
     |> then(&"Save failed — #{&1}")
   end
 
@@ -375,5 +395,4 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
 
     """
   end
-
 end

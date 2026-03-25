@@ -8,7 +8,8 @@ defmodule PhoenixKitDocumentCreator.Test.Migration do
 
   def up do
     create_if_not_exists table(:phoenix_kit_doc_headers_footers,
-                            primary_key: false) do
+                           primary_key: false
+                         ) do
       add(:uuid, :uuid, primary_key: true, default: fragment("gen_random_uuid()"))
       add(:name, :string, null: false, size: 255)
       add(:type, :string, null: false, default: "header", size: 20)
@@ -25,7 +26,8 @@ defmodule PhoenixKitDocumentCreator.Test.Migration do
     create_if_not_exists(index(:phoenix_kit_doc_headers_footers, [:type]))
 
     create_if_not_exists table(:phoenix_kit_doc_templates,
-                            primary_key: false) do
+                           primary_key: false
+                         ) do
       add(:uuid, :uuid, primary_key: true, default: fragment("gen_random_uuid()"))
       add(:name, :string, null: false, size: 255)
       add(:slug, :string, size: 255)
@@ -36,13 +38,23 @@ defmodule PhoenixKitDocumentCreator.Test.Migration do
       add(:content_native, :map)
       add(:variables, :map, default: fragment("'[]'::jsonb"))
 
-      add(:header_uuid,
+      add(
+        :header_uuid,
         references(:phoenix_kit_doc_headers_footers,
-          column: :uuid, type: :uuid, on_delete: :nilify_all))
+          column: :uuid,
+          type: :uuid,
+          on_delete: :nilify_all
+        )
+      )
 
-      add(:footer_uuid,
+      add(
+        :footer_uuid,
         references(:phoenix_kit_doc_headers_footers,
-          column: :uuid, type: :uuid, on_delete: :nilify_all))
+          column: :uuid,
+          type: :uuid,
+          on_delete: :nilify_all
+        )
+      )
 
       add(:config, :map, default: %{paper_size: "a4", orientation: "portrait"})
       add(:data, :map, default: %{})
@@ -56,13 +68,15 @@ defmodule PhoenixKitDocumentCreator.Test.Migration do
     create_if_not_exists(index(:phoenix_kit_doc_templates, [:status]))
 
     create_if_not_exists table(:phoenix_kit_doc_documents,
-                            primary_key: false) do
+                           primary_key: false
+                         ) do
       add(:uuid, :uuid, primary_key: true, default: fragment("gen_random_uuid()"))
       add(:name, :string, null: false, size: 255)
 
-      add(:template_uuid,
-        references(:phoenix_kit_doc_templates,
-          column: :uuid, type: :uuid, on_delete: :nilify_all))
+      add(
+        :template_uuid,
+        references(:phoenix_kit_doc_templates, column: :uuid, type: :uuid, on_delete: :nilify_all)
+      )
 
       add(:content_html, :text, default: "")
       add(:content_css, :text, default: "")
