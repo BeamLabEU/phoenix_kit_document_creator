@@ -2,6 +2,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
   use Mix.Project
 
   @version "0.2.0"
+  @source_url "https://github.com/BeamLabEU/phoenix_kit_document_creator"
 
   def project do
     [
@@ -17,6 +18,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       package: package(),
       dialyzer: [plt_add_apps: [:phoenix_kit]],
       name: "PhoenixKitDocumentCreator",
+      source_url: @source_url,
       docs: docs()
     ]
   end
@@ -36,6 +38,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     [
       quality: ["format", "credo --strict", "dialyzer"],
       "quality.ci": ["format --check-formatted", "credo --strict", "dialyzer"],
+      precommit: ["compile", "quality"],
       "test.setup": ["ecto.create --quiet", "ecto.migrate --quiet"],
       "test.reset": ["ecto.drop --quiet", "test.setup"]
     ]
@@ -66,7 +69,8 @@ defmodule PhoenixKitDocumentCreator.MixProject do
   defp package do
     [
       licenses: ["MIT"],
-      files: ~w(lib priv .formatter.exs mix.exs README.md LICENSE)
+      links: %{"GitHub" => @source_url},
+      files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 

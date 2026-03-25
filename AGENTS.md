@@ -84,10 +84,33 @@ mix test
 - **Changing PDF rendering**: `editor_pdf_helpers.ex` handles all ChromicPDF interaction, CSS sanitization, and header/footer wrapping.
 - **Adding new admin tabs**: Register in `phoenix_kit_document_creator.ex` `tabs/0` function.
 
+## Versioning & Releases
+
+Version is tracked in three places — all must match:
+1. `mix.exs` — `@version`
+2. `lib/phoenix_kit_document_creator.ex` — `def version, do: "x.y.z"`
+3. `test/phoenix_kit_document_creator_test.exs` — version compliance test
+
+### Tagging convention
+
+Use **bare version numbers** (no `v` prefix): `0.2.0`, not `v0.2.0`.
+
+### Release checklist
+
+1. Update version in all three locations above
+2. Add entry to `CHANGELOG.md`
+3. Commit: `Bump version to x.y.z`
+4. Push to main
+5. Tag: `git tag x.y.z && git push origin x.y.z`
+6. GitHub release: `gh release create x.y.z --title "x.y.z - YYYY-MM-DD" --notes "See CHANGELOG.md"`
+
+## Pull Requests
+
+- Start commit messages with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`
+- **NEVER mention Claude or AI assistance** in commit messages
+- Document significant PRs in `dev_docs/pull_requests/` — see `TEMPLATE.md` there
+
 ## Known Issues to Address
 
-- Thumbnail iframes on listing pages lack `sandbox` attribute (XSS risk)
-- SQL prefix escaping in migrations uses `\'` instead of PostgreSQL-standard `''`
-- `phoenix_kit` dependency uses local `path:` — needs hex.pm reference for release
 - `DocumentFormat` module is mostly dead code from the research spike
 - `humanize/1` and `extract_variables` logic duplicated across multiple modules

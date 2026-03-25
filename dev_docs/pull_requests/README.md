@@ -14,6 +14,7 @@ This directory contains documentation for significant pull requests merged into 
 ```
 dev_docs/pull_requests/
 ├── README.md                 # This file
+├── TEMPLATE.md               # Template for new PR docs
 ├── 2026/                     # Year
 │   ├── 1-add-document-creator-module/
 │   │   ├── README.md         # PR summary (what, why, how)
