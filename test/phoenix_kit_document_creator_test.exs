@@ -79,16 +79,19 @@ defmodule PhoenixKitDocumentCreatorTest do
       assert parent.group == :admin_modules
     end
 
-    test "parent tab routes to DocumentsLive" do
+    test "parent tab routes to DocumentsLive :documents" do
       [parent | _] = PhoenixKitDocumentCreator.admin_tabs()
-      assert {PhoenixKitDocumentCreator.Web.DocumentsLive, :index} = parent.live_view
+      assert {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents} = parent.live_view
     end
 
-    test "subtabs reference parent" do
-      [_parent | subtabs] = PhoenixKitDocumentCreator.admin_tabs()
+    test "subtabs reference parent or a subtab parent" do
+      tabs = PhoenixKitDocumentCreator.admin_tabs()
+      tab_ids = MapSet.new(tabs, & &1.id)
+      [_parent | subtabs] = tabs
 
       for subtab <- subtabs do
-        assert subtab.parent == :admin_document_creator
+        assert subtab.parent in tab_ids,
+               "Tab #{subtab.id} references unknown parent #{subtab.parent}"
       end
     end
 

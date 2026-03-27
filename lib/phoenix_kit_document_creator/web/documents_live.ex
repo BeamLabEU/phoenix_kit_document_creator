@@ -29,7 +29,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     {:ok,
      assign(socket,
        page_title: "Document Creator",
-       active_tab: "templates",
        view_mode: "cards",
        templates: templates,
        documents: documents,
@@ -44,13 +43,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
      )}
   end
 
-  # ── Tab switch ──────────────────────────────────────────────────
+  # ── View toggle ──────────────────────────────────────────────────
 
   @impl true
-  def handle_event("switch_tab", %{"tab" => tab}, socket) do
-    {:noreply, assign(socket, active_tab: tab)}
-  end
-
   def handle_event("switch_view", %{"mode" => mode}, socket) do
     {:noreply, assign(socket, view_mode: mode)}
   end
@@ -183,39 +178,24 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     <div class="flex flex-col mx-auto max-w-6xl px-4 py-6 gap-6">
       <%!-- Header --%>
       <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold">Document Creator</h1>
+        <h1 class="text-2xl font-bold">
+          {if @live_action == :templates, do: "Templates", else: "Documents"}
+        </h1>
         <div class="flex gap-2">
-          <a href={Paths.template_new()} class="btn btn-ghost btn-sm">
-            <span class="hero-plus w-4 h-4" /> New Template
-          </a>
-          <button class="btn btn-primary btn-sm" phx-click="open_modal">
-            <span class="hero-document-plus w-4 h-4" /> New Document
-          </button>
+          <%= if @live_action == :templates do %>
+            <a href={Paths.template_new()} class="btn btn-primary btn-sm">
+              <span class="hero-plus w-4 h-4" /> New Template
+            </a>
+          <% else %>
+            <button class="btn btn-primary btn-sm" phx-click="open_modal">
+              <span class="hero-document-plus w-4 h-4" /> New Document
+            </button>
+          <% end %>
         </div>
       </div>
 
-      <%!-- Tabs + View Toggle --%>
-      <div class="flex items-center justify-between">
-        <div role="tablist" class="tabs tabs-bordered">
-          <button
-            role="tab"
-            class={"tab #{if @active_tab == "templates", do: "tab-active", else: ""}"}
-            phx-click="switch_tab"
-            phx-value-tab="templates"
-          >
-            Templates
-            <span class="badge badge-sm ml-1">{length(@templates)}</span>
-          </button>
-          <button
-            role="tab"
-            class={"tab #{if @active_tab == "documents", do: "tab-active", else: ""}"}
-            phx-click="switch_tab"
-            phx-value-tab="documents"
-          >
-            Documents
-            <span class="badge badge-sm ml-1">{length(@documents)}</span>
-          </button>
-        </div>
+      <%!-- View Toggle --%>
+      <div class="flex items-center justify-end">
         <div class="flex gap-1">
           <button
             class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "cards", do: "btn-active"}"}
@@ -236,8 +216,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         </div>
       </div>
 
-      <%!-- Tab content --%>
-      <%= if @active_tab == "templates" do %>
+      <%!-- Content --%>
+      <%= if @live_action == :templates do %>
         <%= if @view_mode == "cards" do %>
           {render_templates_grid(assigns)}
         <% else %>

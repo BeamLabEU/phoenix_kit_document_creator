@@ -106,7 +106,32 @@ defmodule PhoenixKitDocumentCreator do
         group: :admin_modules,
         subtab_display: :when_active,
         highlight_with_subtabs: false,
-        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :index}
+        redirect_to_first_subtab: true,
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents}
+      },
+      %Tab{
+        id: :admin_document_creator_templates,
+        label: "Templates",
+        icon: "hero-document-text",
+        path: "document-creator/templates",
+        priority: 649,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        match: :prefix,
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :templates}
+      },
+      %Tab{
+        id: :admin_document_creator_documents,
+        label: "Documents",
+        icon: "hero-document-duplicate",
+        path: "document-creator/documents",
+        priority: 648,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        match: :prefix,
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents}
       },
       %Tab{
         id: :admin_document_creator_template_new,
@@ -116,7 +141,7 @@ defmodule PhoenixKitDocumentCreator do
         priority: 651,
         level: :admin,
         permission: module_key(),
-        parent: :admin_document_creator,
+        parent: :admin_document_creator_templates,
         visible: false,
         live_view: {PhoenixKitDocumentCreator.Web.TemplateEditorLive, :new}
       },
@@ -128,7 +153,7 @@ defmodule PhoenixKitDocumentCreator do
         priority: 652,
         level: :admin,
         permission: module_key(),
-        parent: :admin_document_creator,
+        parent: :admin_document_creator_templates,
         visible: false,
         live_view: {PhoenixKitDocumentCreator.Web.TemplateEditorLive, :edit}
       },
@@ -140,14 +165,14 @@ defmodule PhoenixKitDocumentCreator do
         priority: 653,
         level: :admin,
         permission: module_key(),
-        parent: :admin_document_creator,
+        parent: :admin_document_creator_documents,
         visible: false,
         live_view: {PhoenixKitDocumentCreator.Web.DocumentEditorLive, :edit}
       },
       %Tab{
         id: :admin_document_creator_headers,
         label: "Headers",
-        icon: "hero-bars-arrow-up",
+        icon: "hero-document-arrow-up",
         path: "document-creator/headers",
         priority: 660,
         level: :admin,
@@ -182,7 +207,7 @@ defmodule PhoenixKitDocumentCreator do
       %Tab{
         id: :admin_document_creator_footers,
         label: "Footers",
-        icon: "hero-bars-arrow-down",
+        icon: "hero-document-arrow-down",
         path: "document-creator/footers",
         priority: 665,
         level: :admin,

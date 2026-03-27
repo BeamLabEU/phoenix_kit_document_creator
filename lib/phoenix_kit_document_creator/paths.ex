@@ -17,6 +17,8 @@ defmodule PhoenixKitDocumentCreator.Paths do
   # ── Main ──────────────────────────────────────────────────────────
 
   def index, do: Routes.path(@base)
+  def templates, do: Routes.path("#{@base}/templates")
+  def documents, do: Routes.path("#{@base}/documents")
 
   # ── Templates ─────────────────────────────────────────────────────
 
