@@ -108,7 +108,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ═══════════════════════════════════════════════════════════════════
 
   def list_documents(opts \\ []) do
-    query = from(d in Document, order_by: [desc: :updated_at])
+    query = from(d in Document, order_by: [desc: :updated_at], preload: [:template])
 
     query =
       case Keyword.get(opts, :status) do
