@@ -205,13 +205,4 @@ defmodule PhoenixKitDocumentCreatorTest do
     end
   end
 
-  describe "helper functions" do
-    test "chromic_pdf_available?/0 returns boolean" do
-      assert is_boolean(PhoenixKitDocumentCreator.chromic_pdf_available?())
-    end
-
-    test "chrome_installed?/0 returns boolean" do
-      assert is_boolean(PhoenixKitDocumentCreator.chrome_installed?())
-    end
-  end
 end

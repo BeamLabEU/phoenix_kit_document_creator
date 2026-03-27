@@ -3,7 +3,7 @@ defmodule PhoenixKitDocumentCreator do
   Document Creator module for PhoenixKit.
 
   Visual template design with GrapesJS (drag-and-drop page builder) and
-  PDF generation via ChromicPDF (headless Chrome).
+  PDF generation via Gotenberg (Docker-based HTML-to-PDF API).
 
   ## Installation
 
@@ -13,6 +13,12 @@ defmodule PhoenixKitDocumentCreator do
 
   Then `mix deps.get`. The module auto-discovers via beam scanning.
   Enable it in Admin > Modules.
+
+  ## Gotenberg
+
+  PDF generation requires a running Gotenberg instance. Configure the URL:
+
+      config :phoenix_kit_document_creator, :gotenberg_url, "http://gotenberg:3000"
 
   ## Testing Editors
 
@@ -79,13 +85,7 @@ defmodule PhoenixKitDocumentCreator do
   end
 
   @impl PhoenixKit.Module
-  def children do
-    if chromic_pdf_available?() do
-      [{PhoenixKitDocumentCreator.ChromeSupervisor, []}]
-    else
-      []
-    end
-  end
+  def children, do: []
 
   @impl PhoenixKit.Module
   def admin_tabs do
@@ -259,35 +259,4 @@ defmodule PhoenixKitDocumentCreator do
     end
   end
 
-  # ===========================================================================
-  # Helper functions
-  # ===========================================================================
-
-  @doc "Check if the ChromicPDF library is available."
-  def chromic_pdf_available? do
-    Code.ensure_loaded?(ChromicPDF)
-  end
-
-  @doc "Check if Chrome or Chromium is installed on the system."
-  def chrome_installed? do
-    path_check =
-      Enum.any?(
-        ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"],
-        fn cmd ->
-          System.find_executable(cmd) != nil
-        end
-      )
-
-    path_check or macos_chrome_installed?()
-  end
-
-  defp macos_chrome_installed? do
-    Enum.any?(
-      [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium"
-      ],
-      &File.exists?/1
-    )
-  end
 end

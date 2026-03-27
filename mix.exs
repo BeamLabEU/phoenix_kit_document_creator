@@ -53,8 +53,8 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.0"},
 
-      # PDF generation via headless Chrome
-      {:chromic_pdf, "~> 1.17"},
+      # HTTP client for Gotenberg PDF API
+      {:req, "~> 0.5"},
 
       # Template engine for variable substitution (Liquid syntax)
       {:solid, "~> 1.2"},

@@ -4,7 +4,7 @@ defmodule PhoenixKitDocumentCreator.Web.EditorTiptapTestLive do
 
   Loads TipTap + extensions from CDN (ESM via esm.sh), renders a headless editor
   with a full toolbar (formatting, images, tables, alignment, colors),
-  syncs content to `DocumentFormat`, and generates PDFs via ChromicPDF.
+  syncs content to `DocumentFormat`, and generates PDFs via Gotenberg.
   """
   use Phoenix.LiveView
 
@@ -39,10 +39,7 @@ defmodule PhoenixKitDocumentCreator.Web.EditorTiptapTestLive do
        editor_loaded: false,
        generating: false,
        error: nil,
-       last_generation_ms: nil,
-       chrome_available:
-         PhoenixKitDocumentCreator.chromic_pdf_available?() and
-           PhoenixKitDocumentCreator.chrome_installed?()
+       last_generation_ms: nil
      )}
   end
 
@@ -138,17 +135,6 @@ defmodule PhoenixKitDocumentCreator.Web.EditorTiptapTestLive do
         </div>
       </div>
 
-      <%!-- Chrome Warning --%>
-      <div :if={not @chrome_available} class="alert alert-warning">
-        <span class="hero-exclamation-triangle w-5 h-5" />
-        <div>
-          <p class="font-semibold">Chrome/ChromicPDF not available</p>
-          <p class="text-sm mt-1">
-            PDF generation requires <code>chromic_pdf ~> 1.17</code> and Chrome installed.
-            The editor still works for content editing and JSON export.
-          </p>
-        </div>
-      </div>
 
       <%!-- Error --%>
       <div :if={@error} class="alert alert-error">
@@ -259,7 +245,7 @@ defmodule PhoenixKitDocumentCreator.Web.EditorTiptapTestLive do
                 <button
                   class="btn btn-secondary btn-sm"
                   phx-click="generate_pdf"
-                  disabled={@generating or not @chrome_available}
+                  disabled={@generating}
                 >
                   <span :if={@generating} class="loading loading-spinner loading-xs" />
                   {if @generating, do: "Generating...", else: "Generate PDF"}

@@ -3,11 +3,17 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   Shared PDF generation helpers used by all editor pages (template, document,
   header/footer, and testing editors).
 
-  Provides header/footer support via ChromicPDF.Template.
+  Generates PDFs by sending HTML to a Gotenberg instance via its HTTP API.
   Supports both plain text headers/footers (`:header_text`/`:footer_text`)
   and rich HTML headers/footers (`:header_html`/`:footer_html`).
   Documents store baked header/footer content, so PDF generation reads
   HTML, CSS, and height directly from the document record — no FK lookups needed.
+
+  ## Configuration
+
+  Set the Gotenberg base URL in your config:
+
+      config :phoenix_kit_document_creator, :gotenberg_url, "http://gotenberg:3000"
 
   ## Units
 
@@ -15,16 +21,14 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
   standard of 1in = 96px:
 
     - **GrapesJS canvas** (`editor_hooks.js`): CSS pixels (e.g. A4 = 794×1123px)
-    - **ChromicPDF paper size** (this module): inches for `paperWidth`/`paperHeight`
-      as required by Chrome DevTools Protocol `Page.printToPDF`
-    - **Header/footer heights** (this module + `@page` margins): CSS unit strings
-      like `"25mm"`, passed through to `ChromicPDF.Template` which embeds them
-      in `@page { margin: ... }`
+    - **Gotenberg paper size** (this module): inches for `paperWidth`/`paperHeight`
+    - **Header/footer heights** (this module): CSS unit strings
+      like `"25mm"`, converted to inches for Gotenberg's margin fields
 
   All three resolve to the same physical dimensions (1mm = 3.7795px = 1/25.4in).
-  Chrome headless uses the same 96 DPI standard as browsers, so the editor
-  preview matches the PDF output 1:1.
   """
+
+  @gotenberg_convert_html "/forms/chromium/convert/html"
 
   # These styles must match CANVAS_STYLES in editor_hooks.js so the
   # editor preview and PDF output look identical.
@@ -56,13 +60,6 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   Returns `{:ok, base64_pdf}` or `{:error, reason}`.
   """
-  @paper_size_map %{
-    "a4" => :a4,
-    "letter" => :us_letter,
-    "legal" => :legal,
-    "tabloid" => :tabloid
-  }
-
   def generate_pdf(html, opts \\ []) do
     html = strip_body_wrapper(html)
     header_html = Keyword.get(opts, :header_html, "") |> strip_body_wrapper()
@@ -74,37 +71,37 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
     header_height = Keyword.get(opts, :header_height)
     footer_height = Keyword.get(opts, :footer_height)
 
-    with :ok <- PhoenixKitDocumentCreator.ChromeSupervisor.ensure_started() do
-      size = resolve_paper_size(Keyword.get(opts, :paper_size, "a4"))
+    paper_size = Keyword.get(opts, :paper_size, "a4")
 
-      cond do
-        rich_content?(header_html) or rich_content?(footer_html) ->
-          generate_with_rich_template(
-            html,
-            header_html,
-            header_css,
-            footer_html,
-            footer_css,
-            size,
-            header_height,
-            footer_height
-          )
+    cond do
+      rich_content?(header_html) or rich_content?(footer_html) ->
+        generate_with_rich_hf(
+          html,
+          header_html,
+          header_css,
+          footer_html,
+          footer_css,
+          paper_size,
+          header_height,
+          footer_height
+        )
 
-        has_text?(header_text) or has_text?(footer_text) ->
-          generate_with_text_template(html, header_text, footer_text, size)
+      has_text?(header_text) or has_text?(footer_text) ->
+        generate_with_text_hf(html, header_text, footer_text, paper_size)
 
-        true ->
-          ChromicPDF.print_to_pdf({:html, @body_styles <> html},
-            print_to_pdf: %{
-              paperWidth: paper_width(size),
-              paperHeight: paper_height(size),
-              marginTop: 0,
-              marginBottom: 0,
-              marginLeft: 0,
-              marginRight: 0
-            }
-          )
-      end
+      true ->
+        body_html = full_html_document(@body_styles <> html)
+
+        post_to_gotenberg([
+          file_part("index.html", body_html),
+          {"paperWidth", to_string(paper_width(paper_size))},
+          {"paperHeight", to_string(paper_height(paper_size))},
+          {"marginTop", "0"},
+          {"marginBottom", "0"},
+          {"marginLeft", "0"},
+          {"marginRight", "0"},
+          {"printBackground", "true"}
+        ])
     end
   end
 
@@ -123,24 +120,18 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   # --- Rich HTML header/footer ---
 
-  defp generate_with_rich_template(
+  defp generate_with_rich_hf(
          html,
          header_html,
          header_css,
          footer_html,
          footer_css,
-         size,
+         paper_size,
          header_height,
          footer_height
        ) do
     has_header = rich_content?(header_html)
     has_footer = rich_content?(footer_html)
-
-    header =
-      if has_header, do: rich_hf_wrapper(:header, header_html, header_css), else: "<span></span>"
-
-    footer =
-      if has_footer, do: rich_hf_wrapper(:footer, footer_html, footer_css), else: "<span></span>"
 
     h_height = if(has_header, do: header_height || "25mm", else: "0")
     f_height = if(has_footer, do: footer_height || "20mm", else: "0")
@@ -148,42 +139,174 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
     margin_top = css_to_inches(h_height)
     margin_bottom = css_to_inches(f_height)
 
-    # Build header/footer template styles (font size, height constraints)
-    hf_styles =
-      ChromicPDF.Template.header_footer_styles(
-        header_height: h_height,
-        footer_height: f_height
-      )
+    body_html = full_html_document(@body_styles <> html)
 
-    body_html = @body_styles <> html
+    parts =
+      [
+        file_part("index.html", body_html),
+        {"paperWidth", to_string(paper_width(paper_size))},
+        {"paperHeight", to_string(paper_height(paper_size))},
+        {"marginTop", to_string(margin_top)},
+        {"marginBottom", to_string(margin_bottom)},
+        {"marginLeft", "0"},
+        {"marginRight", "0"},
+        {"printBackground", "true"}
+      ]
+      |> maybe_add_hf_file("header.html", has_header, header_html, header_css, h_height)
+      |> maybe_add_hf_file("footer.html", has_footer, footer_html, footer_css, f_height)
 
-    ChromicPDF.print_to_pdf({:html, body_html},
-      print_to_pdf: %{
-        paperWidth: paper_width(size),
-        paperHeight: paper_height(size),
-        marginTop: margin_top,
-        marginBottom: margin_bottom,
-        marginLeft: 0,
-        marginRight: 0,
-        displayHeaderFooter: has_header or has_footer,
-        headerTemplate: ChromicPDF.Template.html_concat(hf_styles, header),
-        footerTemplate: ChromicPDF.Template.html_concat(hf_styles, footer)
-      }
-    )
+    post_to_gotenberg(parts)
   end
 
-  defp rich_hf_wrapper(_type, html, css) do
+  defp maybe_add_hf_file(parts, _filename, false, _html, _css, _height), do: parts
+
+  defp maybe_add_hf_file(parts, filename, true, html, css, height) do
+    hf_html = build_hf_document(html, css, height)
+    parts ++ [file_part(filename, hf_html)]
+  end
+
+  defp build_hf_document(html, css, height) do
     css_block = sanitize_hf_css(css)
 
     """
+    <!DOCTYPE html>
+    <html><head>
+    <style>
+      body { margin: 0; padding: 0; }
+      .hf-wrapper {
+        width: 100%;
+        height: #{height};
+        font-family: Helvetica, Arial, sans-serif;
+        font-size: 9pt;
+        color: #333;
+        box-sizing: border-box;
+        position: relative;
+      }
+      .hf-wrapper img { max-height: 18mm; width: auto; }
+    </style>
     #{css_block}
-    <div style="width:100%;height:100%;font-family:Helvetica,Arial,sans-serif;font-size:9pt;color:#333;box-sizing:border-box;position:relative;">
-      #{constrain_images(html)}
-    </div>
+    </head>
+    <body>
+      <div class="hf-wrapper">#{constrain_images(html)}</div>
+    </body></html>
     """
   end
 
-  # Strip GrapesJS editor-context CSS rules that break Chrome's header/footer
+  # --- Plain text header/footer ---
+
+  defp generate_with_text_hf(html, header_text, footer_text, paper_size) do
+    has_header = has_text?(header_text)
+    has_footer = has_text?(footer_text)
+
+    h_height = if(has_header, do: "20mm", else: "0")
+    f_height = if(has_footer, do: "15mm", else: "0")
+
+    margin_top = css_to_inches(h_height)
+    margin_bottom = css_to_inches(f_height)
+
+    body_html = full_html_document(@body_styles <> html)
+
+    parts =
+      [
+        file_part("index.html", body_html),
+        {"paperWidth", to_string(paper_width(paper_size))},
+        {"paperHeight", to_string(paper_height(paper_size))},
+        {"marginTop", to_string(margin_top)},
+        {"marginBottom", to_string(margin_bottom)},
+        {"marginLeft", "0"},
+        {"marginRight", "0"},
+        {"printBackground", "true"}
+      ]
+      |> maybe_add_text_hf("header.html", has_header, header_text, :header)
+      |> maybe_add_text_hf("footer.html", has_footer, footer_text, :footer)
+
+    post_to_gotenberg(parts)
+  end
+
+  defp maybe_add_text_hf(parts, _filename, false, _text, _type), do: parts
+
+  defp maybe_add_text_hf(parts, filename, true, text, type) do
+    html = text_hf_document(text, type)
+    parts ++ [file_part(filename, html)]
+  end
+
+  defp text_hf_document(text, :header) do
+    """
+    <!DOCTYPE html>
+    <html><head><style>
+      body { margin: 0; padding: 0; }
+    </style></head>
+    <body>
+      <div style="width:100%;font-family:Helvetica,Arial,sans-serif;font-size:9px;padding:4px 40px;display:flex;justify-content:space-between;align-items:center;color:#666;border-bottom:1px solid #e0e0e0;">
+        <span>#{escape_html(text)}</span>
+        <span style="font-size:8px;color:#999;"><span class="date"></span></span>
+      </div>
+    </body></html>
+    """
+  end
+
+  defp text_hf_document(text, :footer) do
+    """
+    <!DOCTYPE html>
+    <html><head><style>
+      body { margin: 0; padding: 0; }
+    </style></head>
+    <body>
+      <div style="width:100%;font-family:Helvetica,Arial,sans-serif;font-size:9px;padding:4px 40px;display:flex;justify-content:space-between;align-items:center;color:#666;border-top:1px solid #e0e0e0;">
+        <span>#{escape_html(text)}</span>
+        <span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
+      </div>
+    </body></html>
+    """
+  end
+
+  # --- Gotenberg HTTP client ---
+
+  defp post_to_gotenberg(parts) do
+    url = gotenberg_url() <> @gotenberg_convert_html
+
+    # Gotenberg expects files under the "files" field name as multipart uploads,
+    # and config values as plain form fields.
+    multipart =
+      Enum.map(parts, fn
+        {:file, filename, content} ->
+          {:files, {content, filename: filename, content_type: "text/html"}}
+
+        {key, value} ->
+          {key, value}
+      end)
+
+    case Req.post(url, form_multipart: multipart, pool_timeout: 5_000, receive_timeout: 30_000) do
+      {:ok, %Req.Response{status: 200, body: pdf_bytes}} ->
+        {:ok, Base.encode64(pdf_bytes)}
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        {:error, "Gotenberg returned #{status}: #{inspect(body)}"}
+
+      {:error, exception} ->
+        {:error, "Gotenberg request failed: #{Exception.message(exception)}"}
+    end
+  end
+
+  defp gotenberg_url do
+    Application.get_env(:phoenix_kit_document_creator, :gotenberg_url, "http://gotenberg:3000")
+  end
+
+  defp file_part(filename, content) do
+    {:file, filename, content}
+  end
+
+  defp full_html_document(body_content) do
+    """
+    <!DOCTYPE html>
+    <html><head><meta charset="utf-8"></head>
+    <body>#{body_content}</body></html>
+    """
+  end
+
+  # --- CSS sanitization ---
+
+  # Strip GrapesJS editor-context CSS rules that break header/footer
   # rendering (body resets, universal selectors, wrapper height/overflow),
   # but keep element-specific rules needed for positioning.
   defp sanitize_hf_css(css) when is_binary(css) and css != "" do
@@ -197,7 +320,7 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
     # Remove the wrapper element's rule (first ID selector — it's the
     # stripped <body> wrapper and its height:100%/overflow:hidden breaks
-    # Chrome's header/footer rendering)
+    # header/footer rendering)
     sanitized =
       case Regex.run(~r/\A\s*(#\w+)\s*\{/, sanitized) do
         [_, wrapper_id] ->
@@ -252,48 +375,6 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   defp constrain_images(_), do: ""
 
-  defp rich_content?(html) when is_binary(html) do
-    trimmed = String.trim(html)
-    trimmed != "" and trimmed not in ["<p></p>", "<p><br></p>", "<p><br/></p>"]
-  end
-
-  defp rich_content?(_), do: false
-
-  # --- Plain text header/footer (backward compatible) ---
-
-  defp generate_with_text_template(html, header_text, footer_text, size) do
-    header = if has_text?(header_text), do: text_header_template(header_text), else: ""
-    footer = if has_text?(footer_text), do: text_footer_template(footer_text), else: ""
-
-    template_opts =
-      [content: @body_styles <> html, size: size]
-      |> maybe_add(:header, header)
-      |> maybe_add(:footer, footer)
-      |> maybe_add(:header_height, if(header != "", do: "20mm"))
-      |> maybe_add(:footer_height, if(footer != "", do: "15mm"))
-
-    %{source: source, opts: print_opts} = ChromicPDF.Template.source_and_options(template_opts)
-    ChromicPDF.print_to_pdf(source, print_opts)
-  end
-
-  defp text_header_template(text) do
-    """
-    <div style="width:100%;font-family:Helvetica,Arial,sans-serif;font-size:9px;padding:4px 40px;display:flex;justify-content:space-between;align-items:center;color:#666;border-bottom:1px solid #e0e0e0;">
-      <span>#{escape_html(text)}</span>
-      <span style="font-size:8px;color:#999;"><span class="date"></span></span>
-    </div>
-    """
-  end
-
-  defp text_footer_template(text) do
-    """
-    <div style="width:100%;font-family:Helvetica,Arial,sans-serif;font-size:9px;padding:4px 40px;display:flex;justify-content:space-between;align-items:center;color:#666;border-top:1px solid #e0e0e0;">
-      <span>#{escape_html(text)}</span>
-      <span>Page <span class="pageNumber"></span> of <span class="totalPages"></span></span>
-    </div>
-    """
-  end
-
   # --- Shared helpers ---
 
   # GrapesJS getHtml() wraps content in <body id="...">...</body>.
@@ -310,11 +391,14 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   defp strip_body_wrapper(html), do: html
 
-  defp has_text?(text), do: is_binary(text) and text != ""
+  defp rich_content?(html) when is_binary(html) do
+    trimmed = String.trim(html)
+    trimmed != "" and trimmed not in ["<p></p>", "<p><br></p>", "<p><br/></p>"]
+  end
 
-  defp maybe_add(opts, _key, nil), do: opts
-  defp maybe_add(opts, _key, ""), do: opts
-  defp maybe_add(opts, key, value), do: Keyword.put(opts, key, value)
+  defp rich_content?(_), do: false
+
+  defp has_text?(text), do: is_binary(text) and text != ""
 
   defp escape_html(text) when is_binary(text) do
     text
@@ -326,26 +410,20 @@ defmodule PhoenixKitDocumentCreator.Web.EditorPdfHelpers do
 
   defp escape_html(_), do: ""
 
-  defp resolve_paper_size(name) when is_binary(name) do
-    Map.get(@paper_size_map, name, :a4)
-  end
-
-  defp resolve_paper_size(_), do: :a4
-
-  # Dimensions in inches for ChromicPDF's print_to_pdf paperWidth/paperHeight
-  defp paper_width(:a4), do: 8.27
-  defp paper_width(:us_letter), do: 8.5
-  defp paper_width(:legal), do: 8.5
-  defp paper_width(:tabloid), do: 11.0
+  # Dimensions in inches for Gotenberg's paperWidth/paperHeight
+  defp paper_width("a4"), do: 8.27
+  defp paper_width("letter"), do: 8.5
+  defp paper_width("legal"), do: 8.5
+  defp paper_width("tabloid"), do: 11.0
   defp paper_width(_), do: 8.27
 
-  defp paper_height(:a4), do: 11.69
-  defp paper_height(:us_letter), do: 11.0
-  defp paper_height(:legal), do: 14.0
-  defp paper_height(:tabloid), do: 17.0
+  defp paper_height("a4"), do: 11.69
+  defp paper_height("letter"), do: 11.0
+  defp paper_height("legal"), do: 14.0
+  defp paper_height("tabloid"), do: 17.0
   defp paper_height(_), do: 11.69
 
-  # Convert CSS length (e.g. "25mm", "1in", "2cm") to inches for Chrome protocol
+  # Convert CSS length (e.g. "25mm", "1in", "2cm") to inches for Gotenberg
   defp css_to_inches("0"), do: 0
 
   defp css_to_inches(val) when is_binary(val) do

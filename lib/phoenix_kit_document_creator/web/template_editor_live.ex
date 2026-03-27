@@ -139,6 +139,18 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     {:noreply, do_generate_pdf(socket, html, pdf_opts, filename)}
   end
 
+  def handle_event("editor_not_ready", %{"action" => action}, socket) do
+    msg = "Editor is still loading — please wait a moment and try again"
+
+    socket =
+      case action do
+        "pdf" -> assign(socket, generating_pdf: false, error: msg)
+        _ -> put_flash(socket, :error, msg)
+      end
+
+    {:noreply, socket}
+  end
+
   # ── Media selector ────────────────────────────────────────────────
 
   def handle_event("open_media_selector", _params, socket) do
@@ -327,7 +339,7 @@ defmodule PhoenixKitDocumentCreator.Web.TemplateEditorLive do
     _e ->
       assign(socket,
         generating_pdf: false,
-        error: "PDF generation failed — Chrome may still be starting up, please try again"
+        error: "PDF generation failed — please try again"
       )
   end
 

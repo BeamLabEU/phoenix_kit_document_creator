@@ -157,6 +157,10 @@ defmodule PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive do
     end
   end
 
+  def handle_event("editor_not_ready", _params, socket) do
+    {:noreply, put_flash(socket, :error, "Editor is still loading — please wait a moment and try again")}
+  end
+
   def handle_event("dismiss_flash", _params, socket) do
     {:noreply, assign(socket, saved_flash: nil)}
   end

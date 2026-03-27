@@ -3,7 +3,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
   GrapesJS editor for documents with PDF export.
 
   Loads document content into GrapesJS, supports editing and exporting
-  to PDF via ChromicPDF with header/footer support from the linked
+  to PDF via Gotenberg with header/footer support from the linked
   header_footer record.
   """
   use Phoenix.LiveView
@@ -110,6 +110,18 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
     filename = sanitize_filename(socket.assigns.document.name || "document")
 
     {:noreply, do_generate_pdf(socket, html, pdf_opts, filename)}
+  end
+
+  def handle_event("editor_not_ready", %{"action" => action}, socket) do
+    msg = "Editor is still loading — please wait a moment and try again"
+
+    socket =
+      case action do
+        "pdf" -> assign(socket, generating_pdf: false, error: msg)
+        _ -> put_flash(socket, :error, msg)
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("dismiss_flash", _params, socket) do
@@ -230,7 +242,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentEditorLive do
     _e ->
       assign(socket,
         generating_pdf: false,
-        error: "PDF generation failed — Chrome may still be starting up, please try again"
+        error: "PDF generation failed — please try again"
       )
   end
 
