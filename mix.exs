@@ -1,7 +1,7 @@
 defmodule PhoenixKitDocumentCreator.MixProject do
   use Mix.Project
 
-  @version "0.1.2"
+  @version "0.2.0"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_document_creator"
 
   def project do
@@ -14,7 +14,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       deps: deps(),
       aliases: aliases(),
       description:
-        "Document Creator module for PhoenixKit — visual template design and PDF generation",
+        "Document Creator module for PhoenixKit — document templates and PDF generation via Google Docs",
       package: package(),
       dialyzer: [plt_add_apps: [:phoenix_kit]],
       name: "PhoenixKitDocumentCreator",
@@ -53,11 +53,8 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.0"},
 
-      # PDF generation via headless Chrome
-      {:chromic_pdf, "~> 1.17"},
-
-      # Template engine for variable substitution (Liquid syntax)
-      {:solid, "~> 1.2"},
+      # HTTP client for Google Docs/Drive API
+      {:req, "~> 0.5"},
 
       # Code quality
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},

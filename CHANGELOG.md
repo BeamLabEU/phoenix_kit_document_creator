@@ -1,3 +1,29 @@
+## 0.2.0 - 2026-03-29
+
+### Changed
+- Replace local editor architecture (GrapesJS, TipTap, pdfme) with Google Docs API
+- Replace ChromicPDF/Gotenberg PDF generation with Google Drive API export
+- Rewrite `Documents` context for Google Drive operations (list, create, copy, variable substitution)
+- Simplify admin tabs from 13 to 3 (parent + documents + templates)
+- Simplify `Paths` module to 4 helpers (index, templates, documents, settings)
+- Rewrite `CreateDocumentModal` for Google Docs workflow
+
+### Added
+- Add `GoogleDocsClient` — OAuth 2.0, Google Docs API, Google Drive API
+- Add `GoogleOAuthSettingsLive` — admin settings page for connecting Google account
+- Add `google_doc_id` column to templates, documents, and headers/footers (PhoenixKit V88 migration)
+- Add unit tests for `GoogleDocsClient`
+
+### Removed
+- Remove GrapesJS editor and all JS hooks (`editor_hooks.js`, ~1500 lines)
+- Remove `TemplateEditorLive`, `DocumentEditorLive`, `HeaderFooterEditorLive` LiveViews
+- Remove `HeaderFooterLive` listing page
+- Remove `EditorPanel` and `EditorScripts` components
+- Remove `EditorPdfHelpers` (ChromicPDF/Gotenberg PDF generation)
+- Remove `DocumentFormat` module (legacy JSON interchange format)
+- Remove `TestingLive`, `EditorPdfmeTestLive`, `EditorTiptapTestLive` (editor comparison pages)
+- Remove `chromic_pdf` and `solid` dependencies
+
 ## 0.1.2 - 2026-03-25
 
 ### Fixed

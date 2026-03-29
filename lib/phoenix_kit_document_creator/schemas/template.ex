@@ -21,6 +21,8 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     field(:description, :string)
     field(:status, :string, default: "published")
 
+    field(:google_doc_id, :string)
+
     field(:content_html, :string, default: "")
     field(:content_css, :string, default: "")
     field(:content_native, :map)
@@ -52,6 +54,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     :slug,
     :description,
     :status,
+    :google_doc_id,
     :content_html,
     :content_css,
     :content_native,

@@ -2,8 +2,12 @@ defmodule PhoenixKitDocumentCreator do
   @moduledoc """
   Document Creator module for PhoenixKit.
 
-  Visual template design with GrapesJS (drag-and-drop page builder) and
-  PDF generation via ChromicPDF (headless Chrome).
+  Document template design and PDF generation via Google Docs API.
+
+  Templates, documents, and headers/footers are created and edited as
+  Google Docs, embedded in the admin UI via iframe. Variables use
+  `{{ placeholder }}` syntax and are substituted via the Google Docs
+  `replaceAllText` API. PDF export uses the Google Drive export endpoint.
 
   ## Installation
 
@@ -14,21 +18,17 @@ defmodule PhoenixKitDocumentCreator do
   Then `mix deps.get`. The module auto-discovers via beam scanning.
   Enable it in Admin > Modules.
 
-  ## Testing Editors
+  ## Google Docs Setup
 
-  Alternative editors (pdfme, TipTap) are available behind a config flag:
-
-      config :phoenix_kit_document_creator, :testing_editors, true
-
-  These load from CDN — no extra mix dependencies.
+  Configure the Google Docs integration in Admin > Settings > Document Creator.
+  You need a Google Cloud project with Docs API and Drive API enabled,
+  and an OAuth 2.0 Client ID (Web application type).
   """
 
   use PhoenixKit.Module
 
   alias PhoenixKit.Dashboard.Tab
   alias PhoenixKit.Settings
-
-  @testing_editors Application.compile_env(:phoenix_kit_document_creator, :testing_editors, false)
 
   # ===========================================================================
   # Required callbacks
@@ -62,7 +62,7 @@ defmodule PhoenixKitDocumentCreator do
   # ===========================================================================
 
   @impl PhoenixKit.Module
-  def version, do: "0.1.2"
+  def version, do: "0.2.0"
 
   # Migrations are handled by PhoenixKit core (V86).
   # @impl PhoenixKit.Module
@@ -79,17 +79,29 @@ defmodule PhoenixKitDocumentCreator do
   end
 
   @impl PhoenixKit.Module
-  def children do
-    if chromic_pdf_available?() do
-      [{PhoenixKitDocumentCreator.ChromeSupervisor, []}]
-    else
-      []
-    end
+  def children, do: []
+
+  @impl PhoenixKit.Module
+  def settings_tabs do
+    [
+      %Tab{
+        id: :admin_settings_document_creator,
+        label: "Document Creator",
+        icon: "hero-document-text",
+        path: "document-creator",
+        priority: 930,
+        level: :admin,
+        parent: :admin_settings,
+        permission: module_key(),
+        match: :exact,
+        live_view: {PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive, :index}
+      }
+    ]
   end
 
   @impl PhoenixKit.Module
   def admin_tabs do
-    base_tabs() ++ testing_tabs()
+    base_tabs()
   end
 
   defp base_tabs do
@@ -106,188 +118,33 @@ defmodule PhoenixKitDocumentCreator do
         group: :admin_modules,
         subtab_display: :when_active,
         highlight_with_subtabs: false,
-        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :index}
+        redirect_to_first_subtab: true,
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents}
       },
       %Tab{
-        id: :admin_document_creator_template_new,
-        label: "New Template",
-        icon: "hero-plus",
-        path: "document-creator/templates/new",
-        priority: 651,
+        id: :admin_document_creator_documents,
+        label: "Documents",
+        icon: "hero-document-duplicate",
+        path: "document-creator/documents",
+        priority: 648,
         level: :admin,
         permission: module_key(),
         parent: :admin_document_creator,
-        visible: false,
-        live_view: {PhoenixKitDocumentCreator.Web.TemplateEditorLive, :new}
+        match: :prefix,
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents}
       },
       %Tab{
-        id: :admin_document_creator_template_edit,
-        label: "Edit Template",
-        icon: "hero-pencil-square",
-        path: "document-creator/templates/:uuid/edit",
-        priority: 652,
+        id: :admin_document_creator_templates,
+        label: "Templates",
+        icon: "hero-document-text",
+        path: "document-creator/templates",
+        priority: 649,
         level: :admin,
         permission: module_key(),
         parent: :admin_document_creator,
-        visible: false,
-        live_view: {PhoenixKitDocumentCreator.Web.TemplateEditorLive, :edit}
-      },
-      %Tab{
-        id: :admin_document_creator_document_edit,
-        label: "Edit Document",
-        icon: "hero-pencil-square",
-        path: "document-creator/documents/:uuid/edit",
-        priority: 653,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        visible: false,
-        live_view: {PhoenixKitDocumentCreator.Web.DocumentEditorLive, :edit}
-      },
-      %Tab{
-        id: :admin_document_creator_headers,
-        label: "Headers",
-        icon: "hero-bars-arrow-up",
-        path: "document-creator/headers",
-        priority: 660,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterLive, :headers}
-      },
-      %Tab{
-        id: :admin_document_creator_header_new,
-        label: "New Header",
-        icon: "hero-plus",
-        path: "document-creator/headers/new",
-        priority: 661,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        visible: false,
-        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive, :header_new}
-      },
-      %Tab{
-        id: :admin_document_creator_header_edit,
-        label: "Edit Header",
-        icon: "hero-pencil-square",
-        path: "document-creator/headers/:uuid/edit",
-        priority: 662,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        visible: false,
-        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive, :header_edit}
-      },
-      %Tab{
-        id: :admin_document_creator_footers,
-        label: "Footers",
-        icon: "hero-bars-arrow-down",
-        path: "document-creator/footers",
-        priority: 665,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterLive, :footers}
-      },
-      %Tab{
-        id: :admin_document_creator_footer_new,
-        label: "New Footer",
-        icon: "hero-plus",
-        path: "document-creator/footers/new",
-        priority: 666,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        visible: false,
-        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive, :footer_new}
-      },
-      %Tab{
-        id: :admin_document_creator_footer_edit,
-        label: "Edit Footer",
-        icon: "hero-pencil-square",
-        path: "document-creator/footers/:uuid/edit",
-        priority: 667,
-        level: :admin,
-        permission: module_key(),
-        parent: :admin_document_creator,
-        visible: false,
-        live_view: {PhoenixKitDocumentCreator.Web.HeaderFooterEditorLive, :footer_edit}
+        match: :prefix,
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :templates}
       }
     ]
-  end
-
-  defp testing_tabs do
-    if @testing_editors do
-      [
-        %Tab{
-          id: :admin_document_creator_testing,
-          label: "Testing",
-          icon: "hero-beaker",
-          path: "document-creator/testing",
-          priority: 690,
-          level: :admin,
-          permission: module_key(),
-          parent: :admin_document_creator,
-          live_view: {PhoenixKitDocumentCreator.Web.TestingLive, :index}
-        },
-        %Tab{
-          id: :admin_document_creator_testing_pdfme,
-          label: "pdfme",
-          icon: "hero-document",
-          path: "document-creator/testing/pdfme",
-          priority: 691,
-          level: :admin,
-          permission: module_key(),
-          parent: :admin_document_creator,
-          live_view: {PhoenixKitDocumentCreator.Web.EditorPdfmeTestLive, :index}
-        },
-        %Tab{
-          id: :admin_document_creator_testing_tiptap,
-          label: "TipTap",
-          icon: "hero-cursor-arrow-rays",
-          path: "document-creator/testing/tiptap",
-          priority: 692,
-          level: :admin,
-          permission: module_key(),
-          parent: :admin_document_creator,
-          live_view: {PhoenixKitDocumentCreator.Web.EditorTiptapTestLive, :index}
-        }
-      ]
-    else
-      []
-    end
-  end
-
-  # ===========================================================================
-  # Helper functions
-  # ===========================================================================
-
-  @doc "Check if the ChromicPDF library is available."
-  def chromic_pdf_available? do
-    Code.ensure_loaded?(ChromicPDF)
-  end
-
-  @doc "Check if Chrome or Chromium is installed on the system."
-  def chrome_installed? do
-    path_check =
-      Enum.any?(
-        ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable"],
-        fn cmd ->
-          System.find_executable(cmd) != nil
-        end
-      )
-
-    path_check or macos_chrome_installed?()
-  end
-
-  defp macos_chrome_installed? do
-    Enum.any?(
-      [
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        "/Applications/Chromium.app/Contents/MacOS/Chromium"
-      ],
-      &File.exists?/1
-    )
   end
 end

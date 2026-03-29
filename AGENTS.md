@@ -2,50 +2,38 @@
 
 ## Project Overview
 
-Elixir library (Hex package) that adds a visual document template editor and PDF generation to PhoenixKit apps. Uses GrapesJS for drag-and-drop editing, Solid (Liquid syntax) for template variables, and ChromicPDF (headless Chrome) for PDF export.
+Elixir library (Hex package) that adds document template management and PDF generation to PhoenixKit apps via Google Docs API. Templates and documents live in Google Drive. Variables use `{{ placeholder }}` syntax and are substituted via the Docs API. PDF export uses the Drive API export endpoint.
 
 ## Tech Stack
 
 - **Language**: Elixir ~> 1.15
 - **Framework**: Phoenix LiveView ~> 1.0
 - **Database**: PostgreSQL (via Ecto through PhoenixKit's repo)
-- **Editor**: GrapesJS (vendored in `priv/static/vendor/grapesjs/`)
-- **PDF**: ChromicPDF ~> 1.17 (headless Chrome)
-- **Templates**: Solid ~> 1.2 (Liquid syntax for `{{ variable }}` substitution)
+- **Document editing**: Google Docs (via Google Docs API v1)
+- **File storage**: Google Drive (via Drive API v3)
+- **Auth**: OAuth 2.0 (Google)
+- **HTTP client**: Req ~> 0.5
 - **Parent**: PhoenixKit (provides Module behaviour, Settings API, admin layout, Ecto repo)
 
 ## Project Structure
 
 ```
 lib/
-  phoenix_kit_document_creator.ex          # Main module — PhoenixKit.Module behaviour, tab registration, routes
+  phoenix_kit_document_creator.ex          # Main module — PhoenixKit.Module behaviour, tab registration
   phoenix_kit_document_creator/
-    documents.ex                           # Context module — CRUD for templates, documents, headers/footers
-    chrome_supervisor.ex                   # Lazy ChromicPDF startup (starts Chrome only on first PDF export)
-    document_format.ex                     # JSON interchange format (mostly unused — legacy from research spike)
-    variable.ex                            # Extract {{ variables }} from HTML content
+    documents.ex                           # Context module — list/create/export via Google Drive
+    google_docs_client.ex                  # Google Docs + Drive API client with OAuth 2.0
+    variable.ex                            # Extract {{ variables }} from text, guess types
     paths.ex                               # Centralized route path helpers
-    migration.ex                           # Versioned migration framework (V01–V04)
-    migration/postgres/v01.ex–v04.ex       # Individual migration versions
     schemas/
-      template.ex                          # Template schema (HTML, CSS, GrapesJS native data, paper size, slug)
-      document.ex                          # Document schema (rendered HTML/CSS, baked header/footer content)
+      template.ex                          # Template schema (name, slug, status, google_doc_id)
+      document.ex                          # Document schema (name, variable_values, google_doc_id)
       header_footer.ex                     # HeaderFooter schema (type discriminator: "header" | "footer")
     web/
-      template_editor_live.ex              # LiveView — GrapesJS template editor with header/footer assignment
-      document_editor_live.ex              # LiveView — GrapesJS document editor (post-creation editing)
-      documents_live.ex                    # LiveView — document listing with thumbnail preview cards
-      header_footer_editor_live.ex         # LiveView — GrapesJS header/footer editor with full-page preview
-      header_footer_live.ex                # LiveView — header/footer listing page
-      editor_pdf_helpers.ex                # PDF generation, thumbnail generation, CSS sanitization
-      testing_live.ex                      # Testing/comparison overview page (behind :testing_editors flag)
-      editor_tiptap_test_live.ex           # TipTap test editor (behind :testing_editors flag)
-      editor_pdfme_test_live.ex            # pdfme test editor (behind :testing_editors flag)
+      documents_live.ex                    # LiveView — template/document listing with Drive thumbnails
+      google_oauth_settings_live.ex        # LiveView — Google OAuth settings (connect/disconnect)
       components/
-        editor_hooks.js                    # GrapesJS JavaScript hooks for LiveView (base64-embedded at compile time)
-        editor_panel.ex                    # Shared editor panel component (data-attribute config for JS hooks)
-        editor_scripts.ex                  # Script/CSS tags for GrapesJS (CDN + vendored fallback)
-        create_document_modal.ex           # Modal for creating documents from templates with variable inputs
+        create_document_modal.ex           # Modal for creating documents (blank or from template with variables)
 
 test/
   test_helper.exs                          # Smart DB detection — excludes integration tests when DB unavailable
@@ -53,18 +41,20 @@ test/
     test_repo.ex                           # Ecto repo for tests
     data_case.ex                           # ExUnit case template with SQL Sandbox
   schemas/                                 # Unit tests for schema changesets (no DB needed)
-  integration/documents_test.exs           # Integration tests — full CRUD + template→document baking
-  editor_pdf_helpers_test.exs              # Unit tests for thumbnail/PDF helpers
-  phoenix_kit_document_creator_test.exs    # Unit tests for main module, variable extraction
+  integration/documents_test.exs           # Integration tests — full CRUD + template→document workflow
+  google_docs_client_test.exs              # Unit tests for GoogleDocsClient (pure functions + interface)
+  phoenix_kit_document_creator_test.exs    # Unit tests for main module, variable extraction, admin tabs
 ```
 
 ## Key Architectural Decisions
 
-- **Baking pattern**: When a document is created from a template, header/footer HTML, CSS, and height are copied directly into the document record. Documents are fully self-contained — deleting templates or headers/footers won't break existing documents.
-- **Lazy Chrome**: ChromicPDF starts only on first PDF export, not at app boot. Managed by `ChromeSupervisor`.
-- **Versioned migrations**: V01–V04 with auto-discovery. Host app runs `mix phoenix_kit_document_creator.install` to generate migration, then `mix ecto.migrate`.
+- **Google Drive is source of truth**: All document content lives in Google Drive. The Phoenix app is a coordinator — it manages OAuth, lists files, substitutes variables, and exports PDFs via API.
+- **No local editor**: Editing happens in Google Docs. No GrapesJS, TipTap, or other JS editors.
+- **No local PDF generation**: PDFs are exported via the Drive API. No ChromicPDF, Gotenberg, or Chrome dependency.
+- **OAuth credentials in Settings**: Stored as a JSON blob via `PhoenixKit.Settings` under key `"document_creator_google_oauth"`.
+- **Auto-refresh on 401**: The `GoogleDocsClient` automatically refreshes expired access tokens when a request returns 401.
+- **Folder convention**: Templates go in a `/templates` folder, documents in `/documents` — both in the Drive root. Folder IDs are cached in Settings.
 - **No own Ecto repo**: Uses the host app's repo via `PhoenixKit.repo()`.
-- **GrapesJS vendored + CDN**: JS hooks are base64-embedded at compile time from `editor_hooks.js`. GrapesJS itself loads from vendored files with CDN fallback.
 
 ## Running Tests
 
@@ -79,10 +69,10 @@ mix test
 
 ## Common Tasks
 
-- **Adding a new migration version**: Create `lib/phoenix_kit_document_creator/migration/postgres/vXX.ex`, update `migration.ex` to include the new version.
-- **Adding editor blocks**: Edit `editor_hooks.js` — blocks are defined in the `initBlocks` function.
-- **Changing PDF rendering**: `editor_pdf_helpers.ex` handles all ChromicPDF interaction, CSS sanitization, and header/footer wrapping.
-- **Adding new admin tabs**: Register in `phoenix_kit_document_creator.ex` `tabs/0` function.
+- **Adding admin tabs**: Register in `phoenix_kit_document_creator.ex` `admin_tabs/0` callback.
+- **Adding new API operations**: Add to `google_docs_client.ex` using `authenticated_request/3` for auto-refresh.
+- **Adding path helpers**: Add to `paths.ex`.
+- **Changing OAuth flow**: `google_docs_client.ex` handles credential storage, token exchange, and refresh.
 
 ## Versioning & Releases
 
@@ -109,8 +99,3 @@ Use **bare version numbers** (no `v` prefix): `0.2.0`, not `v0.2.0`.
 - Start commit messages with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`
 - **NEVER mention Claude or AI assistance** in commit messages
 - Document significant PRs in `dev_docs/pull_requests/` — see `TEMPLATE.md` there
-
-## Known Issues to Address
-
-- `DocumentFormat` module is mostly dead code from the research spike
-- `humanize/1` and `extract_variables` logic duplicated across multiple modules
