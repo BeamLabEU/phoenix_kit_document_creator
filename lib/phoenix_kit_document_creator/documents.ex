@@ -128,15 +128,15 @@ defmodule PhoenixKitDocumentCreator.Documents do
   """
   def fetch_thumbnails_async(files, caller_pid) when is_list(files) do
     Enum.each(files, fn file ->
-      file_id = file["id"]
-
-      Task.start(fn ->
-        case GoogleDocsClient.fetch_thumbnail(file_id) do
-          {:ok, data_uri} -> send(caller_pid, {:thumbnail_result, file_id, data_uri})
-          _ -> :ok
-        end
-      end)
+      Task.start(fn -> fetch_and_notify_thumbnail(file["id"], caller_pid) end)
     end)
+  end
+
+  defp fetch_and_notify_thumbnail(file_id, caller_pid) do
+    case GoogleDocsClient.fetch_thumbnail(file_id) do
+      {:ok, data_uri} -> send(caller_pid, {:thumbnail_result, file_id, data_uri})
+      _ -> :ok
+    end
   end
 
   # ===========================================================================

@@ -461,8 +461,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp do_request(:get, url, opts), do: Req.get(url, opts)
   defp do_request(:post, url, opts), do: Req.post(url, opts)
-  defp do_request(:patch, url, opts), do: Req.patch(url, opts)
-  defp do_request(:delete, url, opts), do: Req.delete(url, opts)
 
   defp escape_query_value(value) do
     value |> to_string() |> String.replace("'", "\\'")
