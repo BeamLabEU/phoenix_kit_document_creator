@@ -1,17 +1,15 @@
 # Document Creator
 
-A [PhoenixKit](https://hex.pm/packages/phoenix_kit) module for visual document design and PDF generation. Build reusable templates with a drag-and-drop editor (GrapesJS), define `{{ variables }}` that get filled in when creating documents, design custom headers and footers, and export to PDF via ChromicPDF.
+A [PhoenixKit](https://hex.pm/packages/phoenix_kit) module for document template management and PDF generation via Google Docs. Templates and documents live in Google Drive as Google Docs. Variables use `{{ placeholder }}` syntax and are substituted via the Google Docs API. PDF export uses the Google Drive export endpoint.
 
 ## Features
 
-- **Visual template editor** — GrapesJS drag-and-drop page builder with live preview
-- **Template variables** — `{{ client_name }}`, `{{ date }}` placeholders auto-detected and rendered via Solid (Liquid syntax)
-- **Document creation from templates** — pick a template, fill in variables, get a pre-rendered document
-- **Reusable headers & footers** — design once, assign to multiple templates
-- **PDF export** — ChromicPDF (headless Chrome) with paper size selection and header/footer support
-- **Multi-page support** — visual page breaks with page count management
-- **Thumbnail previews** — scaled page previews on listing cards
-- **Paper sizes** — A4, Letter, Legal, Tabloid (96 DPI standard across JS, Elixir, and CSS)
+- **Google Docs as editor** — create and edit templates/documents directly in Google Docs
+- **Template variables** — `{{ client_name }}`, `{{ date }}` placeholders auto-detected from document text
+- **Document creation from templates** — copy a template, fill in variables via API, get a ready document
+- **PDF export** — via Google Drive API (no local Chrome/binary dependency)
+- **Thumbnail previews** — fetched from Google Drive API for listing cards
+- **OAuth 2.0 integration** — connect a Google account in Admin > Settings
 
 ## Setup
 
@@ -19,49 +17,63 @@ A [PhoenixKit](https://hex.pm/packages/phoenix_kit) module for visual document d
 
 ```elixir
 # In parent app's mix.exs
-{:phoenix_kit_document_creator, "~> 0.2"}
-
-# For local development:
-# {:phoenix_kit_document_creator, path: "../phoenix_kit_document_creator"}
+{:phoenix_kit_document_creator, path: "../phoenix_kit_document_creator"}
 ```
 
 ### 2. Install and migrate
 
 ```bash
 mix deps.get
-mix phoenix_kit_document_creator.install   # Creates migration file
-mix ecto.migrate                            # Creates database tables
+mix ecto.migrate   # Runs PhoenixKit's versioned migrations (V86 + V88)
 ```
 
 ### 3. Enable the module
 
 Start your app, go to **Admin > Modules**, enable **Document Creator**.
 
+### 4. Connect Google Docs
+
+1. Create a Google Cloud project with **Docs API** and **Drive API** enabled
+2. Create an **OAuth 2.0 Client ID** (Web application type)
+3. Go to **Admin > Settings > Document Creator**
+4. Enter the Client ID and Client Secret
+5. Click **Connect** and authorize the Google account
+6. Create `/templates` and `/documents` folders in the connected Google Drive
+
 ### Prerequisites
 
-- **Chrome or Chromium** — required for PDF generation. The module loads and compiles without it, but PDF export will show an error.
-- **PhoenixKit >= 1.7** — provides the Module behaviour, Settings API, and admin layout.
+- **Google Cloud project** — with Docs API and Drive API enabled
+- **PhoenixKit >= 1.7** — provides the Module behaviour, Settings API, and admin layout
 
 ## Architecture
 
 ### How it works
 
 ```
-Template (GrapesJS HTML + CSS + variables)
-    ↓ fill in {{ variables }} via Solid
-Document (rendered HTML + CSS)
-    ↓ ChromicPDF (headless Chrome)
-PDF (with optional header/footer)
+Template (Google Doc with {{ variables }})
+    |  copy via Drive API
+    v
+Document (Google Doc copy)
+    |  replaceAllText via Docs API
+    v
+Document (variables filled in)
+    |  export via Drive API
+    v
+PDF
 ```
 
-1. **Templates** store HTML, CSS, and GrapesJS native project data. Variables like `{{ client_name }}` are auto-detected from the content.
-2. **Documents** are created from templates by substituting variable values via Solid (Liquid template engine). The rendered HTML is stored so documents can be further edited. Header/footer content is baked into the document at creation time, making documents fully self-contained.
-3. **Headers & Footers** are separate designs with configurable height (CSS units like `"25mm"`). They're assigned to templates via FK. When a document is created, the header/footer HTML, CSS, and height are copied directly into the document so it remains independent of the original header/footer records.
-4. **PDF export** uses ChromicPDF with Chrome DevTools Protocol. Paper dimensions use the CSS standard (1in = 96px, 1mm = 3.7795px).
+1. **Templates** are Google Docs stored in a `/templates` folder in Drive. Variables like `{{ client_name }}` are auto-detected from the document text.
+2. **Documents** are created by copying a template via the Drive API, then substituting variable values using the Docs API `replaceAllText` endpoint.
+3. **PDF export** uses the Drive API file export endpoint — no local Chrome or binary dependencies needed.
 
-### Lazy Chrome startup
+### Google Drive as source of truth
 
-ChromicPDF is started **lazily** via `PhoenixKitDocumentCreator.ChromeSupervisor`. Chrome only launches when someone actually generates a PDF, not at app boot. This keeps things lightweight when the module is enabled but not actively used. If Chrome isn't installed, the module still loads — PDF generation returns a clear error.
+All document content lives in Google Drive. The Phoenix app serves as a coordinator:
+- Manages OAuth credentials (stored in PhoenixKit Settings)
+- Lists files from Drive folders
+- Handles variable detection and substitution via API
+- Exports PDFs via Drive API
+- Displays thumbnails fetched from Drive
 
 ### Dependencies
 
@@ -69,60 +81,27 @@ ChromicPDF is started **lazily** via `PhoenixKitDocumentCreator.ChromeSupervisor
 |---|---|
 | `phoenix_kit` | Module behaviour, Settings API, admin layout, Routes |
 | `phoenix_live_view` | Admin pages |
-| `chromic_pdf` | HTML → PDF via headless Chrome |
-| `solid` | Liquid template engine for `{{ variable }}` substitution |
+| `req` | HTTP client for Google Docs/Drive API |
 
 ## Admin Pages
 
-The module registers 13 admin tabs (10 base + 3 conditional testing tabs):
+The module registers 3 admin tabs plus a settings tab:
 
 | Page | Path | Description |
 |---|---|---|
-| **Documents** | `/admin/document-creator` | Landing page with Templates and Documents tabs, grid cards with thumbnails |
-| **New Template** | `/admin/document-creator/templates/new` | GrapesJS editor for new template |
-| **Edit Template** | `/admin/document-creator/templates/:uuid/edit` | GrapesJS editor for existing template |
-| **Edit Document** | `/admin/document-creator/documents/:uuid/edit` | GrapesJS editor for document content |
-| **Headers** | `/admin/document-creator/headers` | List of header designs (subtab) |
-| **New Header** | `/admin/document-creator/headers/new` | GrapesJS header editor |
-| **Edit Header** | `/admin/document-creator/headers/:uuid/edit` | GrapesJS header editor |
-| **Footers** | `/admin/document-creator/footers` | List of footer designs (subtab) |
-| **New Footer** | `/admin/document-creator/footers/new` | GrapesJS footer editor |
-| **Edit Footer** | `/admin/document-creator/footers/:uuid/edit` | GrapesJS footer editor |
+| **Document Creator** | `/admin/document-creator` | Landing page (redirects to first subtab) |
+| **Documents** | `/admin/document-creator/documents` | List documents from Drive with thumbnails |
+| **Templates** | `/admin/document-creator/templates` | List templates from Drive with thumbnails |
 
-### Testing editors (optional)
-
-Alternative editors are available behind a config flag for comparison:
-
-```elixir
-config :phoenix_kit_document_creator, :testing_editors, true
-```
+**Settings:**
 
 | Page | Path | Description |
 |---|---|---|
-| **Testing Hub** | `/admin/document-creator/testing` | Editor comparison page |
-| **pdfme Test** | `/admin/document-creator/testing/pdfme` | JSON-based PDF form editor |
-| **TipTap Test** | `/admin/document-creator/testing/tiptap` | Rich text editor alternative |
-
-These load from CDN — no extra mix dependencies needed.
+| **Google OAuth** | `/admin/settings/document-creator` | Connect/disconnect Google account, manage OAuth credentials |
 
 ## Database Schema
 
-Three tables created by the migration system (currently at V04):
-
-### `phoenix_kit_doc_headers_footers`
-
-| Column | Type | Description |
-|---|---|---|
-| `uuid` | UUID (PK) | Auto-generated |
-| `name` | string | Display name |
-| `type` | string | `"header"` or `"footer"` (discriminator) |
-| `html` | text | Rendered HTML content |
-| `css` | text | CSS styles |
-| `native` | jsonb | GrapesJS project data (for re-editing) |
-| `height` | string | CSS height string (e.g., `"25mm"`, `"1in"`) |
-| `data` | jsonb | Custom metadata |
-| `thumbnail` | text | Base64 data URI for preview |
-| `created_by_uuid` | UUID | Optional FK to users |
+Three tables created by the PhoenixKit migration system (V86 for initial tables, V88 for Google Docs fields):
 
 ### `phoenix_kit_doc_templates`
 
@@ -133,15 +112,12 @@ Three tables created by the migration system (currently at V04):
 | `slug` | string | URL-safe identifier (unique, auto-generated from name) |
 | `description` | text | Template description |
 | `status` | string | `"published"` or `"trashed"` |
-| `content_html` | text | HTML with `{{ variable }}` placeholders |
+| `content_html` | text | HTML content (cached from Google Doc) |
 | `content_css` | text | CSS styles |
-| `content_native` | jsonb | GrapesJS project data |
-| `variables` | jsonb | Array of `{name, label, type, default}` objects |
-| `header_uuid` | UUID (FK) | Optional header design |
-| `footer_uuid` | UUID (FK) | Optional footer design |
-| `config` | jsonb | `{paper_size, orientation, page_count}` |
-| `data` | jsonb | Custom metadata |
+| `variables` | jsonb | Array of variable definitions |
+| `config` | jsonb | Configuration (e.g., paper_size) |
 | `thumbnail` | text | Base64 data URI for preview |
+| `google_doc_id` | string | Google Doc ID for API operations |
 
 ### `phoenix_kit_doc_documents`
 
@@ -150,74 +126,102 @@ Three tables created by the migration system (currently at V04):
 | `uuid` | UUID (PK) | Auto-generated |
 | `name` | string | Document name |
 | `template_uuid` | UUID (FK) | Template this was created from (optional) |
-| `content_html` | text | Rendered HTML (variables already substituted) |
+| `content_html` | text | HTML content (cached from Google Doc) |
 | `content_css` | text | CSS styles |
-| `content_native` | jsonb | GrapesJS project data |
-| `variable_values` | jsonb | Map of `{variable_name => value}` used during creation |
-| `header_html` | text | Baked header HTML (copied from header at creation time) |
-| `header_css` | text | Baked header CSS |
-| `header_height` | string | Header height CSS value (e.g., `"25mm"`) |
-| `footer_html` | text | Baked footer HTML (copied from footer at creation time) |
-| `footer_css` | text | Baked footer CSS |
-| `footer_height` | string | Footer height CSS value (e.g., `"20mm"`) |
-| `config` | jsonb | `{paper_size, orientation, page_count}` |
-| `data` | jsonb | Custom metadata |
+| `variable_values` | jsonb | Map of variable values used during creation |
+| `config` | jsonb | Configuration |
 | `thumbnail` | text | Base64 data URI for preview |
+| `google_doc_id` | string | Google Doc ID for API operations |
 | `created_by_uuid` | UUID | Optional FK to users |
 
-Note: The `status` column exists in the database (added by V01 migration with default `"draft"`) but is not currently exposed in the Ecto schema — documents don't use status-based filtering. The `header_uuid` and `footer_uuid` FK columns were removed in V04 — documents now store baked copies of header/footer content so they remain self-contained even if the original header/footer is deleted.
+### `phoenix_kit_doc_headers_footers`
+
+| Column | Type | Description |
+|---|---|---|
+| `uuid` | UUID (PK) | Auto-generated |
+| `name` | string | Display name |
+| `type` | string | `"header"` or `"footer"` (discriminator) |
+| `html` | text | HTML content |
+| `css` | text | CSS styles |
+| `height` | string | CSS height value (e.g., `"25mm"`) |
+| `thumbnail` | text | Base64 data URI for preview |
+| `google_doc_id` | string | Google Doc ID for API operations |
+| `created_by_uuid` | UUID | Optional FK to users |
 
 ## Context API
 
 ### `PhoenixKitDocumentCreator.Documents`
 
+All operations go through Google Drive — no local database CRUD for document content.
+
 #### Templates
 
 ```elixir
-Documents.list_templates()                    # All non-trashed, ordered by updated_at
-Documents.list_templates(status: "published") # Filter by status
-Documents.get_template(uuid)                  # Get by UUID (nil if not found)
-Documents.create_template(attrs)              # {:ok, template} | {:error, changeset}
-Documents.update_template(template, attrs)    # {:ok, template} | {:error, changeset}
-Documents.delete_template(template)           # {:ok, template} | {:error, changeset}
+Documents.list_templates()                    # All templates from Drive /templates folder
+Documents.create_template(name)               # Create blank Google Doc in /templates
 ```
 
 #### Documents
 
 ```elixir
-Documents.list_documents()                    # All documents, ordered by updated_at
-Documents.get_document(uuid)                  # Get by UUID
-Documents.create_document(attrs)              # {:ok, document} | {:error, changeset}
-Documents.update_document(document, attrs)    # {:ok, document} | {:error, changeset}
-Documents.delete_document(document)           # {:ok, document} | {:error, changeset}
+Documents.list_documents()                    # All documents from Drive /documents folder
+Documents.create_document(name)               # Create blank Google Doc in /documents
 
 # Create from template with variable substitution
-Documents.create_document_from_template(template_uuid, %{
+Documents.create_document_from_template(template_file_id, %{
   "client_name" => "Acme Corp",
   "date" => "2026-03-14"
 }, name: "Acme Contract")
-# Returns {:ok, document} | {:error, :template_not_found} | {:error, changeset}
+# Copies template, replaces {{ variables }}, returns {:ok, %{doc_id, url}}
 ```
 
-#### Headers & Footers
+#### Variables
 
 ```elixir
-Documents.list_headers()                      # All headers, ordered by name
-Documents.list_footers()                      # All footers, ordered by name
-Documents.get_header_footer(uuid)             # Get by UUID (either type)
-Documents.create_header(attrs)                # Automatically sets type: "header"
-Documents.create_footer(attrs)                # Automatically sets type: "footer"
-Documents.update_header_footer(hf, attrs)     # {:ok, hf} | {:error, changeset}
-Documents.delete_header_footer(hf)            # {:ok, hf} | {:error, changeset}
+Documents.detect_variables(file_id)           # {:ok, ["client_name", "date"]}
+```
+
+#### PDF Export
+
+```elixir
+Documents.export_pdf(file_id)                 # {:ok, pdf_binary}
+```
+
+#### Folders
+
+```elixir
+Documents.get_folder_ids()                    # %{templates_folder_id: ..., documents_folder_id: ...}
+Documents.refresh_folders()                   # Re-discover from Drive
+Documents.templates_folder_url()              # Google Drive URL for templates folder
+Documents.documents_folder_url()              # Google Drive URL for documents folder
+```
+
+### `PhoenixKitDocumentCreator.GoogleDocsClient`
+
+Low-level Google API client used by the Documents context:
+
+```elixir
+GoogleDocsClient.get_credentials()            # {:ok, creds} | {:error, :not_configured}
+GoogleDocsClient.authorization_url(redirect)  # {:ok, url} | {:error, :client_id_not_configured}
+GoogleDocsClient.exchange_code(code, uri)     # {:ok, creds} (exchanges OAuth code for tokens)
+GoogleDocsClient.refresh_access_token()       # {:ok, new_token} (auto-refresh on 401)
+GoogleDocsClient.connection_status()          # {:ok, %{email: ...}} | {:error, reason}
+
+GoogleDocsClient.create_document(title, opts) # Create Google Doc in Drive
+GoogleDocsClient.copy_file(id, name, opts)    # Copy file in Drive
+GoogleDocsClient.replace_all_text(id, vars)   # Substitute {{ variables }} in a Doc
+GoogleDocsClient.get_document_text(id)        # Extract plain text for variable detection
+GoogleDocsClient.export_pdf(id)               # Export as PDF binary
+GoogleDocsClient.fetch_thumbnail(id)          # Fetch thumbnail as base64 data URI
 ```
 
 ## Variable System
 
-Templates support `{{ variable_name }}` placeholders using Liquid/Solid syntax.
+Templates support `{{ variable_name }}` placeholders.
 
 ### Auto-detection
 
-Variables are extracted from template HTML via regex:
+Variables are extracted from Google Doc text content via regex:
 
 ```elixir
 PhoenixKitDocumentCreator.Variable.extract_from_html("<p>Dear {{ client_name }},</p>")
@@ -235,86 +239,6 @@ Variable types are guessed from names:
 | `description`, `notes` | `:multiline` |
 | anything else | `:text` |
 
-### Rendering
-
-When creating a document from a template, variables are rendered via Solid (Liquid engine). If Solid parsing fails (e.g., HTML contains Liquid-incompatible syntax), it falls back to regex substitution.
-
-## PDF Generation
-
-### `EditorPdfHelpers.generate_pdf/2`
-
-```elixir
-EditorPdfHelpers.generate_pdf(html,
-  paper_size: "a4",           # "a4" | "letter" | "legal" | "tabloid"
-  header_html: "<div>...</div>",
-  footer_html: "<div>...</div>",
-  header_height: "25mm",
-  footer_height: "20mm"
-)
-# Returns {:ok, base64_pdf} | {:error, reason}
-```
-
-### Paper sizes
-
-| Size | Dimensions (CSS pixels at 96 DPI) | Inches |
-|---|---|---|
-| A4 | 794 x 1123 | 8.27 x 11.69 |
-| Letter | 816 x 1056 | 8.5 x 11 |
-| Legal | 816 x 1344 | 8.5 x 14 |
-| Tabloid | 1056 x 1632 | 11 x 17 |
-
-### Unit conversion
-
-Three unit systems are used, all based on the CSS standard of 1in = 96px:
-
-| System | Where | Example |
-|---|---|---|
-| CSS pixels | GrapesJS canvas (`editor_hooks.js`) | A4 = 794 x 1123px |
-| Inches | ChromicPDF `paperWidth`/`paperHeight` | A4 = 8.27 x 11.69in |
-| CSS units | Header/footer heights | `"25mm"`, `"1in"` |
-
-All resolve to the same physical dimensions (1mm = 3.7795px = 1/25.4in).
-
-## JavaScript Architecture
-
-### Base64-encoded compile-time delivery
-
-The GrapesJS editor hooks are delivered via a base64-encoded compile-time embedding pattern. The JS source (`editor_hooks.js`) is read and encoded at compile time by `EditorScripts`, then emitted as a `data-` attribute on a hidden `<div>`. A tiny inline bootstrapper decodes and executes it.
-
-**Why not inline `<script>` tags?**
-
-1. LiveView's morphdom breaks `</script>` boundaries during connected render
-2. HTML strings inside JS confuse the rendering pipeline
-3. Browser extensions (MetaMask etc.) block `eval()` from inline scripts
-
-See `EditorScripts` moduledoc for full details.
-
-**Editing the JS:**
-
-1. Edit `lib/phoenix_kit_document_creator/web/components/editor_hooks.js`
-2. From parent app: `mix deps.compile phoenix_kit_document_creator --force`
-3. Restart the Phoenix server
-
-### GrapesJS integration
-
-GrapesJS is loaded dynamically from CDN on first use. The editor hooks provide:
-
-- **Paper size management** — canvas dimensions match paper size at 96 DPI
-- **Multi-page support** — auto page count, page dividers, add/remove buttons
-- **Header/footer preview** — rendered in iframes above/below the editable area
-- **Template variable blocks** — insertable `{{ variable }}` tokens
-- **Save/load** — serializes GrapesJS project data for DB persistence
-- **PDF export** — extracts HTML/CSS and sends to server for ChromicPDF generation
-- **Media selector** — integrates with PhoenixKit Storage for image insertion
-
-### Hooks registered
-
-| Hook | Used by |
-|---|---|
-| `GrapesJSTemplateEditor` | Template editor page |
-| `GrapesJSDocumentEditor` | Document editor page |
-| `GrapesJSHFEditor` | Header/footer editor page |
-
 ## Navigation (Paths Module)
 
 All paths go through `PhoenixKit.Utils.Routes.path/1` via the centralized `Paths` module:
@@ -323,77 +247,10 @@ All paths go through `PhoenixKit.Utils.Routes.path/1` via the centralized `Paths
 alias PhoenixKitDocumentCreator.Paths
 
 Paths.index()                  # /admin/document-creator
-Paths.template_new()           # /admin/document-creator/templates/new
-Paths.template_edit(uuid)      # /admin/document-creator/templates/:uuid/edit
-Paths.document_edit(uuid)      # /admin/document-creator/documents/:uuid/edit
-Paths.headers()                # /admin/document-creator/headers
-Paths.header_new()             # /admin/document-creator/headers/new
-Paths.header_edit(uuid)        # /admin/document-creator/headers/:uuid/edit
-Paths.footers()                # /admin/document-creator/footers
-Paths.footer_new()             # /admin/document-creator/footers/new
-Paths.footer_edit(uuid)        # /admin/document-creator/footers/:uuid/edit
-Paths.testing()                # /admin/document-creator/testing
-Paths.testing_pdfme()          # /admin/document-creator/testing/pdfme
-Paths.testing_tiptap()         # /admin/document-creator/testing/tiptap
+Paths.templates()              # /admin/document-creator/templates
+Paths.documents()              # /admin/document-creator/documents
+Paths.settings()               # /admin/settings/document-creator
 ```
-
-## Shared Components
-
-The module demonstrates component reuse across multiple LiveViews:
-
-| Component | File | Used by |
-|---|---|---|
-| `EditorScripts` | `web/components/editor_scripts.ex` | All editor pages |
-| `EditorPanel` | `web/components/editor_panel.ex` | Template and document editors |
-| `CreateDocumentModal` | `web/components/create_document_modal.ex` | Documents landing page |
-
-### EditorPanel
-
-Shared GrapesJS editor container used by both the template and document editors. Parameterized via attrs:
-
-```elixir
-import PhoenixKitDocumentCreator.Web.Components.EditorPanel
-
-<.editor_panel
-  id="template"
-  hook="GrapesJSTemplateEditor"
-  save_event="save_template"
-  template_vars={true}
-/>
-```
-
-### CreateDocumentModal
-
-Multi-step modal for creating documents:
-
-1. **Choose** — blank document or pick a published template
-2. **Variables** — fill in template variable values (if template selected)
-3. **Create** — renders variables via Solid and redirects to document editor
-
-## Migration System
-
-Uses PhoenixKit's versioned migration pattern. Version tracked via SQL comment on the `phoenix_kit_doc_headers_footers` table.
-
-| Version | Changes |
-|---|---|
-| V01 | Initial tables: `headers_footers` (paired header/footer columns), `templates` (single `header_footer_uuid` FK), `documents` (single `header_footer_uuid` FK) |
-| V02 | Refactor headers/footers from paired columns to type-discriminated records (`type` = `"header"` or `"footer"`). Replace single `header_footer_uuid` FK with separate `header_uuid` + `footer_uuid` on templates and documents. |
-| V03 | Add `thumbnail` text column to templates and documents for page preview data URIs |
-| V04 | Bake header/footer content into documents: add `header_html`, `header_css`, `header_height`, `footer_html`, `footer_css`, `footer_height` columns, copy data from referenced header/footer records, then drop `header_uuid` and `footer_uuid` FK columns. Documents are now fully self-contained — deleting a header, footer, or template won't break existing documents. |
-
-### Coordinator
-
-```elixir
-PhoenixKitDocumentCreator.Migration.current_version()         # => 3
-PhoenixKitDocumentCreator.Migration.migrated_version()         # Reads DB version
-PhoenixKitDocumentCreator.Migration.up()                       # Run pending migrations
-PhoenixKitDocumentCreator.Migration.down()                     # Roll back all
-PhoenixKitDocumentCreator.Migration.migrated_version_runtime() # Safe for Mix tasks
-```
-
-### Upgrades
-
-When users update the dep and run `mix phoenix_kit.update`, PhoenixKit auto-detects the migration module, compares versions, and runs only the new migrations.
 
 ## PhoenixKit Module Integration
 
@@ -403,11 +260,11 @@ When users update the dep and run `mix phoenix_kit.update`, PhoenixKit auto-dete
 |---|---|
 | `module_key` | `"document_creator"` |
 | `module_name` | `"Document Creator"` |
-| `version` | `"0.2.0"` |
+| `version` | `"0.1.2"` |
 | `permission_metadata` | Key: `"document_creator"`, icon: `"hero-document-text"` |
-| `migration_module` | `PhoenixKitDocumentCreator.Migration` |
-| `children` | `[ChromeSupervisor]` (when ChromicPDF available) |
-| `admin_tabs` | 10 base + 3 conditional testing tabs |
+| `children` | `[]` |
+| `admin_tabs` | 3 tabs (parent + documents + templates) |
+| `settings_tabs` | 1 tab (Google OAuth settings) |
 
 ### Permission
 
@@ -417,40 +274,21 @@ The module registers `"document_creator"` as a permission key. Owner and Admin r
 
 ```
 lib/
-  phoenix_kit_document_creator.ex              # Main module (behaviour callbacks)
+  phoenix_kit_document_creator.ex              # Main module (behaviour callbacks, tab registration)
   phoenix_kit_document_creator/
-    chrome_supervisor.ex                       # Lazy Chrome startup
-    document_format.ex                         # Editor-agnostic document format
-    documents.ex                               # Context: templates, documents, headers/footers
+    documents.ex                               # Context: list/create/export via Google Drive
+    google_docs_client.ex                      # Google Docs + Drive API client with OAuth
+    variable.ex                                # Extract {{ variables }} and guess types
     paths.ex                                   # Centralized URL path helpers
-    variable.ex                                # Variable extraction and type guessing
-    migration.ex                               # Versioned migration coordinator
     schemas/
       document.ex                              # Document schema
       header_footer.ex                         # Header/footer schema (type discriminator)
       template.ex                              # Template schema (with slug auto-gen)
-    migration/postgres/
-      v01.ex                                   # Initial tables
-      v02.ex                                   # Split headers/footers
-      v03.ex                                   # Add thumbnails
-      v04.ex                                   # Bake header/footer content into documents
     web/
       documents_live.ex                        # Landing page (templates + documents tabs)
-      template_editor_live.ex                  # GrapesJS template editor
-      document_editor_live.ex                  # GrapesJS document editor
-      header_footer_live.ex                    # List page for headers/footers
-      header_footer_editor_live.ex             # GrapesJS header/footer editor
-      editor_pdf_helpers.ex                    # PDF generation via ChromicPDF
-      testing_live.ex                          # Testing hub (behind config)
-      editor_pdfme_test_live.ex                # pdfme editor test
-      editor_tiptap_test_live.ex               # TipTap editor test
+      google_oauth_settings_live.ex            # OAuth settings page
       components/
-        editor_scripts.ex                      # Base64-encoded JS loader
-        editor_hooks.js                        # GrapesJS hooks (~1500 lines)
-        editor_panel.ex                        # Shared editor UI component
         create_document_modal.ex               # Multi-step creation modal
-  mix/tasks/
-    phoenix_kit_document_creator.install.ex     # Installation task
 ```
 
 ## Development
@@ -463,52 +301,16 @@ mix credo --strict
 mix dialyzer
 ```
 
-### Recompiling JS changes
-
-After editing `editor_hooks.js`:
+### Running tests
 
 ```bash
-# From parent app directory
-mix deps.compile phoenix_kit_document_creator --force
-# Then restart the Phoenix server
+# Unit tests only (no database needed)
+mix test --exclude integration
+
+# All tests (requires PostgreSQL)
+createdb phoenix_kit_document_creator_test
+mix test
 ```
-
-The `@external_resource` annotation ensures Mix tracks the JS file. A content hash is embedded in the HTML so the bootstrapper re-executes on navigation when the JS has changed.
-
----
-
-## Open-Source Tools Reference
-
-### PDF Generation Libraries
-
-| Tool | Hex Package | Description | Status |
-|------|------------|-------------|--------|
-| **ChromicPDF** | `chromic_pdf` | HTML→PDF via Chrome DevTools protocol. Used by this module. | Active |
-| **PrawnEx** | `prawn_ex` | Pure Elixir PDF gen inspired by Ruby's Prawn. | New |
-| **Mudbrick** | `mudbrick` | PDF 2.0 generator. Pure functional, OpenType fonts. | Active |
-| **pdf** | `pdf` | Pure Elixir PDF. Manual coordinate positioning. | Maintained |
-
-### Typst-Based (alternative approach)
-
-| Tool | Hex Package | Description | Status |
-|------|------------|-------------|--------|
-| **typst** | `typst` | Rustler NIF bindings. ~5-30ms per PDF. 1.5M+/day documented. | Active |
-| **Imprintor** | `imprintor` | Typst via Rustler NIF. JSON data binding. | Active |
-
-### Template Engines
-
-| Tool | Hex Package | Description | Status |
-|------|------------|-------------|--------|
-| **Solid** | `solid` | Liquid template engine. `{{ variable }}` syntax. Used by this module. | Active |
-| **Carbone** | Docker | DOCX/ODT templates + JSON → PDF/DOCX. Self-hosted. | Active |
-
-### Rich Text Editors
-
-| Tool | Integration | Description | Status |
-|------|------------|-------------|--------|
-| **GrapesJS** | CDN + JS hook | Drag-and-drop page builder. Used by this module. | Active |
-| **TipTap** | JS hook | Headless editor on ProseMirror. Good LiveView fit. | Active |
-| **CKEditor 5** | `ckeditor5_phoenix` | Feature-rich. GPL/commercial license. | Active |
 
 ## License
 

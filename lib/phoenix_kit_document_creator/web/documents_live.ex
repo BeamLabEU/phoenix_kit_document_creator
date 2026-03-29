@@ -1,84 +1,153 @@
 defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   @moduledoc """
-  Main landing page for the Document Creator.
+  Main listing page for the Document Creator.
 
-  Shows templates and documents as card grids with scaled page previews.
-  Includes a create-document modal (blank or from template with variable form).
+  Lists templates and documents directly from Google Drive folders.
+  All editing happens in Google Docs (opens in new tab).
   """
   use Phoenix.LiveView
 
   import PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal
 
   alias PhoenixKitDocumentCreator.Documents
-  alias PhoenixKitDocumentCreator.Paths
+  alias PhoenixKitDocumentCreator.GoogleDocsClient
 
-  # Preview iframe is rendered at full page width (794px for A4) then CSS-scaled
-  # down by 0.23 to fit ~183px wide card preview area.
-  # Container: 183×258px, iframe: 794×1123px, scale(0.23)
+  @pubsub_topic "document_creator:files"
 
   @impl true
   def mount(_params, _session, socket) do
-    {templates, documents} =
-      if connected?(socket) do
-        {Documents.list_templates(), Documents.list_documents()}
-      else
-        {[], []}
+    google_connected =
+      case GoogleDocsClient.connection_status() do
+        {:ok, _} -> true
+        _ -> false
       end
+
+    if connected?(socket) do
+      PhoenixKit.PubSubHelper.subscribe(@pubsub_topic)
+
+      if google_connected do
+        send(self(), :load_files)
+        # Poll for external changes every 2 minutes
+        :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
+      end
+    end
 
     {:ok,
      assign(socket,
        page_title: "Document Creator",
-       active_tab: "templates",
-       templates: templates,
-       documents: documents,
+       view_mode: "cards",
+       google_connected: google_connected,
+       templates: [],
+       documents: [],
+       thumbnails: %{},
+       loading: google_connected,
+       error: nil,
        # Modal state
        modal_open: false,
        modal_step: "choose",
        modal_selected_template: nil,
-       modal_creating: false,
-       # Delete confirmation
-       confirm_delete: nil,
-       confirm_delete_type: nil
+       modal_variables: [],
+       modal_creating: false
      )}
   end
 
-  # ── Tab switch ──────────────────────────────────────────────────
+  # ── Data loading ──────────────────────────────────────────────────
 
   @impl true
-  def handle_event("switch_tab", %{"tab" => tab}, socket) do
-    {:noreply, assign(socket, active_tab: tab)}
+  def handle_info(:load_files, socket) do
+    do_load_files(socket, _silent = false)
+  end
+
+  def handle_info(:load_files_silent, socket) do
+    do_load_files(socket, _silent = true)
+  end
+
+  def handle_info(:load_thumbnails, socket) do
+    all_files = socket.assigns.templates ++ socket.assigns.documents
+    thumbnails = Documents.fetch_thumbnails(all_files)
+    {:noreply, assign(socket, thumbnails: thumbnails)}
+  end
+
+  def handle_info(:poll_for_changes, socket) do
+    unless socket.assigns.loading do
+      send(self(), :load_files_silent)
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(:files_changed, socket) do
+    # Another user's refresh detected changes — reload our list too
+    unless socket.assigns.loading do
+      send(self(), :load_files_silent)
+    end
+
+    {:noreply, socket}
+  end
+
+  defp do_load_files(socket, silent) do
+    templates = Documents.list_templates()
+    documents = Documents.list_documents()
+
+    old_fingerprint = files_fingerprint(socket.assigns.templates, socket.assigns.documents)
+    new_fingerprint = files_fingerprint(templates, documents)
+    changed = old_fingerprint != new_fingerprint
+
+    if changed and old_fingerprint != nil do
+      PhoenixKit.PubSubHelper.broadcast(@pubsub_topic, :files_changed)
+      send(self(), :load_thumbnails)
+    end
+
+    if silent do
+      {:noreply, assign(socket, templates: templates, documents: documents)}
+    else
+      send(self(), :load_thumbnails)
+      {:noreply, assign(socket, templates: templates, documents: documents, loading: false)}
+    end
+  end
+
+  # ── View toggle ──────────────────────────────────────────────────
+
+  @impl true
+  def handle_event("switch_view", %{"mode" => mode}, socket) do
+    {:noreply, assign(socket, view_mode: mode)}
+  end
+
+  # ── Create actions ───────────────────────────────────────────────
+
+  def handle_event("new_template", _params, socket) do
+    case Documents.create_template() do
+      {:ok, %{url: url}} ->
+        broadcast_files_changed()
+        {:noreply, push_event(socket, "open-url", %{url: url})}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, error: "Failed to create template: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_event("new_blank_document", _params, socket) do
+    case Documents.create_document() do
+      {:ok, %{url: url}} ->
+        broadcast_files_changed()
+        {:noreply, push_event(socket, "open-url", %{url: url})}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, error: "Failed to create document: #{inspect(reason)}")}
+    end
   end
 
   # ── Modal events ───────────────────────────────────────────────────
 
   def handle_event("open_modal", _params, socket) do
-    published = Documents.published_templates()
-
     {:noreply,
      assign(socket,
        modal_open: true,
        modal_step: "choose",
        modal_selected_template: nil,
-       modal_creating: false,
-       templates: Documents.list_templates(),
-       modal_templates: published
+       modal_variables: [],
+       modal_creating: false
      )}
-  end
-
-  def handle_event("open_modal_with_template", %{"uuid" => uuid}, socket) do
-    case Documents.get_template(uuid) do
-      nil ->
-        {:noreply, socket}
-
-      template ->
-        {:noreply,
-         assign(socket,
-           modal_open: true,
-           modal_step: "variables",
-           modal_selected_template: template,
-           modal_creating: false
-         )}
-    end
   end
 
   def handle_event("modal_close", _params, socket) do
@@ -86,343 +155,436 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("modal_back", _params, socket) do
-    {:noreply, assign(socket, modal_step: "choose", modal_selected_template: nil)}
+    {:noreply,
+     assign(socket, modal_step: "choose", modal_selected_template: nil, modal_variables: [])}
   end
 
   def handle_event("modal_create_blank", _params, socket) do
-    case Documents.create_document(%{name: "Untitled Document"}) do
-      {:ok, doc} ->
+    case Documents.create_document() do
+      {:ok, %{url: url}} ->
+        broadcast_files_changed()
+
         {:noreply,
          socket
          |> assign(modal_open: false)
-         |> redirect(to: Paths.document_edit(doc.uuid))}
+         |> push_event("open-url", %{url: url})}
 
       {:error, _} ->
         {:noreply, socket}
     end
   end
 
-  def handle_event("modal_select_template", %{"uuid" => uuid}, socket) do
-    case Documents.get_template(uuid) do
-      nil ->
-        {:noreply, socket}
+  def handle_event("modal_select_template", %{"id" => file_id, "name" => name}, socket) do
+    # Detect variables from the template
+    variables =
+      case Documents.detect_variables(file_id) do
+        {:ok, vars} ->
+          PhoenixKitDocumentCreator.Variable.build_definitions(vars)
+          |> Enum.map(&Map.from_struct/1)
 
-      template ->
-        {:noreply, assign(socket, modal_step: "variables", modal_selected_template: template)}
+        _ ->
+          []
+      end
+
+    template = %{"id" => file_id, "name" => name}
+
+    if variables == [] do
+      # No variables — create directly
+      case Documents.create_document_from_template(file_id, %{}, name: name) do
+        {:ok, %{url: url}} ->
+          broadcast_files_changed()
+          {:noreply, socket |> assign(modal_open: false) |> push_event("open-url", %{url: url})}
+
+        {:error, reason} ->
+          {:noreply, assign(socket, error: "Failed: #{inspect(reason)}")}
+      end
+    else
+      {:noreply,
+       assign(socket,
+         modal_step: "variables",
+         modal_selected_template: template,
+         modal_variables: variables
+       )}
     end
   end
 
   def handle_event("modal_create_from_template", params, socket) do
-    template_uuid = Map.get(params, "template_uuid")
-    doc_name = Map.get(params, "doc_name", "")
+    template = socket.assigns.modal_selected_template
+    file_id = template["id"]
+    doc_name = Map.get(params, "doc_name", template["name"])
     variable_values = Map.get(params, "var", %{})
 
-    case Documents.create_document_from_template(template_uuid, variable_values, name: doc_name) do
-      {:ok, doc} ->
+    socket = assign(socket, modal_creating: true)
+
+    case Documents.create_document_from_template(file_id, variable_values, name: doc_name) do
+      {:ok, %{url: url}} ->
+        broadcast_files_changed()
+
         {:noreply,
          socket
-         |> assign(modal_open: false)
-         |> redirect(to: Paths.document_edit(doc.uuid))}
+         |> assign(modal_open: false, modal_creating: false)
+         |> push_event("open-url", %{url: url})}
 
-      {:error, _reason} ->
-        {:noreply, assign(socket, modal_creating: false)}
+      {:error, reason} ->
+        {:noreply, assign(socket, modal_creating: false, error: "Failed: #{inspect(reason)}")}
     end
   end
 
-  # ── Delete events ──────────────────────────────────────────────────
+  # ── PDF export ───────────────────────────────────────────────────
 
-  def handle_event("confirm_delete", %{"uuid" => uuid, "type" => type}, socket) do
-    {:noreply, assign(socket, confirm_delete: uuid, confirm_delete_type: type)}
-  end
+  def handle_event("export_pdf", %{"id" => file_id, "name" => name}, socket) do
+    case Documents.export_pdf(file_id) do
+      {:ok, pdf_binary} ->
+        base64 = Base.encode64(pdf_binary)
+        filename = sanitize_filename(name)
+        {:noreply, push_event(socket, "download-pdf", %{base64: base64, filename: filename})}
 
-  def handle_event("cancel_delete", _params, socket) do
-    {:noreply, assign(socket, confirm_delete: nil, confirm_delete_type: nil)}
-  end
-
-  def handle_event("delete", %{"uuid" => uuid, "type" => type}, socket) do
-    result =
-      case type do
-        "template" ->
-          with %{} = t <- Documents.get_template(uuid), do: Documents.delete_template(t)
-
-        "document" ->
-          with %{} = d <- Documents.get_document(uuid), do: Documents.delete_document(d)
-
-        _ ->
-          {:error, :unknown_type}
-      end
-
-    case result do
-      {:ok, _} ->
-        {:noreply,
-         assign(socket,
-           templates: Documents.list_templates(),
-           documents: Documents.list_documents(),
-           confirm_delete: nil,
-           confirm_delete_type: nil
-         )}
-
-      _ ->
-        {:noreply, assign(socket, confirm_delete: nil, confirm_delete_type: nil)}
+      {:error, reason} ->
+        {:noreply, assign(socket, error: "PDF export failed: #{inspect(reason)}")}
     end
+  end
+
+  # ── Refresh ──────────────────────────────────────────────────────
+
+  def handle_event("refresh", _params, socket) do
+    send(self(), :load_files)
+    {:noreply, assign(socket, loading: true)}
+  end
+
+  def handle_event("silent_refresh", _params, socket) do
+    unless socket.assigns.loading do
+      send(self(), :load_files_silent)
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("dismiss_error", _params, socket) do
+    {:noreply, assign(socket, error: nil)}
   end
 
   # ── Render ─────────────────────────────────────────────────────────
 
   @impl true
   def render(assigns) do
-    assigns = assign_modal_templates(assigns)
-
     ~H"""
     <div class="flex flex-col mx-auto max-w-6xl px-4 py-6 gap-6">
-      <%!-- Header --%>
-      <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold">Document Creator</h1>
-        <div class="flex gap-2">
-          <a href={Paths.template_new()} class="btn btn-ghost btn-sm">
-            <span class="hero-plus w-4 h-4" /> New Template
-          </a>
-          <button class="btn btn-primary btn-sm" phx-click="open_modal">
-            <span class="hero-document-plus w-4 h-4" /> New Document
-          </button>
+      <%!-- Not connected banner --%>
+      <%= if not @google_connected do %>
+        <div class="card bg-base-100 shadow-sm border border-warning/30">
+          <div class="card-body items-center text-center py-12">
+            <span class="hero-exclamation-triangle w-12 h-12 text-warning" />
+            <h2 class="card-title mt-2">Google Account Not Connected</h2>
+            <p class="text-sm text-base-content/60 max-w-md">
+              The Document Creator uses Google Docs for editing and Google Drive for storage.
+              Connect a Google account in Settings to get started.
+            </p>
+            <div class="card-actions mt-4">
+              <a href={settings_path()} class="btn btn-primary btn-sm">
+                <span class="hero-cog-6-tooth w-4 h-4" /> Go to Settings
+              </a>
+            </div>
+          </div>
         </div>
-      </div>
-
-      <%!-- Tabs --%>
-      <div role="tablist" class="tabs tabs-bordered">
-        <button
-          role="tab"
-          class={"tab #{if @active_tab == "templates", do: "tab-active", else: ""}"}
-          phx-click="switch_tab"
-          phx-value-tab="templates"
-        >
-          Templates
-          <span class="badge badge-sm ml-1">{length(@templates)}</span>
-        </button>
-        <button
-          role="tab"
-          class={"tab #{if @active_tab == "documents", do: "tab-active", else: ""}"}
-          phx-click="switch_tab"
-          phx-value-tab="documents"
-        >
-          Documents
-          <span class="badge badge-sm ml-1">{length(@documents)}</span>
-        </button>
-      </div>
-
-      <%!-- Tab content --%>
-      <%= if @active_tab == "templates" do %>
-        {render_templates_grid(assigns)}
       <% else %>
-        {render_documents_grid(assigns)}
+        <%!-- Header --%>
+        <div class="flex items-center justify-between">
+          <h1 class="text-2xl font-bold">
+            {if @live_action == :templates, do: "Templates", else: "Documents"}
+          </h1>
+          <div class="flex gap-2">
+            <button class="btn btn-ghost btn-sm" phx-click="refresh" disabled={@loading}>
+              <span :if={@loading} class="loading loading-spinner loading-xs" />
+              <span :if={not @loading} class="hero-arrow-path w-4 h-4" />
+            </button>
+            <%= if @live_action == :templates do %>
+              <a :if={templates_folder_url()} href={templates_folder_url()} target="_blank" class="btn btn-ghost btn-sm">
+                <span class="hero-folder-open w-4 h-4" /> Open Folder
+              </a>
+              <button class="btn btn-primary btn-sm" phx-click="new_template">
+                <span class="hero-plus w-4 h-4" /> New Template
+              </button>
+            <% else %>
+              <a :if={documents_folder_url()} href={documents_folder_url()} target="_blank" class="btn btn-ghost btn-sm">
+                <span class="hero-folder-open w-4 h-4" /> Open Folder
+              </a>
+              <button class="btn btn-primary btn-sm" phx-click="open_modal">
+                <span class="hero-document-plus w-4 h-4" /> New Document
+              </button>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- View Toggle --%>
+        <div class="flex items-center justify-end">
+          <div class="flex gap-1">
+            <button
+              class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "cards", do: "btn-active"}"}
+              phx-click="switch_view"
+              phx-value-mode="cards"
+            >
+              <span class="hero-squares-2x2 w-4 h-4" />
+            </button>
+            <button
+              class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "list", do: "btn-active"}"}
+              phx-click="switch_view"
+              phx-value-mode="list"
+            >
+              <span class="hero-list-bullet w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        <%!-- Error --%>
+        <div :if={@error} class="alert alert-error" phx-click="dismiss_error">
+          <span class="hero-x-circle w-5 h-5" />
+          <span>{@error}</span>
+        </div>
+
+        <%!-- Loading skeletons --%>
+        <%= if @loading do %>
+          <%= if @view_mode == "cards" do %>
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+              <div
+                :for={_ <- 1..5}
+                class="flex flex-col animate-pulse skeleton"
+                style="border: 1.5px solid oklch(var(--color-base-content) / 0.1); border-radius: 8px; overflow: hidden; padding-bottom: 12px;"
+              >
+                <div style="padding:16px 16px 24px 16px;display:flex;justify-content:center;">
+                  <div class="skeleton" style="width:183px;height:258px;border-radius:4px;" />
+                </div>
+                <div class="p-3 flex-1 flex flex-col gap-2">
+                  <div class="skeleton h-4 rounded w-3/4" />
+                  <div class="skeleton h-3 rounded w-1/2 mt-auto" />
+                </div>
+                <div class="flex gap-1 px-2 pb-2 pt-1">
+                  <div class="skeleton flex-1 h-6 rounded" />
+                  <div class="skeleton flex-1 h-6 rounded" />
+                </div>
+              </div>
+            </div>
+          <% else %>
+            <div class="overflow-x-auto">
+              <table class="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Modified</th>
+                    <th class="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={_ <- 1..6}>
+                    <td><div class="skeleton h-4 rounded w-48" /></td>
+                    <td><div class="skeleton h-4 rounded w-24" /></td>
+                    <td class="text-right">
+                      <div class="flex gap-1 justify-end">
+                        <div class="skeleton h-6 w-6 rounded" />
+                        <div class="skeleton h-6 w-6 rounded" />
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          <% end %>
+        <% end %>
+
+        <%!-- Content --%>
+        <%= if not @loading do %>
+          <%= if @live_action == :templates do %>
+            {render_file_grid(assign_files(assigns, @templates))}
+          <% else %>
+            {render_file_grid(assign_files(assigns, @documents))}
+          <% end %>
+        <% end %>
       <% end %>
     </div>
+
+    <button id="silent-refresh-btn" phx-click="silent_refresh" class="hidden" />
 
     <%!-- Create document modal --%>
     <.modal
       open={@modal_open}
-      templates={@modal_templates}
+      templates={@templates}
       step={@modal_step}
       selected_template={@modal_selected_template}
+      variables={@modal_variables}
       creating={@modal_creating}
+      thumbnails={@thumbnails}
     />
 
-    <style>
-      .page-preview-container {
-        width: 183px;
-        height: 258px;
-        overflow: hidden;
-        position: relative;
-        border-radius: 4px;
-        background: #fff;
-        border: 1px solid oklch(var(--color-base-content) / 0.2);
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-      }
-      .page-preview-empty {
-        width: 183px;
-        height: 258px;
-        border-radius: 4px;
-        background: oklch(var(--color-base-200));
-        border: 1px solid oklch(var(--color-base-300));
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-    </style>
+    <script>
+      window.addEventListener("phx:open-url", function(e) {
+        var a = document.createElement("a");
+        a.href = e.detail.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      });
+      window.addEventListener("phx:download-pdf", function(e) {
+        var a = document.createElement("a");
+        a.href = "data:application/pdf;base64," + e.detail.base64;
+        a.download = e.detail.filename;
+        a.click();
+      });
+      // Silently check for changes when tab regains focus (user returns from Google Docs)
+      (function() {
+        var lastHidden = 0;
+        document.addEventListener("visibilitychange", function() {
+          if (document.visibilityState === "hidden") {
+            lastHidden = Date.now();
+          } else if (document.visibilityState === "visible" && Date.now() - lastHidden > 3000) {
+            var btn = document.getElementById("silent-refresh-btn");
+            if (btn) btn.click();
+          }
+        });
+      })();
+    </script>
     """
   end
 
-  # ── Templates grid ──────────────────────────────────────────────
+  # ── File grid ──────────────────────────────────────────────────
 
-  defp render_templates_grid(assigns) do
+  defp assign_files(assigns, files) do
+    %{files: files, view_mode: assigns.view_mode, thumbnails: assigns.thumbnails}
+  end
+
+  defp render_file_grid(assigns) do
     ~H"""
-    <div :if={@templates == []} class="card bg-base-100 shadow-sm">
+    <div :if={@files == []} class="card bg-base-100 shadow-sm">
       <div class="card-body items-center text-center py-12">
         <span class="hero-document-text w-12 h-12 text-base-content/20" />
-        <p class="text-sm text-base-content/50 mt-2">No templates yet</p>
-        <a href={Paths.template_new()} class="btn btn-primary btn-sm mt-3">
-          Create First Template
-        </a>
+        <p class="text-sm text-base-content/50 mt-2">No files yet</p>
       </div>
     </div>
 
-    <div :if={@templates != []} class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-      <div
-        :for={tpl <- @templates}
-        class="group flex flex-col"
-        style="border: 1.5px solid currentColor; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 16px var(--color-neutral); background: oklch(var(--color-base-100)); padding-bottom: 12px;"
-      >
-        <%!-- Preview --%>
-        <a href={Paths.template_edit(tpl.uuid)} style="display:flex;justify-content:center;padding:16px 16px 24px 16px;background:oklch(var(--color-base-200));">
-          {render_page_preview(Map.merge(assigns, %{item: tpl}))}
-        </a>
+    <%= if @view_mode == "cards" do %>
+      <div :if={@files != []} class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+        <div
+          :for={file <- @files}
+          class="group flex flex-col card bg-base-100"
+          style="border: 1.5px solid currentColor; border-radius: 8px; overflow: hidden; padding-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"
+        >
+          <%!-- Preview --%>
+          <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" style="display:flex;justify-content:center;padding:16px 16px 24px 16px;background:oklch(var(--color-base-200));">
+            {render_thumbnail(%{thumbnail: @thumbnails[file["id"]]})}
+          </a>
 
-        <%!-- Info --%>
-        <div class="p-3 flex-1 flex flex-col">
-          <p class="font-medium text-sm truncate">{tpl.name}</p>
-          <p :if={tpl.description} class="text-xs text-base-content/50 truncate mt-0.5">
-            {tpl.description}
-          </p>
-          <div :if={(tpl.variables || []) != []} class="flex flex-wrap gap-1 mt-1.5">
-            <span
-              :for={var <- Enum.take(tpl.variables || [], 3)}
-              class="badge badge-xs badge-ghost"
-            >
-              {var["name"] || var[:name]}
-            </span>
-            <span :if={length(tpl.variables || []) > 3} class="text-xs text-base-content/40">
-              +{length(tpl.variables) - 3}
-            </span>
+          <%!-- Info --%>
+          <div class="p-3 flex-1 flex flex-col">
+            <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="font-medium text-sm truncate link link-hover">
+              {file["name"]}
+            </a>
+            <p :if={file["modifiedTime"]} class="text-xs text-base-content/40 mt-auto pt-2">
+              {format_time(file["modifiedTime"])}
+            </p>
           </div>
-          <p class="text-xs text-base-content/40 mt-auto pt-2">
-            {Calendar.strftime(tpl.updated_at, "%b %d, %Y")}
-          </p>
+
+          <%!-- Actions --%>
+          <div class="flex gap-1 px-2 pb-2 pt-1">
+            <a
+              href={GoogleDocsClient.get_edit_url(file["id"])}
+              target="_blank"
+              class="flex-1 btn btn-ghost btn-xs py-2"
+            >
+              <span class="hero-pencil-square w-3 h-3" /> Edit
+            </a>
+            <button
+              class="flex-1 btn btn-ghost btn-xs py-2"
+              phx-click="export_pdf"
+              phx-value-id={file["id"]}
+              phx-value-name={file["name"]}
+            >
+              <span class="hero-arrow-down-tray w-3 h-3" /> PDF
+            </button>
+          </div>
         </div>
-
-        <%!-- Actions --%>
-        <div class="flex gap-1 px-2 pb-2 pt-1">
-          <button
-            class="flex-1 btn btn-ghost btn-xs py-2"
-            phx-click="open_modal_with_template"
-            phx-value-uuid={tpl.uuid}
-          >
-            <span class="hero-document-plus w-3 h-3" /> Use
-          </button>
-          <a
-            href={Paths.template_edit(tpl.uuid)}
-            class="flex-1 btn btn-ghost btn-xs py-2"
-          >
-            <span class="hero-pencil-square w-3 h-3" /> Edit
-          </a>
-          {render_delete_button(Map.merge(assigns, %{item_uuid: tpl.uuid, item_type: "template"}))}
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  # ── Documents grid ──────────────────────────────────────────────
-
-  defp render_documents_grid(assigns) do
-    ~H"""
-    <div :if={@documents == []} class="card bg-base-100 shadow-sm">
-      <div class="card-body items-center text-center py-12">
-        <span class="hero-document-plus w-12 h-12 text-base-content/20" />
-        <p class="text-sm text-base-content/50 mt-2">No documents yet</p>
-        <button class="btn btn-primary btn-sm mt-3" phx-click="open_modal">
-          Create First Document
-        </button>
-      </div>
-    </div>
-
-    <div :if={@documents != []} class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-      <div
-        :for={doc <- @documents}
-        class="group flex flex-col"
-        style="border: 1.5px solid currentColor; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 16px var(--color-neutral); background: oklch(var(--color-base-100)); padding-bottom: 12px;"
-      >
-        <%!-- Preview --%>
-        <a href={Paths.document_edit(doc.uuid)} style="display:flex;justify-content:center;padding:16px 16px 24px 16px;background:oklch(var(--color-base-200));">
-          {render_page_preview(Map.merge(assigns, %{item: doc}))}
-        </a>
-
-        <%!-- Info --%>
-        <div class="p-3 flex-1 flex flex-col">
-          <p class="font-medium text-sm truncate">{doc.name}</p>
-          <p class="text-xs text-base-content/40 mt-auto pt-2">
-            {Calendar.strftime(doc.updated_at, "%b %d, %Y")}
-          </p>
-        </div>
-
-        <%!-- Actions --%>
-        <div class="flex gap-1 px-2 pb-2 pt-1">
-          <a
-            href={Paths.document_edit(doc.uuid)}
-            class="flex-1 btn btn-ghost btn-xs py-2"
-          >
-            <span class="hero-pencil-square w-3 h-3" /> Edit
-          </a>
-          {render_delete_button(Map.merge(assigns, %{item_uuid: doc.uuid, item_type: "document"}))}
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  # ── Page preview ────────────────────────────────────────────────
-
-  defp render_page_preview(assigns) do
-    thumbnail = assigns.item.thumbnail
-    has_thumbnail = is_binary(thumbnail) and thumbnail != ""
-    assigns = Map.merge(assigns, %{has_thumbnail: has_thumbnail, thumbnail: thumbnail})
-
-    ~H"""
-    <%= if @has_thumbnail do %>
-      <div class="page-preview-container mx-auto">
-        <iframe src={@thumbnail} sandbox="" scrolling="no" style="width:794px;height:1123px;border:none;pointer-events:none;transform:scale(0.23);transform-origin:top left;" />
       </div>
     <% else %>
-      <div class="page-preview-empty mx-auto">
-        <span class="hero-document-text w-10 h-10 text-base-content/15" />
+      <div :if={@files != []} class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Modified</th>
+              <th class="text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={file <- @files} class="hover:bg-base-200/50">
+              <td>
+                <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="font-medium link link-hover">
+                  {file["name"]}
+                </a>
+              </td>
+              <td class="text-base-content/60 text-nowrap">{format_time(file["modifiedTime"])}</td>
+              <td class="text-right">
+                <div class="flex gap-1 justify-end">
+                  <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="btn btn-ghost btn-xs" title="Edit">
+                    <span class="hero-pencil-square w-3.5 h-3.5" />
+                  </a>
+                  <button class="btn btn-ghost btn-xs" phx-click="export_pdf" phx-value-id={file["id"]} phx-value-name={file["name"]} title="Export PDF">
+                    <span class="hero-arrow-down-tray w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     <% end %>
     """
   end
 
-  # ── Shared components ──────────────────────────────────────────────
-
-  defp render_delete_button(assigns) do
+  defp render_thumbnail(assigns) do
     ~H"""
-    <%= if @confirm_delete == @item_uuid do %>
-      <button
-        class="flex-1 btn btn-error btn-xs py-2"
-        phx-click="delete"
-        phx-value-uuid={@item_uuid}
-        phx-value-type={@item_type}
-      >
-        Confirm
-      </button>
-      <button class="flex-1 btn btn-ghost btn-xs py-2" phx-click="cancel_delete">Cancel</button>
-    <% else %>
-      <button
-        class="flex-1 btn btn-ghost btn-xs text-error py-2"
-        phx-click="confirm_delete"
-        phx-value-uuid={@item_uuid}
-        phx-value-type={@item_type}
-      >
-        <span class="hero-trash w-3 h-3" />
-      </button>
-    <% end %>
+    <div style="width:183px;height:258px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+      <%= if @thumbnail do %>
+        <img src={@thumbnail} style="width:100%;height:100%;object-fit:cover;object-position:top;" />
+      <% else %>
+        <div style="width:100%;height:100%;background:#fff;" />
+      <% end %>
+    </div>
     """
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
 
-  defp assign_modal_templates(assigns) do
-    if Map.has_key?(assigns, :modal_templates) do
-      assigns
-    else
-      Map.put(assigns, :modal_templates, [])
+  defp settings_path, do: PhoenixKitDocumentCreator.Paths.settings()
+  defp templates_folder_url, do: Documents.templates_folder_url()
+  defp documents_folder_url, do: Documents.documents_folder_url()
+
+  defp format_time(nil), do: ""
+
+  defp format_time(iso_string) when is_binary(iso_string) do
+    case DateTime.from_iso8601(iso_string) do
+      {:ok, dt, _} -> Calendar.strftime(dt, "%b %d, %Y")
+      _ -> iso_string
     end
+  end
+
+  defp sanitize_filename(name) do
+    name
+    |> to_string()
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "-")
+    |> Kernel.<>(".pdf")
+  end
+
+  defp broadcast_files_changed do
+    PhoenixKit.PubSubHelper.broadcast(@pubsub_topic, :files_changed)
+  end
+
+  # Build a fingerprint from file lists to detect changes.
+  # Compares IDs, names, and modified times — if any differ, the list changed.
+  defp files_fingerprint([], []), do: nil
+
+  defp files_fingerprint(templates, documents) do
+    (templates ++ documents)
+    |> Enum.map(fn f -> {f["id"], f["name"], f["modifiedTime"]} end)
+    |> :erlang.phash2()
   end
 end

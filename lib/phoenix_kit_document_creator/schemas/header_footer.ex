@@ -19,6 +19,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.HeaderFooter do
   schema "phoenix_kit_doc_headers_footers" do
     field(:name, :string)
     field(:type, :string)
+    field(:google_doc_id, :string)
 
     field(:html, :string, default: "")
     field(:css, :string, default: "")
@@ -33,6 +34,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.HeaderFooter do
 
   @required_fields [:name, :type]
   @optional_fields [
+    :google_doc_id,
     :html,
     :css,
     :native,
