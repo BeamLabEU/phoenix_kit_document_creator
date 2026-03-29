@@ -8,15 +8,21 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     [
       app: :phoenix_kit_document_creator,
       version: @version,
-      elixir: "~> 1.15",
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       aliases: aliases(),
+
+      # Hex
       description:
         "Document Creator module for PhoenixKit — document templates and PDF generation via Google Docs",
       package: package(),
+
+      # Dialyzer
       dialyzer: [plt_add_apps: [:phoenix_kit]],
+
+      # Docs
       name: "PhoenixKitDocumentCreator",
       source_url: @source_url,
       docs: docs()
@@ -24,9 +30,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
   end
 
   def application do
-    [
-      extra_applications: [:logger]
-    ]
+    [extra_applications: [:logger]]
   end
 
   # test/support/ is compiled only in :test so DataCase and TestRepo
@@ -38,26 +42,23 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     [
       quality: ["format", "credo --strict", "dialyzer"],
       "quality.ci": ["format --check-formatted", "credo --strict", "dialyzer"],
-      precommit: ["compile", "quality"],
-      "test.setup": ["ecto.create --quiet", "ecto.migrate --quiet"],
-      "test.reset": ["ecto.drop --quiet", "test.setup"]
+      precommit: ["compile", "quality"]
     ]
   end
 
   defp deps do
     [
       # PhoenixKit provides the Module behaviour and Settings API.
-      # For local development, use: {:phoenix_kit, path: "../phoenix_kit"}
-      {:phoenix_kit, path: "../phoenix_kit"},
+      {:phoenix_kit, "~> 1.7"},
 
       # LiveView is needed for the admin pages.
-      {:phoenix_live_view, "~> 1.0"},
+      {:phoenix_live_view, "~> 1.1"},
 
       # HTTP client for Google Docs/Drive API
       {:req, "~> 0.5"},
 
       # Code quality
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:ex_doc, "~> 0.39", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
@@ -67,14 +68,14 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
+      files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 
   defp docs do
     [
       main: "PhoenixKitDocumentCreator",
-      source_ref: "v#{@version}"
+      source_ref: @version
     ]
   end
 end
