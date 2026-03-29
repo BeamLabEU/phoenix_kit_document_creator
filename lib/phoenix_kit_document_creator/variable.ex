@@ -2,8 +2,8 @@ defmodule PhoenixKitDocumentCreator.Variable do
   @moduledoc """
   Variable definitions for document templates.
 
-  Variables are placeholders in template text that get substituted with actual
-  values when generating a PDF. Uses Liquid/Solid syntax: `{{ variable_name }}`.
+  Variables are `{{ variable_name }}` placeholders in Google Docs templates that
+  get substituted with actual values via the Google Docs `replaceAllText` API.
   """
 
   @type variable_type :: :text | :date | :currency | :multiline
@@ -20,20 +20,23 @@ defmodule PhoenixKitDocumentCreator.Variable do
   defstruct [:name, :label, :type, default: nil, required: false]
 
   @doc """
-  Extracts variable names from an HTML string by scanning for
-  `{{ variable_name }}` patterns.
+  Extracts variable names from text by scanning for `{{ variable_name }}` patterns.
 
   Returns a sorted list of unique variable names (strings).
   """
-  def extract_from_html(html) when is_binary(html) do
+  def extract_variables(text) when is_binary(text) do
     ~r/\{\{\s*(\w+)\s*\}\}/
-    |> Regex.scan(html)
+    |> Regex.scan(text)
     |> Enum.map(fn [_full, name] -> name end)
     |> Enum.uniq()
     |> Enum.sort()
   end
 
-  def extract_from_html(_), do: []
+  def extract_variables(_), do: []
+
+  @doc false
+  @deprecated "Use extract_variables/1 instead"
+  def extract_from_html(text), do: extract_variables(text)
 
   @doc """
   Builds Variable structs from a list of variable names, guessing types from names.

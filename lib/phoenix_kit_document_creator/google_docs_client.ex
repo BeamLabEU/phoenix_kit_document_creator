@@ -14,6 +14,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   alias PhoenixKit.Settings
 
   @settings_key "document_creator_google_oauth"
+
+  @doc "The Settings key used for OAuth credential storage."
+  def settings_key, do: @settings_key
+
   @docs_base "https://docs.googleapis.com/v1"
   @drive_base "https://www.googleapis.com/drive/v3"
   @token_url "https://oauth2.googleapis.com/token"
@@ -147,7 +151,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   """
   def find_folder_by_name(name) do
     q =
-      "name = '#{name}' and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false"
+      "name = '#{escape_query_value(name)}' and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false"
 
     case authenticated_request(:get, "#{@drive_base}/files",
            params: [q: q, fields: "files(id,name)", pageSize: 1]
@@ -176,7 +180,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     }
 
     case authenticated_request(:post, "#{@drive_base}/files", json: body) do
-      {:ok, %{status: 200, body: %{"id" => id}}} -> {:ok, id}
+      {:ok, %{status: status, body: %{"id" => id}}} when status in 200..299 -> {:ok, id}
       {:ok, %{body: body}} -> {:error, "Create folder failed: #{inspect(body)}"}
       {:error, _} = err -> err
     end
@@ -244,7 +248,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   """
   def list_folder_files(folder_id) when is_binary(folder_id) and folder_id != "" do
     q =
-      "'#{folder_id}' in parents and mimeType = 'application/vnd.google-apps.document' and trashed = false"
+      "'#{escape_query_value(folder_id)}' in parents and mimeType = 'application/vnd.google-apps.document' and trashed = false"
 
     case authenticated_request(:get, "#{@drive_base}/files",
            params: [
@@ -290,7 +294,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     body = if parent, do: Map.put(body, :parents, [parent]), else: body
 
     case authenticated_request(:post, "#{@drive_base}/files", json: body) do
-      {:ok, %{status: 200, body: %{"id" => doc_id} = file}} ->
+      {:ok, %{status: status, body: %{"id" => doc_id} = file}} when status in 200..299 ->
         {:ok, %{doc_id: doc_id, name: file["name"], url: get_edit_url(doc_id)}}
 
       {:ok, %{body: body}} ->
@@ -359,7 +363,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     body = if parent, do: Map.put(body, :parents, [parent]), else: body
 
     case authenticated_request(:post, "#{@drive_base}/files/#{file_id}/copy", json: body) do
-      {:ok, %{status: 200, body: %{"id" => new_id}}} -> {:ok, new_id}
+      {:ok, %{status: status, body: %{"id" => new_id}}} when status in 200..299 -> {:ok, new_id}
       {:ok, %{body: body}} -> {:error, "Copy failed: #{inspect(body)}"}
       {:error, _} = err -> err
     end
@@ -402,7 +406,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       {:ok, %{status: 200, body: body, headers: headers}} ->
         content_type =
           Enum.find_value(headers, "image/png", fn
-            {"content-type", v} -> v
+            {"content-type", v} -> v |> String.split(";") |> hd() |> String.trim()
             _ -> nil
           end)
 
@@ -457,6 +461,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp do_request(:get, url, opts), do: Req.get(url, opts)
   defp do_request(:post, url, opts), do: Req.post(url, opts)
+  defp do_request(:patch, url, opts), do: Req.patch(url, opts)
+  defp do_request(:delete, url, opts), do: Req.delete(url, opts)
+
+  defp escape_query_value(value) do
+    value |> to_string() |> String.replace("'", "\\'")
+  end
 
   defp get_client_credentials do
     case Settings.get_json_setting(@settings_key, nil) do

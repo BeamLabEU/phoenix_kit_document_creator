@@ -2,14 +2,14 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
   @moduledoc """
   Schema for documents created from templates or from scratch.
 
-  A document clones content from a template (with variables filled in) and can
-  then be independently edited and exported to PDF.
+  Documents are now managed as Google Docs in Google Drive. The `google_doc_id`
+  field links a document record to its Google Doc. Creating a document from a
+  template copies the Google Doc and substitutes `{{ variables }}` via the API.
 
-  Header/footer content is baked directly into the document via the
-  `header_html`, `header_css`, `header_height`, `footer_html`, `footer_css`,
-  and `footer_height` fields. These are populated at creation time by
-  `Documents.create_document_from_template/3` and make each document fully
-  self-contained — no FK references to the headers_footers table are needed.
+  Note: Several fields (`content_html`, `content_css`, `content_native`,
+  `header_html/css/height`, `footer_html/css/height`) are retained for database
+  compatibility but are no longer used in the Google Docs workflow. A future
+  migration should remove these columns.
   """
   use Ecto.Schema
   import Ecto.Changeset

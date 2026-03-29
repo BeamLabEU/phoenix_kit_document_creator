@@ -13,6 +13,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
   @pubsub_topic "document_creator:files"
+  @refresh_cooldown_ms :timer.seconds(5)
+  @max_pdf_push_bytes 5_000_000
 
   @impl true
   def mount(_params, _session, socket) do
@@ -27,7 +29,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
       if google_connected do
         send(self(), :load_files)
-        # Poll for external changes every 2 minutes
         :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
       end
     end
@@ -41,6 +42,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        documents: [],
        thumbnails: %{},
        loading: google_connected,
+       last_loaded_at: nil,
        error: nil,
        # Modal state
        modal_open: false,
@@ -55,55 +57,76 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   @impl true
   def handle_info(:load_files, socket) do
-    do_load_files(socket, _silent = false)
+    do_load_files_async(socket, _silent = false)
   end
 
   def handle_info(:load_files_silent, socket) do
-    do_load_files(socket, _silent = true)
+    do_load_files_async(socket, _silent = true)
   end
 
-  def handle_info(:load_thumbnails, socket) do
-    all_files = socket.assigns.templates ++ socket.assigns.documents
-    thumbnails = Documents.fetch_thumbnails(all_files)
-    {:noreply, assign(socket, thumbnails: thumbnails)}
-  end
-
-  def handle_info(:poll_for_changes, socket) do
-    unless socket.assigns.loading do
-      send(self(), :load_files_silent)
-    end
-
-    {:noreply, socket}
-  end
-
-  def handle_info(:files_changed, socket) do
-    # Another user's refresh detected changes — reload our list too
-    unless socket.assigns.loading do
-      send(self(), :load_files_silent)
-    end
-
-    {:noreply, socket}
-  end
-
-  defp do_load_files(socket, silent) do
-    templates = Documents.list_templates()
-    documents = Documents.list_documents()
-
+  def handle_info({:files_loaded, templates, documents, silent}, socket) do
     old_fingerprint = files_fingerprint(socket.assigns.templates, socket.assigns.documents)
     new_fingerprint = files_fingerprint(templates, documents)
     changed = old_fingerprint != new_fingerprint
 
-    if changed and old_fingerprint != nil do
-      PhoenixKit.PubSubHelper.broadcast(@pubsub_topic, :files_changed)
-      send(self(), :load_thumbnails)
+    if changed and old_fingerprint != :empty do
+      broadcast_files_changed()
+      load_thumbnails_async(templates ++ documents)
     end
 
+    socket = assign(socket, templates: templates, documents: documents, last_loaded_at: now_ms())
+
     if silent do
-      {:noreply, assign(socket, templates: templates, documents: documents)}
+      {:noreply, socket}
     else
-      send(self(), :load_thumbnails)
-      {:noreply, assign(socket, templates: templates, documents: documents, loading: false)}
+      load_thumbnails_async(templates ++ documents)
+      {:noreply, assign(socket, loading: false)}
     end
+  end
+
+  def handle_info(:load_thumbnails, socket) do
+    load_thumbnails_async(socket.assigns.templates ++ socket.assigns.documents)
+    {:noreply, socket}
+  end
+
+  def handle_info({:thumbnail_result, file_id, data_uri}, socket) do
+    {:noreply, assign(socket, thumbnails: Map.put(socket.assigns.thumbnails, file_id, data_uri))}
+  end
+
+  def handle_info(:poll_for_changes, socket) do
+    if not socket.assigns.loading and not within_cooldown?(socket) do
+      send(self(), :load_files_silent)
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:files_changed, from_pid}, socket) do
+    # Ignore self-broadcasts to prevent reload loops (H3)
+    if from_pid != self() and not socket.assigns.loading and not within_cooldown?(socket) do
+      send(self(), :load_files_silent)
+    end
+
+    {:noreply, socket}
+  end
+
+  defp do_load_files_async(socket, silent) do
+    pid = self()
+
+    Task.start(fn ->
+      # Fetch templates and documents in parallel (H2)
+      t = Task.async(fn -> Documents.list_templates() end)
+      d = Task.async(fn -> Documents.list_documents() end)
+      templates = Task.await(t, 15_000)
+      documents = Task.await(d, 15_000)
+      send(pid, {:files_loaded, templates, documents, silent})
+    end)
+
+    {:noreply, socket}
+  end
+
+  defp load_thumbnails_async(files) do
+    Documents.fetch_thumbnails_async(files, self())
   end
 
   # ── View toggle ──────────────────────────────────────────────────
@@ -234,10 +257,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   def handle_event("export_pdf", %{"id" => file_id, "name" => name}, socket) do
     case Documents.export_pdf(file_id) do
-      {:ok, pdf_binary} ->
+      {:ok, pdf_binary} when byte_size(pdf_binary) <= @max_pdf_push_bytes ->
         base64 = Base.encode64(pdf_binary)
         filename = sanitize_filename(name)
         {:noreply, push_event(socket, "download-pdf", %{base64: base64, filename: filename})}
+
+      {:ok, _large_pdf} ->
+        {:noreply,
+         assign(socket,
+           error: "PDF is too large to download directly. Please export from Google Docs instead."
+         )}
 
       {:error, reason} ->
         {:noreply, assign(socket, error: "PDF export failed: #{inspect(reason)}")}
@@ -252,7 +281,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("silent_refresh", _params, socket) do
-    unless socket.assigns.loading do
+    if not socket.assigns.loading and not within_cooldown?(socket) do
       send(self(), :load_files_silent)
     end
 
@@ -415,33 +444,38 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     />
 
     <script>
-      window.addEventListener("phx:open-url", function(e) {
-        var a = document.createElement("a");
-        a.href = e.detail.url;
-        a.target = "_blank";
-        a.rel = "noopener";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      });
-      window.addEventListener("phx:download-pdf", function(e) {
-        var a = document.createElement("a");
-        a.href = "data:application/pdf;base64," + e.detail.base64;
-        a.download = e.detail.filename;
-        a.click();
-      });
-      // Silently check for changes when tab regains focus (user returns from Google Docs)
-      (function() {
-        var lastHidden = 0;
-        document.addEventListener("visibilitychange", function() {
-          if (document.visibilityState === "hidden") {
-            lastHidden = Date.now();
-          } else if (document.visibilityState === "visible" && Date.now() - lastHidden > 3000) {
-            var btn = document.getElementById("silent-refresh-btn");
-            if (btn) btn.click();
-          }
+      // Idempotent script — guarded to prevent duplicate listeners on re-render (M3)
+      if (!window.__pkDocCreatorInitialized) {
+        window.__pkDocCreatorInitialized = true;
+
+        window.addEventListener("phx:open-url", function(e) {
+          var a = document.createElement("a");
+          a.href = e.detail.url;
+          a.target = "_blank";
+          a.rel = "noopener";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
         });
-      })();
+        window.addEventListener("phx:download-pdf", function(e) {
+          var a = document.createElement("a");
+          a.href = "data:application/pdf;base64," + e.detail.base64;
+          a.download = e.detail.filename;
+          a.click();
+        });
+        // Silently check for changes when tab regains focus (user returns from Google Docs)
+        (function() {
+          var lastHidden = 0;
+          document.addEventListener("visibilitychange", function() {
+            if (document.visibilityState === "hidden") {
+              lastHidden = Date.now();
+            } else if (document.visibilityState === "visible" && Date.now() - lastHidden > 3000) {
+              var btn = document.getElementById("silent-refresh-btn");
+              if (btn) btn.click();
+            }
+          });
+        })();
+      }
     </script>
     """
   end
@@ -575,12 +609,20 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   defp broadcast_files_changed do
-    PhoenixKit.PubSubHelper.broadcast(@pubsub_topic, :files_changed)
+    PhoenixKit.PubSubHelper.broadcast(@pubsub_topic, {:files_changed, self()})
+  end
+
+  defp now_ms, do: System.monotonic_time(:millisecond)
+
+  defp within_cooldown?(socket) do
+    case socket.assigns.last_loaded_at do
+      nil -> false
+      last -> now_ms() - last < @refresh_cooldown_ms
+    end
   end
 
   # Build a fingerprint from file lists to detect changes.
-  # Compares IDs, names, and modified times — if any differ, the list changed.
-  defp files_fingerprint([], []), do: nil
+  defp files_fingerprint([], []), do: :empty
 
   defp files_fingerprint(templates, documents) do
     (templates ++ documents)

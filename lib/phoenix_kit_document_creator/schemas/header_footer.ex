@@ -1,10 +1,11 @@
 defmodule PhoenixKitDocumentCreator.Schemas.HeaderFooter do
   @moduledoc """
-  Schema for reusable header or footer designs.
+  Legacy schema for reusable header or footer designs.
 
-  Each record is either a `"header"` or `"footer"` (determined by the `type` field).
-  Stores GrapesJS project data (`native`) for round-trip editing, plus rendered
-  HTML/CSS for PDF generation.
+  **Deprecated**: Headers and footers are now handled natively by Google Docs.
+  This schema is retained for database compatibility only — no code reads from
+  or writes to this table in the Google Docs workflow. A future migration should
+  drop this table.
   """
   use Ecto.Schema
   import Ecto.Changeset

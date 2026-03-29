@@ -128,14 +128,14 @@ defmodule PhoenixKitDocumentCreatorTest do
   describe "Variable" do
     alias PhoenixKitDocumentCreator.Variable
 
-    test "extract_from_html/1 finds template variables" do
-      vars = Variable.extract_from_html("<p>Hello {{ name }}, total: {{ amount }}</p>")
+    test "extract_variables/1 finds template variables" do
+      vars = Variable.extract_variables("Hello {{ name }}, total: {{ amount }}")
       assert "amount" in vars
       assert "name" in vars
     end
 
-    test "extract_from_html/1 returns empty list for nil" do
-      assert Variable.extract_from_html(nil) == []
+    test "extract_variables/1 returns empty list for nil" do
+      assert Variable.extract_variables(nil) == []
     end
 
     test "build_definitions/1 creates Variable structs" do

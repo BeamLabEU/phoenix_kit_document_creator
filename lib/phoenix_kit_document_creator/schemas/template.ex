@@ -2,8 +2,13 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   @moduledoc """
   Schema for document templates.
 
-  Templates contain GrapesJS-designed content with `{{ variable }}` placeholders.
-  Documents are created from templates by filling in the variable values.
+  Templates are now managed as Google Docs in Google Drive. The `google_doc_id`
+  field links a template record to its Google Doc. Variables use `{{ placeholder }}`
+  syntax and are substituted via the Google Docs API.
+
+  Note: Several fields (`content_html`, `content_css`, `content_native`, header/footer
+  associations) are retained for database compatibility but are no longer used in the
+  Google Docs workflow. A future migration should remove these columns.
   """
   use Ecto.Schema
   import Ecto.Changeset

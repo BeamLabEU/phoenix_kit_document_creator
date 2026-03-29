@@ -11,11 +11,9 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   alias PhoenixKit.Utils.Routes
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
-  @settings_key "document_creator_google_oauth"
-
   @impl true
   def mount(_params, _session, socket) do
-    creds = Settings.get_json_setting(@settings_key, %{})
+    creds = Settings.get_json_setting(GoogleDocsClient.settings_key(), %{})
 
     {:ok,
      assign(socket,
@@ -24,7 +22,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
        client_secret: creds["client_secret"] || "",
        connected: has_token?(creds),
        connected_email: creds["connected_email"] || "",
-       redirect_uri: Routes.url("/admin/settings/document-creator"),
+       redirect_uri: nil,
        saving: false,
        error: nil,
        success: nil
@@ -93,7 +91,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
         %{"client_id" => client_id, "client_secret" => client_secret},
         socket
       ) do
-    creds = Settings.get_json_setting(@settings_key, %{})
+    creds = Settings.get_json_setting(GoogleDocsClient.settings_key(), %{})
 
     updated =
       Map.merge(creds, %{
@@ -125,7 +123,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   end
 
   def handle_event("disconnect", _params, socket) do
-    creds = Settings.get_json_setting(@settings_key, %{})
+    creds = Settings.get_json_setting(GoogleDocsClient.settings_key(), %{})
 
     # Keep client_id and client_secret, remove tokens
     cleaned =
@@ -371,7 +369,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   end
 
   defp save_email(email) do
-    creds = Settings.get_json_setting(@settings_key, %{})
+    creds = Settings.get_json_setting(GoogleDocsClient.settings_key(), %{})
     updated = Map.put(creds, "connected_email", email)
     GoogleDocsClient.save_credentials(updated)
   end

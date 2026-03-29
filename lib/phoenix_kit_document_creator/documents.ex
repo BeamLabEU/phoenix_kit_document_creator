@@ -99,7 +99,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   def detect_variables(file_id) when is_binary(file_id) do
     case GoogleDocsClient.get_document_text(file_id) do
       {:ok, text} ->
-        vars = PhoenixKitDocumentCreator.Variable.extract_from_html(text)
+        vars = PhoenixKitDocumentCreator.Variable.extract_variables(text)
         {:ok, vars}
 
       {:error, _} = err ->
@@ -120,16 +120,22 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Thumbnails
   # ===========================================================================
 
-  @doc "Fetch thumbnails for a list of Drive files. Returns `%{file_id => data_uri}`."
-  def fetch_thumbnails(files) when is_list(files) do
-    files
-    |> Enum.reduce(%{}, fn file, acc ->
+  @doc """
+  Fetch thumbnails for a list of Drive files asynchronously.
+
+  Spawns a task per file that sends `{:thumbnail_result, file_id, data_uri}`
+  back to the caller. Returns `:ok` immediately.
+  """
+  def fetch_thumbnails_async(files, caller_pid) when is_list(files) do
+    Enum.each(files, fn file ->
       file_id = file["id"]
 
-      case GoogleDocsClient.fetch_thumbnail(file_id) do
-        {:ok, data_uri} -> Map.put(acc, file_id, data_uri)
-        _ -> acc
-      end
+      Task.start(fn ->
+        case GoogleDocsClient.fetch_thumbnail(file_id) do
+          {:ok, data_uri} -> send(caller_pid, {:thumbnail_result, file_id, data_uri})
+          _ -> :ok
+        end
+      end)
     end)
   end
 
