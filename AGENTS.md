@@ -91,24 +91,44 @@ Version is tracked in three places — all must match:
 2. `lib/phoenix_kit_document_creator.ex` — `def version, do: "x.y.z"`
 3. `test/phoenix_kit_document_creator_test.exs` — version compliance test
 
-### Tagging convention
+### Tagging & GitHub releases
 
-Use **bare version numbers** (no `v` prefix): `0.2.0`, not `v0.2.0`.
+Tags use **bare version numbers** (no `v` prefix):
 
-### Release checklist
+```bash
+git tag 0.1.0
+git push origin 0.1.0
+```
+
+GitHub releases are created with `gh release create` using the tag as the release name. The title format is `<version> - <date>`, and the body comes from the corresponding `CHANGELOG.md` section:
+
+```bash
+gh release create 0.1.0 \
+  --title "0.1.0 - 2026-03-24" \
+  --notes "$(changelog body for this version)"
+```
+
+### Full release checklist
 
 1. Update version in all three locations above
-2. Add entry to `CHANGELOG.md`
-3. Commit: `Bump version to x.y.z`
-4. Push to main
-5. Tag: `git tag x.y.z && git push origin x.y.z`
-6. GitHub release: `gh release create x.y.z --title "x.y.z - YYYY-MM-DD" --notes "See CHANGELOG.md"`
+2. Add changelog entry in `CHANGELOG.md`
+3. Run `mix precommit` — ensure zero warnings/errors before proceeding
+4. Commit all changes: `"Bump version to x.y.z"`
+5. Push to main and **verify the push succeeded** before tagging
+6. Create and push git tag: `git tag x.y.z && git push origin x.y.z`
+7. Create GitHub release: `gh release create x.y.z --title "x.y.z - YYYY-MM-DD" --notes "..."`
+
+**IMPORTANT:** Never tag or create a release before all changes are committed and pushed. Tags are immutable pointers — tagging before pushing means the release points to the wrong commit.
 
 ## Pull Requests
 
-- Start commit messages with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`
-- **NEVER mention Claude or AI assistance** in commit messages
-- Document significant PRs in `dev_docs/pull_requests/` — see `TEMPLATE.md` there
+### Commit Message Rules
+
+Start with action verbs: `Add`, `Update`, `Fix`, `Remove`, `Merge`.
+
+### PR Reviews
+
+PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` directory. Use `{AGENT}_REVIEW.md` naming (e.g., `CLAUDE_REVIEW.md`, `GEMINI_REVIEW.md`). See `dev_docs/pull_requests/README.md`.
 
 ## Known Issues to Address
 
