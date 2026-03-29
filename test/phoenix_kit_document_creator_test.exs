@@ -61,13 +61,10 @@ defmodule PhoenixKitDocumentCreatorTest do
   end
 
   describe "admin_tabs/0" do
-    test "returns base tabs (8 minimum)" do
+    test "returns 3 tabs (parent + documents + templates)" do
       tabs = PhoenixKitDocumentCreator.admin_tabs()
       assert is_list(tabs)
-
-      # Base: 10 tabs (landing, template new/edit, document edit, headers list/new/edit, footers list/new/edit).
-      # Testing tabs are compile-time conditional.
-      assert length(tabs) >= 8
+      assert length(tabs) == 3
     end
 
     test "parent tab has correct fields" do
@@ -84,34 +81,27 @@ defmodule PhoenixKitDocumentCreatorTest do
       assert {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents} = parent.live_view
     end
 
-    test "subtabs reference parent or a subtab parent" do
+    test "subtabs reference parent" do
       tabs = PhoenixKitDocumentCreator.admin_tabs()
-      tab_ids = MapSet.new(tabs, & &1.id)
       [_parent | subtabs] = tabs
 
       for subtab <- subtabs do
-        assert subtab.parent in tab_ids,
+        assert subtab.parent == :admin_document_creator,
                "Tab #{subtab.id} references unknown parent #{subtab.parent}"
       end
     end
 
-    test "includes template editor, document editor, and header/footer tabs" do
+    test "includes documents and templates subtabs" do
       tabs = PhoenixKitDocumentCreator.admin_tabs()
 
       assert Enum.any?(tabs, fn tab ->
-               match?({PhoenixKitDocumentCreator.Web.TemplateEditorLive, _action}, tab.live_view)
+               match?({PhoenixKitDocumentCreator.Web.DocumentsLive, :documents}, tab.live_view) and
+                 tab.id == :admin_document_creator_documents
              end)
 
       assert Enum.any?(tabs, fn tab ->
-               match?({PhoenixKitDocumentCreator.Web.DocumentEditorLive, :edit}, tab.live_view)
-             end)
-
-      assert Enum.any?(tabs, fn tab ->
-               match?({PhoenixKitDocumentCreator.Web.HeaderFooterLive, :headers}, tab.live_view)
-             end)
-
-      assert Enum.any?(tabs, fn tab ->
-               match?({PhoenixKitDocumentCreator.Web.HeaderFooterLive, :footers}, tab.live_view)
+               match?({PhoenixKitDocumentCreator.Web.DocumentsLive, :templates}, tab.live_view) and
+                 tab.id == :admin_document_creator_templates
              end)
     end
 
@@ -119,7 +109,6 @@ defmodule PhoenixKitDocumentCreatorTest do
       tabs = PhoenixKitDocumentCreator.admin_tabs()
 
       for tab <- tabs do
-        # Strip route params like :uuid before checking for underscores
         path_without_params = Regex.replace(~r/:[a-z_]+/, tab.path, "")
 
         refute String.contains?(path_without_params, "_"),
@@ -132,47 +121,7 @@ defmodule PhoenixKitDocumentCreatorTest do
     test "returns a version string" do
       version = PhoenixKitDocumentCreator.version()
       assert is_binary(version)
-      assert version == "0.1.2"
-    end
-  end
-
-  describe "DocumentFormat" do
-    alias PhoenixKitDocumentCreator.DocumentFormat
-
-    test "new/1 creates a format struct" do
-      doc = DocumentFormat.new("<h1>Test</h1>")
-      assert doc.schema_version == 1
-      assert doc.content_html == "<h1>Test</h1>"
-      assert is_binary(doc.content_text)
-    end
-
-    test "extract_variables/1 finds template variables" do
-      vars =
-        DocumentFormat.extract_variables("<p>Hello {{ name }}, your total is {{ amount }}</p>")
-
-      assert "amount" in vars
-      assert "name" in vars
-    end
-
-    test "strip_html/1 removes tags" do
-      text = DocumentFormat.strip_html("<h1>Title</h1><p>Body text</p>")
-      assert String.contains?(text, "Title")
-      assert String.contains?(text, "Body text")
-      refute String.contains?(text, "<")
-    end
-
-    test "to_json/1 and from_json/1 round-trip" do
-      doc = DocumentFormat.new("<p>test</p>", metadata: %{"editor" => "test"})
-      json = DocumentFormat.to_json(doc)
-      restored = DocumentFormat.from_json(json)
-      assert restored.content_html == doc.content_html
-      assert restored.metadata == doc.metadata
-    end
-
-    test "sample_html/0 returns non-empty HTML" do
-      html = DocumentFormat.sample_html()
-      assert is_binary(html)
-      assert String.contains?(html, "Service Agreement")
+      assert version == "0.2.0"
     end
   end
 
@@ -207,5 +156,4 @@ defmodule PhoenixKitDocumentCreatorTest do
       assert Variable.humanize("amount") == "Amount"
     end
   end
-
 end

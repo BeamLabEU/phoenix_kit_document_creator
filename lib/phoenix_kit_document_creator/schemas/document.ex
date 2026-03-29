@@ -21,6 +21,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
 
   schema "phoenix_kit_doc_documents" do
     field(:name, :string)
+    field(:google_doc_id, :string)
 
     belongs_to(:template, PhoenixKitDocumentCreator.Schemas.Template,
       foreign_key: :template_uuid,
@@ -52,6 +53,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
   @required_fields [:name]
   @optional_fields [
     :template_uuid,
+    :google_doc_id,
     :content_html,
     :content_css,
     :content_native,
