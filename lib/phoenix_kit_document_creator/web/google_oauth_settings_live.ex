@@ -201,8 +201,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     path =
       socket.assigns.browser_path
       |> Enum.drop(1)
-      |> Enum.map(& &1.name)
-      |> Enum.join("/")
+      |> Enum.map_join("/", & &1.name)
 
     field = socket.assigns.browser_field
     socket = assign(socket, [{String.to_existing_atom(field), path}, browser_open: false])

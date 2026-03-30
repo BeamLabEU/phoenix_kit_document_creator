@@ -235,6 +235,25 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp non_empty(val, _default) when is_binary(val) and val != "", do: val
   defp non_empty(_, default), do: default
 
+  defp parse_cached_folder_ids(%{
+         "templates_folder_id" => t,
+         "documents_folder_id" => d,
+         "deleted_templates_folder_id" => dt,
+         "deleted_documents_folder_id" => dd
+       })
+       when is_binary(t) and t != "" and is_binary(d) and d != "" and is_binary(dt) and
+              dt != "" and is_binary(dd) and dd != "" do
+    {:ok,
+     %{
+       templates_folder_id: t,
+       documents_folder_id: d,
+       deleted_templates_folder_id: dt,
+       deleted_documents_folder_id: dd
+     }}
+  end
+
+  defp parse_cached_folder_ids(_), do: :miss
+
   defp build_full_path("", name), do: name
   defp build_full_path(path, name), do: "#{path}/#{name}"
 
@@ -298,24 +317,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Get cached folder IDs from Settings, or discover them."
   def get_folder_ids do
-    case Settings.get_json_setting(@settings_key, nil) do
-      %{
-        "templates_folder_id" => t,
-        "documents_folder_id" => d,
-        "deleted_templates_folder_id" => dt,
-        "deleted_documents_folder_id" => dd
-      }
-      when is_binary(t) and t != "" and is_binary(d) and d != "" and is_binary(dt) and
-             dt != "" and is_binary(dd) and dd != "" ->
-        %{
-          templates_folder_id: t,
-          documents_folder_id: d,
-          deleted_templates_folder_id: dt,
-          deleted_documents_folder_id: dd
-        }
-
-      _ ->
-        discover_folders()
+    case parse_cached_folder_ids(Settings.get_json_setting(@settings_key, nil)) do
+      {:ok, ids} -> ids
+      :miss -> discover_folders()
     end
   end
 
@@ -581,19 +585,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     value |> to_string() |> String.replace("'", "\\'")
   end
 
-  # Req headers can be a map (%{"k" => ["v"]}) or list of tuples ([{"k", "v"}])
+  # Extract content-type from Req response headers (map with list values)
   defp extract_content_type(%{"content-type" => [v | _]}), do: v
-  defp extract_content_type(%{"content-type" => v}) when is_binary(v), do: v
-
-  defp extract_content_type(headers) when is_list(headers) do
-    Enum.find_value(headers, "image/png", fn
-      {"content-type", v} when is_binary(v) -> v
-      {"content-type", [v | _]} -> v
-      _ -> nil
-    end)
-  end
-
   defp extract_content_type(_), do: "image/png"
+
   defp get_client_credentials do
     case Settings.get_json_setting(@settings_key, nil) do
       %{"client_id" => id, "client_secret" => secret}
