@@ -15,6 +15,8 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   def mount(_params, _session, socket) do
     creds = Settings.get_json_setting(GoogleDocsClient.settings_key(), %{})
 
+    fc = GoogleDocsClient.get_folder_config()
+
     {:ok,
      assign(socket,
        page_title: "Document Creator — Google Docs",
@@ -23,6 +25,19 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
        connected: has_token?(creds),
        connected_email: creds["connected_email"] || "",
        redirect_uri: nil,
+       # Folder config: path + name for each
+       templates_path: fc.templates_path,
+       templates_name: fc.templates_name,
+       documents_path: fc.documents_path,
+       documents_name: fc.documents_name,
+       deleted_path: fc.deleted_path,
+       deleted_name: fc.deleted_name,
+       # Folder browser modal
+       browser_open: false,
+       browser_field: nil,
+       browser_path: [],
+       browser_folders: [],
+       browser_loading: false,
        saving: false,
        error: nil,
        success: nil
@@ -110,6 +125,94 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
      )}
   end
 
+  def handle_event("save_folders", params, socket) do
+    creds = Settings.get_json_setting(GoogleDocsClient.settings_key(), %{})
+
+    new = %{
+      "folder_path_templates" => String.trim(params["templates_path"] || ""),
+      "folder_name_templates" => String.trim(params["templates_name"] || ""),
+      "folder_path_documents" => String.trim(params["documents_path"] || ""),
+      "folder_name_documents" => String.trim(params["documents_name"] || ""),
+      "folder_path_deleted" => String.trim(params["deleted_path"] || ""),
+      "folder_name_deleted" => String.trim(params["deleted_name"] || "")
+    }
+
+    old_keys = Map.take(creds, Map.keys(new))
+    changed = old_keys != new
+
+    updated = Map.merge(creds, new)
+
+    # If anything changed, clear cached folder IDs so discovery uses the new config
+    updated =
+      if changed do
+        Map.drop(updated, [
+          "templates_folder_id",
+          "documents_folder_id",
+          "deleted_templates_folder_id",
+          "deleted_documents_folder_id"
+        ])
+      else
+        updated
+      end
+
+    GoogleDocsClient.save_credentials(updated)
+
+    {:noreply,
+     assign(socket,
+       templates_path: new["folder_path_templates"],
+       templates_name: new["folder_name_templates"],
+       documents_path: new["folder_path_documents"],
+       documents_name: new["folder_name_documents"],
+       deleted_path: new["folder_path_deleted"],
+       deleted_name: new["folder_name_deleted"],
+       success: "Folder settings saved",
+       error: nil
+     )}
+  end
+
+  def handle_event("browse_folder", %{"field" => field}, socket) do
+    send(self(), {:load_drive_folders, "root"})
+
+    {:noreply,
+     assign(socket,
+       browser_open: true,
+       browser_field: field,
+       browser_path: [%{id: "root", name: "My Drive"}],
+       browser_folders: [],
+       browser_loading: true
+     )}
+  end
+
+  def handle_event("browser_navigate", %{"id" => folder_id, "name" => name}, socket) do
+    send(self(), {:load_drive_folders, folder_id})
+    path = socket.assigns.browser_path ++ [%{id: folder_id, name: name}]
+    {:noreply, assign(socket, browser_path: path, browser_folders: [], browser_loading: true)}
+  end
+
+  def handle_event("browser_back", %{"index" => index}, socket) do
+    index = String.to_integer(index)
+    path = Enum.take(socket.assigns.browser_path, index + 1)
+    %{id: folder_id} = List.last(path)
+    send(self(), {:load_drive_folders, folder_id})
+    {:noreply, assign(socket, browser_path: path, browser_folders: [], browser_loading: true)}
+  end
+
+  def handle_event("browser_select", _params, socket) do
+    path =
+      socket.assigns.browser_path
+      |> Enum.drop(1)
+      |> Enum.map(& &1.name)
+      |> Enum.join("/")
+
+    field = socket.assigns.browser_field
+    socket = assign(socket, [{String.to_existing_atom(field), path}, browser_open: false])
+    {:noreply, socket}
+  end
+
+  def handle_event("browser_close", _params, socket) do
+    {:noreply, assign(socket, browser_open: false)}
+  end
+
   def handle_event("connect", _params, socket) do
     redirect_uri = socket.assigns[:redirect_uri] || Routes.url("/admin/settings/document-creator")
 
@@ -141,6 +244,17 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
   def handle_event("dismiss", _params, socket) do
     {:noreply, assign(socket, success: nil, error: nil)}
+  end
+
+  @impl true
+  def handle_info({:load_drive_folders, folder_id}, socket) do
+    folders =
+      case GoogleDocsClient.list_subfolders(folder_id) do
+        {:ok, folders} -> folders
+        _ -> []
+      end
+
+    {:noreply, assign(socket, browser_folders: folders, browser_loading: false)}
   end
 
   # ── Render ─────────────────────────────────────────────────────────
@@ -252,6 +366,101 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
         </div>
       </div>
 
+      <%!-- Folder Names --%>
+      <div :if={@connected} class="card bg-base-100 shadow-sm">
+        <div class="card-body">
+          <h2 class="card-title text-lg">Drive Folders</h2>
+          <p class="text-sm text-base-content/60">
+            Customize the Google Drive folder names used for storage.
+            Folders are created automatically if they don't exist.
+          </p>
+
+          <form phx-submit="save_folders" class="space-y-4 mt-4">
+            <div class="form-control">
+              <label class="label"><span class="label-text">Templates</span></label>
+              <div class="flex items-center gap-0">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
+                  phx-click="browse_folder"
+                  phx-value-field="templates_path"
+                  title={if @templates_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@templates_path}"}
+                >
+                  <span class="hero-folder-open w-4 h-4 shrink-0" />
+                  <span class="truncate">{if @templates_path == "", do: "/", else: "#{@templates_path}/"}</span>
+                </button>
+                <input
+                  type="text"
+                  name="templates_name"
+                  value={@templates_name}
+                  class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
+                  placeholder="templates"
+                />
+                <input type="hidden" name="templates_path" value={@templates_path} />
+              </div>
+            </div>
+
+            <div class="form-control">
+              <label class="label"><span class="label-text">Documents</span></label>
+              <div class="flex items-center gap-0">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
+                  phx-click="browse_folder"
+                  phx-value-field="documents_path"
+                  title={if @documents_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@documents_path}"}
+                >
+                  <span class="hero-folder-open w-4 h-4 shrink-0" />
+                  <span class="truncate">{if @documents_path == "", do: "/", else: "#{@documents_path}/"}</span>
+                </button>
+                <input
+                  type="text"
+                  name="documents_name"
+                  value={@documents_name}
+                  class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
+                  placeholder="documents"
+                />
+                <input type="hidden" name="documents_path" value={@documents_path} />
+              </div>
+            </div>
+
+            <div class="form-control">
+              <label class="label"><span class="label-text">Deleted</span></label>
+              <div class="flex items-center gap-0">
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
+                  phx-click="browse_folder"
+                  phx-value-field="deleted_path"
+                  title={if @deleted_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@deleted_path}"}
+                >
+                  <span class="hero-folder-open w-4 h-4 shrink-0" />
+                  <span class="truncate">{if @deleted_path == "", do: "/", else: "#{@deleted_path}/"}</span>
+                </button>
+                <input
+                  type="text"
+                  name="deleted_name"
+                  value={@deleted_name}
+                  class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
+                  placeholder="deleted"
+                />
+                <input type="hidden" name="deleted_path" value={@deleted_path} />
+              </div>
+            </div>
+
+            <p class="text-xs text-base-content/50">
+              Click the path button to browse your Google Drive. Deleted items go to
+              subfolders inside the deleted folder.
+              Folders are created automatically if they don't exist.
+            </p>
+
+            <button type="submit" class="btn btn-primary btn-sm">
+              Save Folder Settings
+            </button>
+          </form>
+        </div>
+      </div>
+
       <%!-- Setup Instructions --%>
       <div class="card bg-base-200/50">
         <div class="card-body text-sm text-base-content/70 space-y-4">
@@ -326,20 +535,69 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
           <div>
             <h4 class="font-semibold text-base-content">6. Drive folders (automatic)</h4>
             <p class="mt-1 ml-2">
-              Two folders are automatically created in the connected Google Drive root the
-              first time templates or documents are loaded:
+              Folders are automatically created in the connected Google Drive root the
+              first time templates or documents are loaded. You can customize the folder
+              names in the <strong>Drive Folders</strong> section above after connecting.
             </p>
-            <ul class="list-disc list-inside ml-6 mt-1 space-y-0.5">
-              <li><strong>templates</strong> — stores template Google Docs</li>
-              <li><strong>documents</strong> — stores generated documents</li>
-            </ul>
             <p class="mt-1 ml-2">
-              If these folders already exist, they will be reused. You can also create them
-              manually before connecting if you prefer.
+              If folders with the configured names already exist, they will be reused.
             </p>
           </div>
         </div>
       </div>
+    </div>
+
+    <%!-- Folder browser modal --%>
+    <div :if={@browser_open} class="modal modal-open">
+      <div class="modal-box max-w-md">
+        <h3 class="font-bold text-lg">Select Folder</h3>
+
+        <%!-- Breadcrumb --%>
+        <div class="flex items-center gap-1 mt-3 text-sm flex-wrap">
+          <button
+            :for={{crumb, idx} <- Enum.with_index(@browser_path)}
+            class={"link link-hover #{if idx == length(@browser_path) - 1, do: "font-semibold", else: "text-base-content/60"}"}
+            phx-click="browser_back"
+            phx-value-index={idx}
+          >
+            <span :if={idx > 0} class="text-base-content/30 mr-1">/</span>
+            {crumb.name}
+          </button>
+        </div>
+
+        <%!-- Folder list --%>
+        <div class="mt-3 border border-base-300 rounded-lg overflow-hidden" style="min-height: 200px; max-height: 400px; overflow-y: auto;">
+          <div :if={@browser_loading} class="flex justify-center py-8">
+            <span class="loading loading-spinner loading-md" />
+          </div>
+          <div :if={not @browser_loading and @browser_folders == []} class="flex justify-center py-8 text-base-content/40 text-sm">
+            No subfolders
+          </div>
+          <ul :if={not @browser_loading and @browser_folders != []} class="menu menu-sm p-0">
+            <li :for={folder <- @browser_folders}>
+              <button
+                class="flex items-center gap-2 rounded-none"
+                phx-click="browser_navigate"
+                phx-value-id={folder["id"]}
+                phx-value-name={folder["name"]}
+              >
+                <span class="hero-folder w-4 h-4 text-base-content/50" />
+                <span class="truncate">{folder["name"]}</span>
+                <span class="hero-chevron-right w-3 h-3 ml-auto text-base-content/30" />
+              </button>
+            </li>
+          </ul>
+        </div>
+
+        <%!-- Actions --%>
+        <div class="modal-action">
+          <button class="btn btn-ghost btn-sm" phx-click="browser_close">Cancel</button>
+          <button class="btn btn-primary btn-sm" phx-click="browser_select">
+            Select Current Folder
+          </button>
+        </div>
+      </div>
+      <div class="modal-backdrop" phx-click="browser_close"></div>
     </div>
     """
   end

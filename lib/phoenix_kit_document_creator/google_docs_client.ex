@@ -203,47 +203,76 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc """
+  Resolve a path like "clients/active/templates" by walking each segment,
+  creating folders as needed. Returns `{:ok, leaf_folder_id}`.
+  """
+  def resolve_folder_path(path, opts \\ []) do
+    parent = Keyword.get(opts, :parent, "root")
+    segments = path |> String.split("/") |> Enum.reject(&(&1 == ""))
+
+    Enum.reduce_while(segments, {:ok, parent}, fn segment, {:ok, current_parent} ->
+      case find_or_create_folder(segment, parent: current_parent) do
+        {:ok, id} -> {:cont, {:ok, id}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  @doc "Get configured folder paths and names from Settings, with defaults."
+  def get_folder_config do
+    creds = Settings.get_json_setting(@settings_key, %{})
+
+    %{
+      templates_path: creds["folder_path_templates"] || "",
+      templates_name: non_empty(creds["folder_name_templates"], "templates"),
+      documents_path: creds["folder_path_documents"] || "",
+      documents_name: non_empty(creds["folder_name_documents"], "documents"),
+      deleted_path: creds["folder_path_deleted"] || "",
+      deleted_name: non_empty(creds["folder_name_deleted"], "deleted")
+    }
+  end
+
+  defp non_empty(val, _default) when is_binary(val) and val != "", do: val
+  defp non_empty(_, default), do: default
+
+  defp build_full_path("", name), do: name
+  defp build_full_path(path, name), do: "#{path}/#{name}"
+
+  @doc """
   Discover templates, documents, and deleted folder IDs.
   Looks for folders by name in Drive root, creating them if they don't exist.
   Caches results in Settings.
   """
   def discover_folders do
+    config = get_folder_config()
+
+    templates_path = build_full_path(config.templates_path, config.templates_name)
+    documents_path = build_full_path(config.documents_path, config.documents_name)
+    deleted_path = build_full_path(config.deleted_path, config.deleted_name)
+
     templates_id =
-      case find_or_create_folder("templates") do
+      case resolve_folder_path(templates_path) do
         {:ok, id} -> id
         _ -> nil
       end
 
     documents_id =
-      case find_or_create_folder("documents") do
+      case resolve_folder_path(documents_path) do
         {:ok, id} -> id
         _ -> nil
       end
 
-    # Create deleted/ parent, then deleted/templates and deleted/documents inside it
-    deleted_id =
-      case find_or_create_folder("deleted") do
+    # Resolve deleted subfolders: deleted_path/templates_name and deleted_path/documents_name
+    deleted_templates_id =
+      case resolve_folder_path("#{deleted_path}/#{config.templates_name}") do
         {:ok, id} -> id
         _ -> nil
       end
 
-    {deleted_templates_id, deleted_documents_id} =
-      if deleted_id do
-        dt =
-          case find_or_create_folder("templates", parent: deleted_id) do
-            {:ok, id} -> id
-            _ -> nil
-          end
-
-        dd =
-          case find_or_create_folder("documents", parent: deleted_id) do
-            {:ok, id} -> id
-            _ -> nil
-          end
-
-        {dt, dd}
-      else
-        {nil, nil}
+    deleted_documents_id =
+      case resolve_folder_path("#{deleted_path}/#{config.documents_name}") do
+        {:ok, id} -> id
+        _ -> nil
       end
 
     # Save to settings
@@ -287,6 +316,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
       _ ->
         discover_folders()
+    end
+  end
+
+  @doc "List subfolders within a parent folder. Returns `{:ok, [%{id, name}]}`."
+  def list_subfolders(parent_id \\ "root") do
+    q =
+      "mimeType = 'application/vnd.google-apps.folder' and '#{escape_query_value(parent_id)}' in parents and trashed = false"
+
+    case authenticated_request(:get, "#{@drive_base}/files",
+           params: [q: q, fields: "files(id,name)", orderBy: "name", pageSize: 100]
+         ) do
+      {:ok, %{status: 200, body: %{"files" => files}}} -> {:ok, files}
+      {:ok, %{status: 200}} -> {:ok, []}
+      {:ok, %{body: body}} -> {:error, "List subfolders failed: #{inspect(body)}"}
+      {:error, _} = err -> err
     end
   end
 
