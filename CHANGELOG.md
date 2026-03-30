@@ -1,3 +1,33 @@
+## 0.2.1 - 2026-03-30
+
+### Added
+- Add soft delete for documents and templates — files move to deleted folders instead of permanent removal
+- Add configurable folder paths and names with Google Drive folder browser
+- Add `ensure_folder_path/2` — walks nested Drive paths, creating folders as needed
+- Add `move_file/2` to GoogleDocsClient (Drive API PATCH with addParents/removeParents)
+- Add `list_subfolders/1` for the Drive folder browser
+- Add `validate_file_id/1` to prevent URL path injection in Drive API calls
+- Add `get_folder_config/0` for reading folder path + name settings
+- Add loading spinner for thumbnail placeholders
+- Add delete button (trash icon) on card and list views with confirmation dialog
+- Add flash feedback on successful delete
+- Add folder browser modal with breadcrumb navigation to settings page
+- Add tests for `validate_file_id/1` and `move_file/2` input validation
+
+### Changed
+- Parallelize folder discovery with `Task.async` + `Task.await_many` (was sequential)
+- Make folder browser loading async via `Task.start` (no longer blocks LiveView)
+- Whitelist `browser_field` values to prevent atom exhaustion
+- Guard `browser_back` against invalid index
+- Strip charset from content-type header in `extract_content_type`
+- Update modal template cards to match main page card styling (border, shadow, flex layout)
+
+### Fixed
+- Fix `FunctionClauseError` in thumbnail loading — handle map header format from Req >= 0.5
+
+### Removed
+- Remove orphaned `editor_scripts.ex` (dead code from GrapesJS removal)
+
 ## 0.2.0 - 2026-03-29
 
 ### Changed

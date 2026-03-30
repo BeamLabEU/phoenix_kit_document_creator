@@ -121,7 +121,7 @@ defmodule PhoenixKitDocumentCreatorTest do
     test "returns a version string" do
       version = PhoenixKitDocumentCreator.version()
       assert is_binary(version)
-      assert version == "0.2.0"
+      assert version == "0.2.1"
     end
   end
 
