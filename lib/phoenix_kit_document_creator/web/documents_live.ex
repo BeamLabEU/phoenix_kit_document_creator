@@ -284,15 +284,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     case result do
       :ok ->
         broadcast_files_changed()
-        # Remove from local assigns immediately
+
         socket =
           if socket.assigns.live_action == :templates do
-            assign(socket, templates: Enum.reject(socket.assigns.templates, &(&1["id"] == file_id)))
+            assign(socket,
+              templates: Enum.reject(socket.assigns.templates, &(&1["id"] == file_id))
+            )
           else
-            assign(socket, documents: Enum.reject(socket.assigns.documents, &(&1["id"] == file_id)))
+            assign(socket,
+              documents: Enum.reject(socket.assigns.documents, &(&1["id"] == file_id))
+            )
           end
 
-        {:noreply, socket}
+        {:noreply, put_flash(socket, :info, "Moved to deleted folder")}
 
       {:error, reason} ->
         {:noreply, assign(socket, error: "Delete failed: #{inspect(reason)}")}

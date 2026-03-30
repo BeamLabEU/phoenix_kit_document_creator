@@ -25,11 +25,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
     test "exports folder functions" do
       exports = GoogleDocsClient.__info__(:functions)
       assert {:find_folder_by_name, 1} in exports
+      assert {:find_folder_by_name, 2} in exports
       assert {:create_folder, 1} in exports
+      assert {:create_folder, 2} in exports
       assert {:find_or_create_folder, 1} in exports
+      assert {:find_or_create_folder, 2} in exports
+      assert {:ensure_folder_path, 1} in exports
+      assert {:ensure_folder_path, 2} in exports
       assert {:discover_folders, 0} in exports
       assert {:get_folder_ids, 0} in exports
       assert {:get_folder_url, 1} in exports
+      assert {:get_folder_config, 0} in exports
+      assert {:list_subfolders, 0} in exports
+      assert {:list_subfolders, 1} in exports
     end
 
     test "exports document functions" do
@@ -44,11 +52,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
 
     test "exports Drive functions" do
       exports = GoogleDocsClient.__info__(:functions)
+      assert {:move_file, 2} in exports
       assert {:copy_file, 2} in exports
       assert {:copy_file, 3} in exports
       assert {:export_pdf, 1} in exports
       assert {:fetch_thumbnail, 1} in exports
       assert {:list_folder_files, 1} in exports
+      assert {:validate_file_id, 1} in exports
     end
   end
 
@@ -105,6 +115,42 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
   describe "replace_all_text/2" do
     test "returns {:ok, %{}} for empty variables map" do
       assert GoogleDocsClient.replace_all_text("any_doc_id", %{}) == {:ok, %{}}
+    end
+  end
+
+  describe "validate_file_id/1" do
+    test "accepts valid alphanumeric IDs" do
+      assert {:ok, "abc123"} = GoogleDocsClient.validate_file_id("abc123")
+    end
+
+    test "accepts IDs with hyphens and underscores" do
+      assert {:ok, "abc-123_XYZ"} = GoogleDocsClient.validate_file_id("abc-123_XYZ")
+    end
+
+    test "rejects IDs with slashes" do
+      assert {:error, :invalid_file_id} = GoogleDocsClient.validate_file_id("abc/123")
+    end
+
+    test "rejects IDs with query strings" do
+      assert {:error, :invalid_file_id} = GoogleDocsClient.validate_file_id("abc?q=1")
+    end
+
+    test "rejects empty string" do
+      assert {:error, :invalid_file_id} = GoogleDocsClient.validate_file_id("")
+    end
+
+    test "rejects nil" do
+      assert {:error, :invalid_file_id} = GoogleDocsClient.validate_file_id(nil)
+    end
+  end
+
+  describe "move_file/2" do
+    test "rejects invalid file ID" do
+      assert {:error, :invalid_file_id} = GoogleDocsClient.move_file("../etc/passwd", "folder123")
+    end
+
+    test "rejects invalid folder ID" do
+      assert {:error, :invalid_file_id} = GoogleDocsClient.move_file("file123", "folder/bad")
     end
   end
 end

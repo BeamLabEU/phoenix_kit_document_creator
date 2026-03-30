@@ -203,10 +203,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc """
-  Resolve a path like "clients/active/templates" by walking each segment,
-  creating folders as needed. Returns `{:ok, leaf_folder_id}`.
+  Walk a path like "clients/active/templates", creating folders as needed.
+  Returns `{:ok, leaf_folder_id}`.
   """
-  def resolve_folder_path(path, opts \\ []) do
+  def ensure_folder_path(path, opts \\ []) do
     parent = Keyword.get(opts, :parent, "root")
     segments = path |> String.split("/") |> Enum.reject(&(&1 == ""))
 
@@ -269,30 +269,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     documents_path = build_full_path(config.documents_path, config.documents_name)
     deleted_path = build_full_path(config.deleted_path, config.deleted_name)
 
-    templates_id =
-      case resolve_folder_path(templates_path) do
-        {:ok, id} -> id
-        _ -> nil
-      end
+    # Resolve all four folder paths in parallel to minimize sequential API calls
+    tasks = [
+      Task.async(fn -> ensure_folder_path(templates_path) end),
+      Task.async(fn -> ensure_folder_path(documents_path) end),
+      Task.async(fn -> ensure_folder_path("#{deleted_path}/#{config.templates_name}") end),
+      Task.async(fn -> ensure_folder_path("#{deleted_path}/#{config.documents_name}") end)
+    ]
 
-    documents_id =
-      case resolve_folder_path(documents_path) do
+    [templates_id, documents_id, deleted_templates_id, deleted_documents_id] =
+      tasks
+      |> Task.await_many(30_000)
+      |> Enum.map(fn
         {:ok, id} -> id
         _ -> nil
-      end
-
-    # Resolve deleted subfolders: deleted_path/templates_name and deleted_path/documents_name
-    deleted_templates_id =
-      case resolve_folder_path("#{deleted_path}/#{config.templates_name}") do
-        {:ok, id} -> id
-        _ -> nil
-      end
-
-    deleted_documents_id =
-      case resolve_folder_path("#{deleted_path}/#{config.documents_name}") do
-        {:ok, id} -> id
-        _ -> nil
-      end
+      end)
 
     # Save to settings
     creds = Settings.get_json_setting(@settings_key, %{})
@@ -454,7 +445,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Move a file to a different folder in Google Drive."
   def move_file(file_id, to_folder_id) do
-    # The Drive API PATCH with addParents/removeParents moves a file between folders
+    with {:ok, fid} <- validate_file_id(file_id),
+         {:ok, _tid} <- validate_file_id(to_folder_id) do
+      do_move_file(fid, to_folder_id)
+    end
+  end
+
+  defp do_move_file(file_id, to_folder_id) do
     case authenticated_request(:get, "#{@drive_base}/files/#{file_id}",
            params: [fields: "parents"]
          ) do
@@ -585,8 +582,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     value |> to_string() |> String.replace("'", "\\'")
   end
 
-  # Extract content-type from Req response headers (map with list values)
-  defp extract_content_type(%{"content-type" => [v | _]}), do: v
+  # Google Drive IDs are alphanumeric with hyphens and underscores.
+  # Reject anything else to prevent URL path injection.
+  @valid_file_id_pattern ~r/\A[\w-]+\z/
+
+  @doc "Validate a Google Drive file/folder ID. Returns `{:ok, id}` or `{:error, :invalid_file_id}`."
+  def validate_file_id(id) when is_binary(id) and id != "" do
+    if Regex.match?(@valid_file_id_pattern, id), do: {:ok, id}, else: {:error, :invalid_file_id}
+  end
+
+  def validate_file_id(_), do: {:error, :invalid_file_id}
+
+  # Extract content-type from Req response headers.
+  # Req >= 0.5 returns headers as %{"content-type" => ["image/png"]}.
+  defp extract_content_type(%{"content-type" => [v | _]}),
+    do: v |> String.split(";") |> hd() |> String.trim()
+
   defp extract_content_type(_), do: "image/png"
 
   defp get_client_credentials do

@@ -170,7 +170,10 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
      )}
   end
 
-  def handle_event("browse_folder", %{"field" => field}, socket) do
+  @valid_path_fields ~w(templates_path documents_path deleted_path)
+
+  def handle_event("browse_folder", %{"field" => field}, socket)
+      when field in @valid_path_fields do
     send(self(), {:load_drive_folders, "root"})
 
     {:noreply,
@@ -183,6 +186,10 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
      )}
   end
 
+  def handle_event("browse_folder", _params, socket) do
+    {:noreply, socket}
+  end
+
   def handle_event("browser_navigate", %{"id" => folder_id, "name" => name}, socket) do
     send(self(), {:load_drive_folders, folder_id})
     path = socket.assigns.browser_path ++ [%{id: folder_id, name: name}]
@@ -191,10 +198,16 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
   def handle_event("browser_back", %{"index" => index}, socket) do
     index = String.to_integer(index)
-    path = Enum.take(socket.assigns.browser_path, index + 1)
-    %{id: folder_id} = List.last(path)
-    send(self(), {:load_drive_folders, folder_id})
-    {:noreply, assign(socket, browser_path: path, browser_folders: [], browser_loading: true)}
+    path = Enum.take(socket.assigns.browser_path, max(index + 1, 1))
+
+    case List.last(path) do
+      %{id: folder_id} ->
+        send(self(), {:load_drive_folders, folder_id})
+        {:noreply, assign(socket, browser_path: path, browser_folders: [], browser_loading: true)}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("browser_select", _params, socket) do
@@ -204,8 +217,13 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       |> Enum.map_join("/", & &1.name)
 
     field = socket.assigns.browser_field
-    socket = assign(socket, [{String.to_existing_atom(field), path}, browser_open: false])
-    {:noreply, socket}
+
+    if field in @valid_path_fields do
+      field_atom = String.to_existing_atom(field)
+      {:noreply, assign(socket, [{field_atom, path}, browser_open: false])}
+    else
+      {:noreply, assign(socket, browser_open: false)}
+    end
   end
 
   def handle_event("browser_close", _params, socket) do
@@ -247,12 +265,22 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
   @impl true
   def handle_info({:load_drive_folders, folder_id}, socket) do
-    folders =
-      case GoogleDocsClient.list_subfolders(folder_id) do
-        {:ok, folders} -> folders
-        _ -> []
-      end
+    pid = self()
 
+    Task.start(fn ->
+      folders =
+        case GoogleDocsClient.list_subfolders(folder_id) do
+          {:ok, folders} -> folders
+          _ -> []
+        end
+
+      send(pid, {:drive_folders_loaded, folders})
+    end)
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:drive_folders_loaded, folders}, socket) do
     {:noreply, assign(socket, browser_folders: folders, browser_loading: false)}
   end
 
