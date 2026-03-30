@@ -51,19 +51,22 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
 
       <%!-- Templates --%>
       <div :if={@templates != []} class="divider text-xs text-base-content/40">or from template</div>
-      <div :if={@templates != []} class="grid grid-cols-2 gap-3">
+      <div :if={@templates != []} class="flex flex-wrap gap-3 justify-center">
         <button
           :for={tpl <- @templates}
-          class="btn btn-ghost h-auto flex-col items-center p-3 gap-2"
+          class="card bg-base-100 shadow-sm h-auto flex-col items-center p-2 gap-1.5 cursor-pointer hover:bg-base-200 transition-colors"
+          style="border: 1.5px solid currentColor; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.3); width: 130px;"
           phx-click="modal_select_template"
           phx-value-id={tpl["id"]}
           phx-value-name={tpl["name"]}
         >
-          <div style="width:100px;height:141px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.15);">
+          <div style="width:100px;height:141px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
             <%= if @thumbnails[tpl["id"]] do %>
               <img src={@thumbnails[tpl["id"]]} style="width:100%;height:100%;object-fit:cover;object-position:top;" />
             <% else %>
-              <div style="width:100%;height:100%;background:#fff;" />
+              <div style="width:100%;height:100%;background:#fff;display:flex;align-items:center;justify-content:center;">
+                <span class="loading loading-spinner loading-sm text-base-300" />
+              </div>
             <% end %>
           </div>
           <span class="text-xs truncate max-w-full">{tpl["name"]}</span>
