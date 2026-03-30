@@ -146,12 +146,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # ===========================================================================
 
   @doc """
-  Find a folder by name in the Drive root.
+  Find a folder by name, optionally within a parent folder.
   Returns `{:ok, folder_id}` or `{:error, :not_found}`.
   """
-  def find_folder_by_name(name) do
+  def find_folder_by_name(name, opts \\ []) do
+    parent = Keyword.get(opts, :parent, "root")
+
     q =
-      "name = '#{escape_query_value(name)}' and mimeType = 'application/vnd.google-apps.folder' and 'root' in parents and trashed = false"
+      "name = '#{escape_query_value(name)}' and mimeType = 'application/vnd.google-apps.folder' and '#{escape_query_value(parent)}' in parents and trashed = false"
 
     case authenticated_request(:get, "#{@drive_base}/files",
            params: [q: q, fields: "files(id,name)", pageSize: 1]
@@ -171,13 +173,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc """
-  Create a folder in the Drive root. Returns `{:ok, folder_id}`.
+  Create a folder in Google Drive. Optionally specify a parent folder.
+  Returns `{:ok, folder_id}`.
   """
-  def create_folder(name) do
-    body = %{
-      name: name,
-      mimeType: "application/vnd.google-apps.folder"
-    }
+  def create_folder(name, opts \\ []) do
+    parent = Keyword.get(opts, :parent)
+
+    body = %{name: name, mimeType: "application/vnd.google-apps.folder"}
+    body = if parent, do: Map.put(body, :parents, [parent]), else: body
 
     case authenticated_request(:post, "#{@drive_base}/files", json: body) do
       {:ok, %{status: status, body: %{"id" => id}}} when status in 200..299 -> {:ok, id}
@@ -188,20 +191,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc """
   Find a folder by name, or create it if it doesn't exist.
+  Optionally specify a parent folder.
   Returns `{:ok, folder_id}`.
   """
-  def find_or_create_folder(name) do
-    case find_folder_by_name(name) do
+  def find_or_create_folder(name, opts \\ []) do
+    case find_folder_by_name(name, opts) do
       {:ok, id} -> {:ok, id}
-      {:error, :not_found} -> create_folder(name)
+      {:error, :not_found} -> create_folder(name, opts)
       {:error, _} = err -> err
     end
   end
 
   @doc """
-  Discover templates and documents folder IDs.
-  Looks for folders named "templates" and "documents" in Drive root,
-  creating them if they don't exist. Caches results in Settings.
+  Discover templates, documents, and deleted folder IDs.
+  Looks for folders by name in Drive root, creating them if they don't exist.
+  Caches results in Settings.
   """
   def discover_folders do
     templates_id =
@@ -216,26 +220,70 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         _ -> nil
       end
 
+    # Create deleted/ parent, then deleted/templates and deleted/documents inside it
+    deleted_id =
+      case find_or_create_folder("deleted") do
+        {:ok, id} -> id
+        _ -> nil
+      end
+
+    {deleted_templates_id, deleted_documents_id} =
+      if deleted_id do
+        dt =
+          case find_or_create_folder("templates", parent: deleted_id) do
+            {:ok, id} -> id
+            _ -> nil
+          end
+
+        dd =
+          case find_or_create_folder("documents", parent: deleted_id) do
+            {:ok, id} -> id
+            _ -> nil
+          end
+
+        {dt, dd}
+      else
+        {nil, nil}
+      end
+
     # Save to settings
     creds = Settings.get_json_setting(@settings_key, %{})
 
     updated =
       Map.merge(creds, %{
         "templates_folder_id" => templates_id,
-        "documents_folder_id" => documents_id
+        "documents_folder_id" => documents_id,
+        "deleted_templates_folder_id" => deleted_templates_id,
+        "deleted_documents_folder_id" => deleted_documents_id
       })
 
     save_credentials(updated)
 
-    %{templates_folder_id: templates_id, documents_folder_id: documents_id}
+    %{
+      templates_folder_id: templates_id,
+      documents_folder_id: documents_id,
+      deleted_templates_folder_id: deleted_templates_id,
+      deleted_documents_folder_id: deleted_documents_id
+    }
   end
 
   @doc "Get cached folder IDs from Settings, or discover them."
   def get_folder_ids do
     case Settings.get_json_setting(@settings_key, nil) do
-      %{"templates_folder_id" => t, "documents_folder_id" => d}
-      when is_binary(t) and t != "" and is_binary(d) and d != "" ->
-        %{templates_folder_id: t, documents_folder_id: d}
+      %{
+        "templates_folder_id" => t,
+        "documents_folder_id" => d,
+        "deleted_templates_folder_id" => dt,
+        "deleted_documents_folder_id" => dd
+      }
+      when is_binary(t) and t != "" and is_binary(d) and d != "" and is_binary(dt) and
+             dt != "" and is_binary(dd) and dd != "" ->
+        %{
+          templates_folder_id: t,
+          documents_folder_id: d,
+          deleted_templates_folder_id: dt,
+          deleted_documents_folder_id: dd
+        }
 
       _ ->
         discover_folders()
@@ -356,6 +404,32 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # Google Drive API
   # ===========================================================================
 
+  @doc "Move a file to a different folder in Google Drive."
+  def move_file(file_id, to_folder_id) do
+    # The Drive API PATCH with addParents/removeParents moves a file between folders
+    case authenticated_request(:get, "#{@drive_base}/files/#{file_id}",
+           params: [fields: "parents"]
+         ) do
+      {:ok, %{status: 200, body: %{"parents" => current_parents}}} ->
+        remove = Enum.join(current_parents, ",")
+
+        case authenticated_request(:patch, "#{@drive_base}/files/#{file_id}",
+               params: [addParents: to_folder_id, removeParents: remove],
+               json: %{}
+             ) do
+          {:ok, %{status: status}} when status in 200..299 -> :ok
+          {:ok, %{body: body}} -> {:error, "Move failed: #{inspect(body)}"}
+          {:error, _} = err -> err
+        end
+
+      {:ok, %{body: body}} ->
+        {:error, "Failed to get file parents: #{inspect(body)}"}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   @doc "Copy a file in Google Drive. Returns the new file's ID."
   def copy_file(file_id, new_name, opts \\ []) do
     parent = Keyword.get(opts, :parent)
@@ -457,6 +531,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp do_request(:get, url, opts), do: Req.get(url, opts)
   defp do_request(:post, url, opts), do: Req.post(url, opts)
+  defp do_request(:patch, url, opts), do: Req.patch(url, opts)
 
   defp escape_query_value(value) do
     value |> to_string() |> String.replace("'", "\\'")
