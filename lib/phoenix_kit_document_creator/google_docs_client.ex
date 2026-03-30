@@ -404,11 +404,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp fetch_thumbnail_image(url) do
     case Req.get(url) do
       {:ok, %{status: 200, body: body, headers: headers}} ->
-        content_type =
-          Enum.find_value(headers, "image/png", fn
-            {"content-type", v} -> v |> String.split(";") |> hd() |> String.trim()
-            _ -> nil
-          end)
+        content_type = extract_content_type(headers)
 
         {:ok, "data:#{content_type};base64,#{Base.encode64(body)}"}
 
@@ -466,6 +462,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     value |> to_string() |> String.replace("'", "\\'")
   end
 
+  # Req headers can be a map (%{"k" => ["v"]}) or list of tuples ([{"k", "v"}])
+  defp extract_content_type(%{"content-type" => [v | _]}), do: v
+  defp extract_content_type(%{"content-type" => v}) when is_binary(v), do: v
+
+  defp extract_content_type(headers) when is_list(headers) do
+    Enum.find_value(headers, "image/png", fn
+      {"content-type", v} when is_binary(v) -> v
+      {"content-type", [v | _]} -> v
+      _ -> nil
+    end)
+  end
+
+  defp extract_content_type(_), do: "image/png"
   defp get_client_credentials do
     case Settings.get_json_setting(@settings_key, nil) do
       %{"client_id" => id, "client_secret" => secret}

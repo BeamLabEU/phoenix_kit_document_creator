@@ -579,7 +579,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       <%= if @thumbnail do %>
         <img src={@thumbnail} style="width:100%;height:100%;object-fit:cover;object-position:top;" />
       <% else %>
-        <div style="width:100%;height:100%;background:#fff;" />
+        <div style="width:100%;height:100%;background:#fff;display:flex;align-items:center;justify-content:center;">
+          <span class="loading loading-spinner loading-md text-base-300" />
+        </div>
       <% end %>
     </div>
     """
