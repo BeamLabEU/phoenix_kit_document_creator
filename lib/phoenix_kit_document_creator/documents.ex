@@ -92,6 +92,44 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   # ===========================================================================
+  # Deleting (soft — moves to deleted folder)
+  # ===========================================================================
+
+  @doc "Move a document to the deleted/documents folder."
+  def delete_document(file_id) when is_binary(file_id) do
+    move_to_deleted_folder(file_id, :deleted_documents_folder_id)
+  end
+
+  @doc "Move a template to the deleted/templates folder."
+  def delete_template(file_id) when is_binary(file_id) do
+    move_to_deleted_folder(file_id, :deleted_templates_folder_id)
+  end
+
+  defp move_to_deleted_folder(file_id, folder_key) do
+    folder_id =
+      case get_folder_ids() do
+        %{^folder_key => id} when is_binary(id) -> id
+        _ -> nil
+      end
+
+    # If folder ID is missing, re-discover (creates folders if needed) and retry
+    folder_id =
+      if folder_id do
+        folder_id
+      else
+        case refresh_folders() do
+          %{^folder_key => id} when is_binary(id) -> id
+          _ -> nil
+        end
+      end
+
+    case folder_id do
+      nil -> {:error, :deleted_folder_not_found}
+      id -> GoogleDocsClient.move_file(file_id, id)
+    end
+  end
+
+  # ===========================================================================
   # Variables
   # ===========================================================================
 

@@ -273,6 +273,32 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
+  # ── Delete (soft) ────────────────────────────────────────────────
+
+  def handle_event("delete", %{"id" => file_id}, socket) do
+    result =
+      if socket.assigns.live_action == :templates,
+        do: Documents.delete_template(file_id),
+        else: Documents.delete_document(file_id)
+
+    case result do
+      :ok ->
+        broadcast_files_changed()
+        # Remove from local assigns immediately
+        socket =
+          if socket.assigns.live_action == :templates do
+            assign(socket, templates: Enum.reject(socket.assigns.templates, &(&1["id"] == file_id)))
+          else
+            assign(socket, documents: Enum.reject(socket.assigns.documents, &(&1["id"] == file_id)))
+          end
+
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply, assign(socket, error: "Delete failed: #{inspect(reason)}")}
+    end
+  end
+
   # ── Refresh ──────────────────────────────────────────────────────
 
   def handle_event("refresh", _params, socket) do
@@ -534,6 +560,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             >
               <span class="hero-arrow-down-tray w-3 h-3" /> PDF
             </button>
+            <button
+              class="btn btn-ghost btn-xs py-2 text-error"
+              phx-click="delete"
+              phx-value-id={file["id"]}
+              data-confirm={"Delete \"#{file["name"]}\"? It will be moved to the deleted folder."}
+            >
+              <span class="hero-trash w-3 h-3" />
+            </button>
           </div>
         </div>
       </div>
@@ -563,6 +597,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   <button class="btn btn-ghost btn-xs" phx-click="export_pdf" phx-value-id={file["id"]} phx-value-name={file["name"]} title="Export PDF">
                     <span class="hero-arrow-down-tray w-3.5 h-3.5" />
                   </button>
+                  <button
+                    class="btn btn-ghost btn-xs text-error"
+                    phx-click="delete"
+                    phx-value-id={file["id"]}
+                    data-confirm={"Delete \"#{file["name"]}\"? It will be moved to the deleted folder."}
+                    title="Delete"
+                  >
+                    <span class="hero-trash w-3.5 h-3.5" />
+                  </button>
                 </div>
               </td>
             </tr>
@@ -579,7 +622,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       <%= if @thumbnail do %>
         <img src={@thumbnail} style="width:100%;height:100%;object-fit:cover;object-position:top;" />
       <% else %>
-        <div style="width:100%;height:100%;background:#fff;" />
+        <div style="width:100%;height:100%;background:#fff;display:flex;align-items:center;justify-content:center;">
+          <span class="loading loading-spinner loading-md text-base-300" />
+        </div>
       <% end %>
     </div>
     """
