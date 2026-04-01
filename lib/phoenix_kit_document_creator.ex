@@ -79,6 +79,9 @@ defmodule PhoenixKitDocumentCreator do
   end
 
   @impl PhoenixKit.Module
+  def css_sources, do: [:phoenix_kit_document_creator]
+
+  @impl PhoenixKit.Module
   def children, do: []
 
   @impl PhoenixKit.Module
