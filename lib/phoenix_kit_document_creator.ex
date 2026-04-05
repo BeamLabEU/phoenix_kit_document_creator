@@ -82,6 +82,9 @@ defmodule PhoenixKitDocumentCreator do
   def css_sources, do: [:phoenix_kit_document_creator]
 
   @impl PhoenixKit.Module
+  def required_integrations, do: ["google"]
+
+  @impl PhoenixKit.Module
   def children, do: []
 
   @impl PhoenixKit.Module

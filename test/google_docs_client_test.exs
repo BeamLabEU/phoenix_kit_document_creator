@@ -11,15 +11,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
     test "exports credential functions" do
       exports = GoogleDocsClient.__info__(:functions)
       assert {:get_credentials, 0} in exports
-      assert {:save_credentials, 1} in exports
-    end
-
-    test "exports auth functions" do
-      exports = GoogleDocsClient.__info__(:functions)
-      assert {:authorization_url, 1} in exports
-      assert {:exchange_code, 2} in exports
-      assert {:refresh_access_token, 0} in exports
       assert {:connection_status, 0} in exports
+      assert {:folder_settings_key, 0} in exports
     end
 
     test "exports folder functions" do

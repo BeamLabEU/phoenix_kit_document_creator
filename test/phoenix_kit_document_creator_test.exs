@@ -117,6 +117,12 @@ defmodule PhoenixKitDocumentCreatorTest do
     end
   end
 
+  describe "required_integrations/0" do
+    test "declares google as required" do
+      assert PhoenixKitDocumentCreator.required_integrations() == ["google"]
+    end
+  end
+
   describe "version/0" do
     test "returns a version string" do
       version = PhoenixKitDocumentCreator.version()
