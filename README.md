@@ -17,21 +17,14 @@ A [PhoenixKit](https://hex.pm/packages/phoenix_kit) module for document template
 
 ```elixir
 # In parent app's mix.exs
-{:phoenix_kit_document_creator, path: "../phoenix_kit_document_creator"}
+{:phoenix_kit_document_creator, "~> 0.2"}
 ```
 
-### 2. Install and migrate
-
-```bash
-mix deps.get
-mix ecto.migrate   # Runs PhoenixKit's versioned migrations (V86 + V88)
-```
-
-### 3. Enable the module
+### 2. Enable the module
 
 Start your app, go to **Admin > Modules**, enable **Document Creator**.
 
-### 4. Connect Google Docs
+### 3. Connect Google Docs
 
 1. Create a Google Cloud project with **Docs API** and **Drive API** enabled
 2. Create an **OAuth 2.0 Client ID** (Web application type)

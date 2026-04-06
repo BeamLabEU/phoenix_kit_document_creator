@@ -1,3 +1,11 @@
+## 0.2.2 - 2026-04-02
+
+### Added
+- Add `css_sources/0` callback for Tailwind CSS scanning of module components
+
+### Changed
+- Upgrade dependencies
+
 ## 0.2.1 - 2026-03-30
 
 ### Added
