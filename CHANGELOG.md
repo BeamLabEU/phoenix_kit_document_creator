@@ -1,3 +1,12 @@
+## 0.2.3 - 2026-04-06
+
+### Changed
+- Migrate Google OAuth credentials to centralized PhoenixKit.Integrations system
+- Remove duplicate OAuth code (authorization, exchange, refresh, userinfo)
+- Simplify settings LiveView — OAuth flow now handled by Integrations core
+- Declare `required_integrations: ["google"]`
+- Update dependencies to latest versions
+
 ## 0.2.2 - 2026-04-02
 
 ### Added
