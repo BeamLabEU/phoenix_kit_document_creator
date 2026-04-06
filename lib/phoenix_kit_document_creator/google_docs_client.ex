@@ -4,140 +4,54 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   Google Drive is the single source of truth. Templates and documents are
   stored as Google Docs in dedicated Drive folders. This module handles
-  authentication, folder discovery, file listing, document creation,
-  template variable substitution, thumbnails, and PDF export.
+  folder discovery, file listing, document creation, template variable
+  substitution, thumbnails, and PDF export.
 
-  Credentials are stored in PhoenixKit Settings as a JSON blob under the
-  key `"document_creator_google_oauth"`.
+  OAuth credentials and tokens are managed by `PhoenixKit.Integrations`
+  under the `"google"` provider. Folder configuration is stored separately
+  under the `"document_creator_folders"` settings key.
   """
 
+  alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
 
-  @settings_key "document_creator_google_oauth"
-
-  @doc "The Settings key used for OAuth credential storage."
-  def settings_key, do: @settings_key
+  @default_provider "google"
+  @folder_settings_key "document_creator_folders"
+  @settings_key "document_creator_settings"
 
   @docs_base "https://docs.googleapis.com/v1"
   @drive_base "https://www.googleapis.com/drive/v3"
-  @token_url "https://oauth2.googleapis.com/token"
-  @auth_url "https://accounts.google.com/o/oauth2/v2/auth"
-  @scopes "https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive"
 
   # ===========================================================================
-  # Credentials & Auth
+  # Credentials (delegated to PhoenixKit.Integrations)
   # ===========================================================================
 
-  @doc "Get stored OAuth credentials from Settings."
+  @doc "Returns the active provider key, including connection slug if configured."
+  def active_provider_key do
+    case Settings.get_json_setting(@settings_key, %{}) do
+      %{"google_connection" => key} when is_binary(key) and key != "" -> key
+      _ -> @default_provider
+    end
+  end
+
+  @doc "Get stored OAuth credentials via PhoenixKit.Integrations."
   def get_credentials do
-    case Settings.get_json_setting(@settings_key, nil) do
-      nil -> {:error, :not_configured}
-      %{"access_token" => token} = creds when is_binary(token) and token != "" -> {:ok, creds}
-      _ -> {:error, :not_configured}
-    end
-  end
-
-  @doc "Save OAuth credentials to Settings."
-  def save_credentials(creds) when is_map(creds) do
-    Settings.update_json_setting_with_module(@settings_key, creds, "document_creator")
-  end
-
-  @doc "Build the OAuth authorization URL for connecting a Google account."
-  def authorization_url(redirect_uri) do
-    case Settings.get_json_setting(@settings_key, nil) do
-      %{"client_id" => client_id} when is_binary(client_id) and client_id != "" ->
-        params =
-          URI.encode_query(%{
-            client_id: client_id,
-            redirect_uri: redirect_uri,
-            response_type: "code",
-            scope: @scopes,
-            access_type: "offline",
-            prompt: "consent"
-          })
-
-        {:ok, "#{@auth_url}?#{params}"}
-
-      _ ->
-        {:error, :client_id_not_configured}
-    end
-  end
-
-  @doc "Exchange an authorization code for access and refresh tokens."
-  def exchange_code(code, redirect_uri) do
-    with {:ok, creds} <- get_client_credentials() do
-      case Req.post(@token_url,
-             form: [
-               code: code,
-               client_id: creds["client_id"],
-               client_secret: creds["client_secret"],
-               redirect_uri: redirect_uri,
-               grant_type: "authorization_code"
-             ]
-           ) do
-        {:ok, %{status: 200, body: %{"access_token" => access_token} = body}} ->
-          updated =
-            Map.merge(creds, %{
-              "access_token" => access_token,
-              "refresh_token" => body["refresh_token"] || creds["refresh_token"],
-              "token_type" => body["token_type"],
-              "expires_in" => body["expires_in"],
-              "token_obtained_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-            })
-
-          save_credentials(updated)
-          {:ok, updated}
-
-        {:ok, %{body: body}} ->
-          {:error, "Token exchange failed: #{inspect(body)}"}
-
-        {:error, exception} ->
-          {:error, "Token exchange request failed: #{Exception.message(exception)}"}
-      end
-    end
-  end
-
-  @doc "Refresh the access token using the stored refresh token."
-  def refresh_access_token do
-    with {:ok, creds} <- get_credentials(),
-         refresh_token when is_binary(refresh_token) and refresh_token != "" <-
-           creds["refresh_token"] do
-      case Req.post(@token_url,
-             form: [
-               refresh_token: refresh_token,
-               client_id: creds["client_id"],
-               client_secret: creds["client_secret"],
-               grant_type: "refresh_token"
-             ]
-           ) do
-        {:ok, %{status: 200, body: %{"access_token" => new_token} = body}} ->
-          updated =
-            Map.merge(creds, %{
-              "access_token" => new_token,
-              "expires_in" => body["expires_in"],
-              "token_obtained_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-            })
-
-          save_credentials(updated)
-          {:ok, new_token}
-
-        {:ok, %{body: body}} ->
-          {:error, "Token refresh failed: #{inspect(body)}"}
-
-        {:error, exception} ->
-          {:error, "Token refresh request failed: #{Exception.message(exception)}"}
-      end
-    else
-      nil -> {:error, :no_refresh_token}
-      {:error, _} = err -> err
-    end
+    Integrations.get_credentials(active_provider_key())
   end
 
   @doc "Check if connected. Returns `{:ok, %{email: email}}` or `{:error, reason}`."
   def connection_status do
-    case get_credentials() do
-      {:ok, creds} -> {:ok, %{email: creds["connected_email"] || "Unknown"}}
-      {:error, _} = err -> err
+    case Integrations.get_integration(active_provider_key()) do
+      {:ok, data} ->
+        email =
+          get_in(data, ["metadata", "connected_email"]) ||
+            data["external_account_id"] ||
+            "Unknown"
+
+        {:ok, %{email: email}}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -220,7 +134,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Get configured folder paths and names from Settings, with defaults."
   def get_folder_config do
-    creds = Settings.get_json_setting(@settings_key, %{})
+    creds = Settings.get_json_setting(@folder_settings_key, %{})
 
     %{
       templates_path: creds["folder_path_templates"] || "",
@@ -285,18 +199,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         _ -> nil
       end)
 
-    # Save to settings
-    creds = Settings.get_json_setting(@settings_key, %{})
+    # Save to folder settings
+    folder_data = Settings.get_json_setting(@folder_settings_key, %{})
 
     updated =
-      Map.merge(creds, %{
+      Map.merge(folder_data, %{
         "templates_folder_id" => templates_id,
         "documents_folder_id" => documents_id,
         "deleted_templates_folder_id" => deleted_templates_id,
         "deleted_documents_folder_id" => deleted_documents_id
       })
 
-    save_credentials(updated)
+    Settings.update_json_setting_with_module(@folder_settings_key, updated, "document_creator")
 
     %{
       templates_folder_id: templates_id,
@@ -308,11 +222,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Get cached folder IDs from Settings, or discover them."
   def get_folder_ids do
-    case parse_cached_folder_ids(Settings.get_json_setting(@settings_key, nil)) do
+    case parse_cached_folder_ids(Settings.get_json_setting(@folder_settings_key, nil)) do
       {:ok, ids} -> ids
       :miss -> discover_folders()
     end
   end
+
+  @doc "The Settings key used for folder configuration."
+  def folder_settings_key, do: @folder_settings_key
 
   @doc "List subfolders within a parent folder. Returns `{:ok, [%{id, name}]}`."
   def list_subfolders(parent_id \\ "root") do
@@ -543,40 +460,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def get_edit_url(_), do: nil
 
   # ===========================================================================
-  # Internal: Authenticated HTTP requests with auto-refresh
+  # Internal: Authenticated HTTP requests via PhoenixKit.Integrations
   # ===========================================================================
 
   defp authenticated_request(method, url, opts \\ []) do
-    with {:ok, creds} <- get_credentials() do
-      opts = put_auth_header(opts, creds["access_token"])
-
-      case do_request(method, url, opts) do
-        {:ok, %{status: 401}} -> retry_with_refreshed_token(method, url, opts)
-        other -> other
-      end
-    end
+    Integrations.authenticated_request(active_provider_key(), method, url, opts)
   end
-
-  defp retry_with_refreshed_token(method, url, opts) do
-    case refresh_access_token() do
-      {:ok, new_token} -> do_request(method, url, put_auth_header(opts, new_token))
-      {:error, _} = err -> err
-    end
-  end
-
-  defp put_auth_header(opts, token) do
-    header = {"authorization", "Bearer #{token}"}
-
-    opts
-    |> Keyword.put_new(:headers, [])
-    |> Keyword.update!(:headers, fn headers ->
-      [header | Enum.reject(headers, &match?({"authorization", _}, &1))]
-    end)
-  end
-
-  defp do_request(:get, url, opts), do: Req.get(url, opts)
-  defp do_request(:post, url, opts), do: Req.post(url, opts)
-  defp do_request(:patch, url, opts), do: Req.patch(url, opts)
 
   defp escape_query_value(value) do
     value |> to_string() |> String.replace("'", "\\'")
@@ -599,15 +488,4 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     do: v |> String.split(";") |> hd() |> String.trim()
 
   defp extract_content_type(_), do: "image/png"
-
-  defp get_client_credentials do
-    case Settings.get_json_setting(@settings_key, nil) do
-      %{"client_id" => id, "client_secret" => secret}
-      when is_binary(id) and id != "" and is_binary(secret) and secret != "" ->
-        {:ok, %{"client_id" => id, "client_secret" => secret}}
-
-      _ ->
-        {:error, :client_credentials_not_configured}
-    end
-  end
 end

@@ -51,9 +51,10 @@ test/
 - **Google Drive is source of truth**: All document content lives in Google Drive. The Phoenix app is a coordinator — it manages OAuth, lists files, substitutes variables, and exports PDFs via API.
 - **No local editor**: Editing happens in Google Docs. No GrapesJS, TipTap, or other JS editors.
 - **No local PDF generation**: PDFs are exported via the Drive API. No ChromicPDF, Gotenberg, or Chrome dependency.
-- **OAuth credentials in Settings**: Stored as a JSON blob via `PhoenixKit.Settings` under key `"document_creator_google_oauth"`.
-- **Auto-refresh on 401**: The `GoogleDocsClient` automatically refreshes expired access tokens when a request returns 401.
-- **Folder convention**: Templates go in a `/templates` folder, documents in `/documents` — both in the Drive root. Folder IDs are cached in Settings.
+- **Credentials via PhoenixKit.Integrations**: Google OAuth credentials (client_id/secret, access/refresh tokens) are managed centrally by `PhoenixKit.Integrations` under the `"google"` provider. The module declares `required_integrations: ["google"]`.
+- **Auto-refresh on 401**: API calls go through `PhoenixKit.Integrations.authenticated_request/4` which automatically refreshes expired access tokens.
+- **Folder config stored separately**: Folder paths and cached folder IDs are stored in `"document_creator_folders"` settings key (not in the integration data).
+- **Connection selection**: The module stores the selected Google connection UUID in `"document_creator_settings"` → `"google_connection"`. Multiple Google connections are supported via the integration picker component.
 - **No own Ecto repo**: Uses the host app's repo via `PhoenixKit.repo()`.
 
 ## Running Tests
@@ -72,7 +73,7 @@ mix test
 - **Adding admin tabs**: Register in `phoenix_kit_document_creator.ex` `admin_tabs/0` callback.
 - **Adding new API operations**: Add to `google_docs_client.ex` using `authenticated_request/3` for auto-refresh.
 - **Adding path helpers**: Add to `paths.ex`.
-- **Changing OAuth flow**: `google_docs_client.ex` handles credential storage, token exchange, and refresh.
+- **Changing OAuth flow**: OAuth is managed centrally by `PhoenixKit.Integrations`. The `GoogleDocsClient` uses `Integrations.authenticated_request/4` for API calls with auto-refresh.
 
 ## Versioning & Releases
 
