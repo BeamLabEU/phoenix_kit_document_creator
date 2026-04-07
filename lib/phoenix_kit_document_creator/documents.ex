@@ -6,8 +6,17 @@ defmodule PhoenixKitDocumentCreator.Documents do
   mirrors file metadata (name, google_doc_id, status, thumbnails, variables)
   to the local database for fast listing and audit tracking.
 
-  Listing reads from the local DB. A background sync polls Google Drive
-  and upserts records, marking files as "lost" if they disappear from Drive.
+  ## API layers
+
+  This module provides **combined** operations (Drive + DB). For direct access:
+
+  - **Drive-only** — Use `PhoenixKitDocumentCreator.GoogleDocsClient` for raw Google
+    Drive/Docs API calls (create files, list folders, export PDF, move files) without
+    touching the local database.
+  - **DB-only** — Use `list_templates_from_db/0`, `list_documents_from_db/0`,
+    `load_cached_thumbnails/1`, `persist_thumbnail/2` for local DB queries.
+  - **Combined** — Use `create_template/2`, `create_document/2`, `sync_from_drive/0`,
+    `delete_template/2`, etc. which coordinate between Drive and DB.
   """
 
   import Ecto.Query

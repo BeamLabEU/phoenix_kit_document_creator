@@ -2,10 +2,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @moduledoc """
   Google Docs and Drive API client for the Document Creator module.
 
-  Google Drive is the single source of truth. Templates and documents are
-  stored as Google Docs in dedicated Drive folders. This module handles
-  folder discovery, file listing, document creation, template variable
-  substitution, thumbnails, and PDF export.
+  This module provides **direct Google Drive and Docs API access** without
+  touching the local database. Use it when you need raw Drive operations:
+  creating files, listing folders, moving files, exporting PDFs, reading
+  document content, and substituting template variables.
+
+  For combined Drive + DB operations, use `PhoenixKitDocumentCreator.Documents`.
+
+  ## Capabilities
+
+  - **Folders**: `find_folder_by_name/2`, `create_folder/2`, `find_or_create_folder/2`,
+    `ensure_folder_path/2`, `discover_folders/0`, `list_subfolders/1`
+  - **Files**: `list_folder_files/1`, `move_file/2`, `copy_file/3`, `create_document/2`
+  - **Docs**: `get_document/1`, `get_document_text/1`, `batch_update/2`, `replace_all_text/2`
+  - **Export**: `export_pdf/1`, `fetch_thumbnail/1`
+  - **Status**: `file_status/1`, `file_location/1`
+  - **URLs**: `get_edit_url/1`, `get_folder_url/1`
 
   OAuth credentials and tokens are managed by `PhoenixKit.Integrations`
   under the `"google"` provider. Folder configuration is stored separately

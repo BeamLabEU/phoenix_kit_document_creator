@@ -123,6 +123,14 @@ Migration V86 (core) creates the tables. V94 adds `google_doc_id`, `status`, `pa
 
 **Note:** Migrations live in PhoenixKit core (`lib/phoenix_kit/migrations/postgres/`), not in this module.
 
+## Public API Layers
+
+The module exposes two complementary APIs:
+
+1. **`PhoenixKitDocumentCreator.GoogleDocsClient`** — Direct Google Drive/Docs API access. No local DB operations. Use for: creating files, listing folders, moving files, exporting PDFs, reading document content, template variable substitution. Another module can use this to interact with Google Drive directly.
+
+2. **`PhoenixKitDocumentCreator.Documents`** — Combined Drive + DB operations. Coordinates between Google Drive and the local database. Includes DB-only functions (`list_templates_from_db`, `load_cached_thumbnails`) and combined functions (`create_template`, `sync_from_drive`, `delete_document`). All public functions have `@spec` annotations. Mutating functions accept `opts` with `:actor_uuid` for activity logging.
+
 ## Critical Conventions
 
 - **Module key**: `"document_creator"`
