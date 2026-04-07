@@ -243,13 +243,17 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     pid = self()
 
     Task.start(fn ->
-      folders =
-        case GoogleDocsClient.list_subfolders(folder_id) do
-          {:ok, folders} -> folders
-          _ -> []
-        end
+      try do
+        folders =
+          case GoogleDocsClient.list_subfolders(folder_id) do
+            {:ok, folders} -> folders
+            _ -> []
+          end
 
-      send(pid, {:drive_folders_loaded, folders})
+        send(pid, {:drive_folders_loaded, folders})
+      rescue
+        _ -> send(pid, {:drive_folders_loaded, []})
+      end
     end)
 
     {:noreply, socket}
@@ -321,7 +325,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
                   phx-value-field="templates_path"
-                  title={if @templates_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@templates_path}"}
+                  title={if @templates_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @templates_path)}
                 >
                   <span class="hero-folder-open w-4 h-4 shrink-0" />
                   <span class="truncate">{if @templates_path == "", do: "/", else: "#{@templates_path}/"}</span>
@@ -331,7 +335,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   name="templates_name"
                   value={@templates_name}
                   class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
-                  placeholder="templates"
+                  placeholder={gettext("templates")}
                 />
                 <input type="hidden" name="templates_path" value={@templates_path} />
               </div>
@@ -345,7 +349,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
                   phx-value-field="documents_path"
-                  title={if @documents_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@documents_path}"}
+                  title={if @documents_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @documents_path)}
                 >
                   <span class="hero-folder-open w-4 h-4 shrink-0" />
                   <span class="truncate">{if @documents_path == "", do: "/", else: "#{@documents_path}/"}</span>
@@ -355,7 +359,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   name="documents_name"
                   value={@documents_name}
                   class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
-                  placeholder="documents"
+                  placeholder={gettext("documents")}
                 />
                 <input type="hidden" name="documents_path" value={@documents_path} />
               </div>
@@ -369,7 +373,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
                   phx-value-field="deleted_path"
-                  title={if @deleted_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@deleted_path}"}
+                  title={if @deleted_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @deleted_path)}
                 >
                   <span class="hero-folder-open w-4 h-4 shrink-0" />
                   <span class="truncate">{if @deleted_path == "", do: "/", else: "#{@deleted_path}/"}</span>
@@ -379,7 +383,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   name="deleted_name"
                   value={@deleted_name}
                   class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
-                  placeholder="deleted"
+                  placeholder={gettext("deleted")}
                 />
                 <input type="hidden" name="deleted_path" value={@deleted_path} />
               </div>

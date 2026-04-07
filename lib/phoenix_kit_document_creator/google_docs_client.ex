@@ -556,8 +556,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   # Extract content-type from Req response headers.
   # Req >= 0.5 returns headers as %{"content-type" => ["image/png"]}.
-  defp extract_content_type(%{"content-type" => [v | _]}),
-    do: v |> String.split(";") |> hd() |> String.trim()
+  defp extract_content_type(%{"content-type" => [v | _]}) do
+    case String.split(v, ";") do
+      [type | _] -> String.trim(type)
+      _ -> "image/png"
+    end
+  end
 
   defp extract_content_type(_), do: "image/png"
 end
