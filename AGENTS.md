@@ -48,14 +48,38 @@ test/
 
 ## Key Architectural Decisions
 
-- **Google Drive is source of truth**: All document content lives in Google Drive. The Phoenix app is a coordinator — it manages OAuth, lists files, substitutes variables, and exports PDFs via API.
+- **Google Drive is source of truth for content**: All document content lives in Google Drive. The Phoenix app is a coordinator — it manages OAuth, lists files, substitutes variables, and exports PDFs via API.
+- **Local DB mirrors metadata**: File metadata (name, google_doc_id, status, thumbnails, variables) is mirrored to the local database for fast listing and audit tracking. Listing reads from DB; background sync keeps it current with Drive.
+- **Status tracking**: Templates and documents have a `status` field: `"published"` (in Drive), `"trashed"` (soft-deleted via app), or `"lost"` (disappeared from Drive — manually moved/deleted by someone in Google). Lost files recover automatically if they reappear.
+- **Variable tracking**: When creating a document from a template, `variable_values` (the actual substitution values) are persisted to the Document record for debugging. Variable definitions detected in templates are saved to the Template `variables` field.
 - **No local editor**: Editing happens in Google Docs. No GrapesJS, TipTap, or other JS editors.
 - **No local PDF generation**: PDFs are exported via the Drive API. No ChromicPDF, Gotenberg, or Chrome dependency.
 - **Credentials via PhoenixKit.Integrations**: Google OAuth credentials (client_id/secret, access/refresh tokens) are managed centrally by `PhoenixKit.Integrations` under the `"google"` provider. The module declares `required_integrations: ["google"]`.
 - **Auto-refresh on 401**: API calls go through `PhoenixKit.Integrations.authenticated_request/4` which automatically refreshes expired access tokens.
 - **Folder config stored separately**: Folder paths and cached folder IDs are stored in `"document_creator_folders"` settings key (not in the integration data).
 - **Connection selection**: The module stores the selected Google connection UUID in `"document_creator_settings"` → `"google_connection"`. Multiple Google connections are supported via the integration picker component.
-- **No own Ecto repo**: Uses the host app's repo via `PhoenixKit.repo()`.
+- **No own Ecto repo**: Uses the host app's repo via `PhoenixKit.RepoHelper.repo()`.
+
+## Data Flow
+
+```
+Mount → DB read (instant) → render
+         ↓ (background)
+Google Drive API → upsert DB → re-read DB → update assigns
+```
+
+- **Sync**: `Documents.sync_from_drive/0` fetches files from Drive, upserts to DB, marks missing files as "lost", recovers reappeared files.
+- **Create**: After Google API creates/copies a file, the DB record is immediately written.
+- **Delete**: After moving a file to the Drive deleted folder, the DB status is set to "trashed".
+- **Thumbnails**: Fetched async from Drive, persisted to DB, loaded from DB cache on page load.
+
+## Database Tables (V86 + V93)
+
+Migration V86 (core) creates the tables. V93 adds `google_doc_id` columns and `status` to documents.
+
+- `phoenix_kit_doc_templates` — name, slug, status, google_doc_id (unique), variables (jsonb), thumbnail, config, data
+- `phoenix_kit_doc_documents` — name, google_doc_id (unique), status, template_uuid (FK), variable_values (map), thumbnail, config, data
+- `phoenix_kit_doc_headers_footers` — legacy, deprecated (headers/footers handled by Google Docs natively)
 
 ## Running Tests
 

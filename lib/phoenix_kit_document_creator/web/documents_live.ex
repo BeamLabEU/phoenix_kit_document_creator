@@ -2,8 +2,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   @moduledoc """
   Main listing page for the Document Creator.
 
-  Lists templates and documents directly from Google Drive folders.
-  All editing happens in Google Docs (opens in new tab).
+  Lists templates and documents from the local database for fast rendering.
+  Background sync keeps the DB in sync with Google Drive. Files that
+  disappear from Drive are shown with a "lost" indicator.
   """
   use Phoenix.LiveView
 
@@ -24,11 +25,27 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         _ -> false
       end
 
+    # Load from DB immediately (fast, no API call)
+    {templates, documents} =
+      if google_connected do
+        {Documents.list_templates_from_db(), Documents.list_documents_from_db()}
+      else
+        {[], []}
+      end
+
+    # Pre-load cached thumbnails from DB
+    all_ids = Enum.map(templates ++ documents, & &1["id"])
+
+    cached_thumbnails =
+      if all_ids != [], do: Documents.load_cached_thumbnails(all_ids), else: %{}
+
+    db_empty = templates == [] and documents == []
+
     if connected?(socket) do
       PhoenixKit.PubSubHelper.subscribe(@pubsub_topic)
 
       if google_connected do
-        send(self(), :load_files)
+        send(self(), :sync_from_drive)
         :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
       end
     end
@@ -38,10 +55,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        page_title: "Document Creator",
        view_mode: "cards",
        google_connected: google_connected,
-       templates: [],
-       documents: [],
-       thumbnails: %{},
-       loading: google_connected,
+       templates: templates,
+       documents: documents,
+       thumbnails: cached_thumbnails,
+       loading: google_connected and db_empty,
        last_loaded_at: nil,
        error: nil,
        # Modal state
@@ -53,35 +70,43 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
      )}
   end
 
-  # ── Data loading ──────────────────────────────────────────────────
+  # ── Sync from Drive ──────────────────────────────────────────────
 
   @impl true
-  def handle_info(:load_files, socket) do
-    do_load_files_async(socket, _silent = false)
+  def handle_info(:sync_from_drive, socket) do
+    pid = self()
+
+    Task.start(fn ->
+      Documents.sync_from_drive()
+      send(pid, :sync_complete)
+    end)
+
+    {:noreply, socket}
   end
 
-  def handle_info(:load_files_silent, socket) do
-    do_load_files_async(socket, _silent = true)
-  end
+  def handle_info(:sync_complete, socket) do
+    templates = Documents.list_templates_from_db()
+    documents = Documents.list_documents_from_db()
 
-  def handle_info({:files_loaded, templates, documents, silent}, socket) do
-    old_fingerprint = files_fingerprint(socket.assigns.templates, socket.assigns.documents)
-    new_fingerprint = files_fingerprint(templates, documents)
-    changed = old_fingerprint != new_fingerprint
+    # Load cached thumbnails from DB
+    all_ids = Enum.map(templates ++ documents, & &1["id"])
+    cached_thumbnails = Documents.load_cached_thumbnails(all_ids)
 
-    if changed and old_fingerprint != :empty do
-      broadcast_files_changed()
-      load_thumbnails_async(templates ++ documents)
-    end
+    # Fetch fresh thumbnails for any files missing them
+    missing_thumb_files =
+      (templates ++ documents)
+      |> Enum.filter(fn f -> is_nil(cached_thumbnails[f["id"]]) end)
 
-    socket = assign(socket, templates: templates, documents: documents, last_loaded_at: now_ms())
+    if missing_thumb_files != [], do: load_thumbnails_async(missing_thumb_files)
 
-    if silent do
-      {:noreply, socket}
-    else
-      load_thumbnails_async(templates ++ documents)
-      {:noreply, assign(socket, loading: false)}
-    end
+    {:noreply,
+     assign(socket,
+       templates: templates,
+       documents: documents,
+       thumbnails: Map.merge(socket.assigns.thumbnails, cached_thumbnails),
+       loading: false,
+       last_loaded_at: now_ms()
+     )}
   end
 
   def handle_info(:load_thumbnails, socket) do
@@ -95,32 +120,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   def handle_info(:poll_for_changes, socket) do
     if not socket.assigns.loading and not within_cooldown?(socket) do
-      send(self(), :load_files_silent)
+      send(self(), :sync_from_drive)
     end
 
     {:noreply, socket}
   end
 
   def handle_info({:files_changed, from_pid}, socket) do
-    # Ignore self-broadcasts to prevent reload loops (H3)
     if from_pid != self() and not socket.assigns.loading and not within_cooldown?(socket) do
-      send(self(), :load_files_silent)
+      send(self(), :sync_from_drive)
     end
-
-    {:noreply, socket}
-  end
-
-  defp do_load_files_async(socket, silent) do
-    pid = self()
-
-    Task.start(fn ->
-      # Fetch templates and documents in parallel (H2)
-      t = Task.async(fn -> Documents.list_templates() end)
-      d = Task.async(fn -> Documents.list_documents() end)
-      templates = Task.await(t, 15_000)
-      documents = Task.await(d, 15_000)
-      send(pid, {:files_loaded, templates, documents, silent})
-    end)
 
     {:noreply, socket}
   end
@@ -306,13 +315,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── Refresh ──────────────────────────────────────────────────────
 
   def handle_event("refresh", _params, socket) do
-    send(self(), :load_files)
+    send(self(), :sync_from_drive)
     {:noreply, assign(socket, loading: true)}
   end
 
   def handle_event("silent_refresh", _params, socket) do
     if not socket.assigns.loading and not within_cooldown?(socket) do
-      send(self(), :load_files_silent)
+      send(self(), :sync_from_drive)
     end
 
     {:noreply, socket}
@@ -539,9 +548,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
           <%!-- Info --%>
           <div class="p-3 flex-1 flex flex-col">
-            <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="font-medium text-sm truncate link link-hover">
-              {file["name"]}
-            </a>
+            <div class="flex items-center gap-1.5">
+              <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="font-medium text-sm truncate link link-hover">
+                {file["name"]}
+              </a>
+              <span :if={file["status"] == "lost"} class="badge badge-warning badge-xs" title="File not found in Google Drive">lost</span>
+            </div>
             <p :if={file["modifiedTime"]} class="text-xs text-base-content/40 mt-auto pt-2">
               {format_time(file["modifiedTime"])}
             </p>
@@ -581,6 +593,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           <thead>
             <tr>
               <th>Name</th>
+              <th>Status</th>
               <th>Modified</th>
               <th class="text-right">Actions</th>
             </tr>
@@ -591,6 +604,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="font-medium link link-hover">
                   {file["name"]}
                 </a>
+              </td>
+              <td>
+                <span :if={file["status"] == "lost"} class="badge badge-warning badge-xs">lost</span>
               </td>
               <td class="text-base-content/60 text-nowrap">{format_time(file["modifiedTime"])}</td>
               <td class="text-right">
@@ -668,14 +684,5 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       nil -> false
       last -> now_ms() - last < @refresh_cooldown_ms
     end
-  end
-
-  # Build a fingerprint from file lists to detect changes.
-  defp files_fingerprint([], []), do: :empty
-
-  defp files_fingerprint(templates, documents) do
-    (templates ++ documents)
-    |> Enum.map(fn f -> {f["id"], f["name"], f["modifiedTime"]} end)
-    |> :erlang.phash2()
   end
 end

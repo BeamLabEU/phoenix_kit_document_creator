@@ -18,7 +18,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   @primary_key {:uuid, UUIDv7, autogenerate: true}
   @foreign_key_type UUIDv7
 
-  @statuses ~w(published trashed)
+  @statuses ~w(published trashed lost)
 
   schema "phoenix_kit_doc_templates" do
     field(:name, :string)
@@ -102,5 +102,13 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     |> String.replace(~r/[^a-z0-9\s-]/, "")
     |> String.replace(~r/[\s-]+/, "-")
     |> String.trim("-")
+  end
+
+  @doc "Changeset for upserting from Google Drive sync data."
+  def sync_changeset(template, attrs) do
+    template
+    |> cast(attrs, [:name, :google_doc_id, :status, :thumbnail, :variables])
+    |> validate_required([:name, :google_doc_id])
+    |> validate_inclusion(:status, @statuses)
   end
 end
