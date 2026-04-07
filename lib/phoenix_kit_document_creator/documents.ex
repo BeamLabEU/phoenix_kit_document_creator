@@ -25,7 +25,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   @doc "List templates from the local DB. Returns maps compatible with the LiveView."
   def list_templates_from_db do
     Template
-    |> where([t], t.status in ["published", "lost"])
+    |> where([t], t.status in ["published", "lost", "unfiled"])
     |> where([t], not is_nil(t.google_doc_id))
     |> order_by([t], desc: t.updated_at)
     |> repo().all()
@@ -35,7 +35,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   @doc "List documents from the local DB. Returns maps compatible with the LiveView."
   def list_documents_from_db do
     Document
-    |> where([d], d.status in ["published", "lost"])
+    |> where([d], d.status in ["published", "lost", "unfiled"])
     |> where([d], not is_nil(d.google_doc_id))
     |> order_by([d], desc: d.updated_at)
     |> repo().all()
@@ -48,7 +48,9 @@ defmodule PhoenixKitDocumentCreator.Documents do
       "name" => record.name,
       "modifiedTime" =>
         if(record.updated_at, do: DateTime.to_iso8601(record.updated_at), else: nil),
-      "status" => Map.get(record, :status, "published")
+      "status" => Map.get(record, :status, "published"),
+      "path" => Map.get(record, :path),
+      "folder_id" => Map.get(record, :folder_id)
     }
   end
 
@@ -109,8 +111,15 @@ defmodule PhoenixKitDocumentCreator.Documents do
          when is_binary(tid) and is_binary(did) <- get_folder_ids(),
          {:ok, drive_templates} <- GoogleDocsClient.list_folder_files(tid),
          {:ok, drive_documents} <- GoogleDocsClient.list_folder_files(did) do
-      Enum.each(drive_templates, &upsert_template_from_drive/1)
-      Enum.each(drive_documents, &upsert_document_from_drive/1)
+      Enum.each(
+        drive_templates,
+        &upsert_template_from_drive(&1, managed_location_attrs(:template))
+      )
+
+      Enum.each(
+        drive_documents,
+        &upsert_document_from_drive(&1, managed_location_attrs(:document))
+      )
 
       drive_template_ids = MapSet.new(drive_templates, & &1["id"])
       drive_document_ids = MapSet.new(drive_documents, & &1["id"])
@@ -135,8 +144,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
     %Template{}
     |> Template.sync_changeset(attrs)
     |> repo().insert(
-      on_conflict: {:replace, [:name, :status, :updated_at]},
-      conflict_target: :google_doc_id
+      on_conflict: {:replace, [:name, :status, :path, :folder_id, :updated_at]},
+      conflict_target: {:unsafe_fragment, "(google_doc_id) WHERE google_doc_id IS NOT NULL"}
     )
   end
 
@@ -147,8 +156,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
     %Document{}
     |> Document.sync_changeset(attrs)
     |> repo().insert(
-      on_conflict: {:replace, [:name, :status, :updated_at]},
-      conflict_target: :google_doc_id
+      on_conflict: {:replace, [:name, :status, :path, :folder_id, :updated_at]},
+      conflict_target: {:unsafe_fragment, "(google_doc_id) WHERE google_doc_id IS NOT NULL"}
     )
   end
 
@@ -158,53 +167,79 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   defp reconcile_status(schema, drive_ids) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
+    managed_location = managed_location(schema_type(schema))
+    deleted_folder_id = deleted_folder_id(schema_type(schema))
 
-    # Mark published records as "lost" if their google_doc_id is not in Drive
-    published_records =
+    tracked_records =
       schema
-      |> where([r], r.status == "published" and not is_nil(r.google_doc_id))
-      |> select([r], {r.uuid, r.google_doc_id})
+      |> where([r], r.status in ["published", "lost", "unfiled"] and not is_nil(r.google_doc_id))
+      |> select([r], {r.uuid, r.google_doc_id, r.folder_id})
       |> repo().all()
 
-    lost_uuids =
-      published_records
-      |> Enum.reject(fn {_uuid, gid} -> MapSet.member?(drive_ids, gid) end)
-      |> Enum.map(fn {uuid, _gid} -> uuid end)
+    grouped =
+      Enum.group_by(
+        tracked_records,
+        fn {_uuid, gid, folder_id} ->
+          classify_file(gid, folder_id, drive_ids, managed_location, deleted_folder_id)
+        end,
+        fn {uuid, _gid, _folder_id} -> uuid end
+      )
 
-    if lost_uuids != [] do
-      schema
-      |> where([r], r.uuid in ^lost_uuids)
-      |> repo().update_all(set: [status: "lost", updated_at: now])
-    end
+    update_statuses(schema, Map.get(grouped, :published, []), "published", now)
+    update_statuses(schema, Map.get(grouped, :lost, []), "lost", now)
+    update_statuses(schema, Map.get(grouped, :trashed, []), "trashed", now)
+    update_statuses(schema, Map.get(grouped, :unfiled, []), "unfiled", now)
+  end
 
-    # Recover "lost" records that reappeared in Drive
-    lost_records =
-      schema
-      |> where([r], r.status == "lost" and not is_nil(r.google_doc_id))
-      |> select([r], {r.uuid, r.google_doc_id})
-      |> repo().all()
-
-    recovered_uuids =
-      lost_records
-      |> Enum.filter(fn {_uuid, gid} -> MapSet.member?(drive_ids, gid) end)
-      |> Enum.map(fn {uuid, _gid} -> uuid end)
-
-    if recovered_uuids != [] do
-      schema
-      |> where([r], r.uuid in ^recovered_uuids)
-      |> repo().update_all(set: [status: "published", updated_at: now])
+  defp classify_file(gid, folder_id, drive_ids, managed_location, deleted_folder_id) do
+    if MapSet.member?(drive_ids, gid) do
+      :published
+    else
+      classify_by_api(gid, folder_id, managed_location, deleted_folder_id)
     end
   end
 
-  defp mark_status_by_google_doc_id(google_doc_id, status) do
+  defp classify_by_api(gid, folder_id, managed_location, deleted_folder_id) do
+    case GoogleDocsClient.file_status(gid) do
+      {:ok, %{trashed: true}} ->
+        :trashed
+
+      {:ok, %{parents: parents}} when is_list(parents) ->
+        classify_by_location(parents, folder_id, managed_location, deleted_folder_id)
+
+      _ ->
+        :lost
+    end
+  end
+
+  defp classify_by_location(parents, folder_id, managed_location, deleted_folder_id) do
+    accepted_folder_id = folder_id || managed_location.folder_id
+
+    cond do
+      is_binary(deleted_folder_id) and deleted_folder_id in parents -> :trashed
+      is_binary(accepted_folder_id) and accepted_folder_id in parents -> :published
+      true -> :unfiled
+    end
+  end
+
+  defp update_file_by_google_doc_id(google_doc_id, attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
+    attrs = Map.put_new(attrs, :updated_at, now)
 
     Template
     |> where([t], t.google_doc_id == ^google_doc_id)
-    |> repo().update_all(set: [status: status, updated_at: now])
+    |> repo().update_all(set: Map.to_list(attrs))
 
     Document
     |> where([d], d.google_doc_id == ^google_doc_id)
+    |> repo().update_all(set: Map.to_list(attrs))
+  end
+
+  defp update_statuses(_schema, [], _status, _now), do: :ok
+
+  defp update_statuses(schema, uuids, status, now) do
+    schema
+    |> where([r], r.uuid in ^uuids)
     |> repo().update_all(set: [status: status, updated_at: now])
   end
 
@@ -250,7 +285,11 @@ defmodule PhoenixKitDocumentCreator.Documents do
       %{templates_folder_id: id} when is_binary(id) ->
         case GoogleDocsClient.create_document(name, parent: id) do
           {:ok, %{doc_id: doc_id} = result} ->
-            upsert_template_from_drive(%{"id" => doc_id, "name" => name})
+            upsert_template_from_drive(
+              %{"id" => doc_id, "name" => name},
+              managed_location_attrs(:template)
+            )
+
             {:ok, result}
 
           error ->
@@ -268,7 +307,11 @@ defmodule PhoenixKitDocumentCreator.Documents do
       %{documents_folder_id: id} when is_binary(id) ->
         case GoogleDocsClient.create_document(name, parent: id) do
           {:ok, %{doc_id: doc_id} = result} ->
-            upsert_document_from_drive(%{"id" => doc_id, "name" => name})
+            upsert_document_from_drive(
+              %{"id" => doc_id, "name" => name},
+              managed_location_attrs(:document)
+            )
+
             {:ok, result}
 
           error ->
@@ -306,7 +349,9 @@ defmodule PhoenixKitDocumentCreator.Documents do
             google_doc_id: new_doc_id,
             template_uuid: template_uuid,
             variable_values: variable_values,
-            status: "published"
+            status: "published",
+            path: managed_location(:document).path,
+            folder_id: managed_location(:document).folder_id
           })
           |> repo().insert()
 
@@ -326,6 +371,119 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   # ===========================================================================
+  # Unfiled actions
+  # ===========================================================================
+
+  @doc "Move a file into the managed templates folder and classify it as a template."
+  def move_to_templates(file_id) when is_binary(file_id) do
+    reclassify_file(file_id, :template)
+  end
+
+  @doc "Move a file into the managed documents folder and classify it as a document."
+  def move_to_documents(file_id) when is_binary(file_id) do
+    reclassify_file(file_id, :document)
+  end
+
+  @doc "Persist the file's current parent folder as its accepted location."
+  def set_correct_location(file_id) when is_binary(file_id) do
+    with {:ok, %{folder_id: folder_id, path: path, trashed: false}} <-
+           GoogleDocsClient.file_location(file_id),
+         {_type, _record} <- find_file_record(file_id) do
+      update_file_by_google_doc_id(file_id, %{
+        status: "published",
+        folder_id: folder_id,
+        path: path
+      })
+
+      :ok
+    else
+      {:ok, %{trashed: true}} -> {:error, :file_trashed}
+      nil -> {:error, :not_found}
+      {:error, _} = err -> err
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp reclassify_file(file_id, target_type) do
+    location = managed_location(target_type)
+
+    with %{folder_id: folder_id} when is_binary(folder_id) <- location,
+         source_record <- find_file_record(file_id),
+         true <- not is_nil(source_record),
+         :ok <- GoogleDocsClient.move_file(file_id, folder_id) do
+      persist_reclassified_record(source_record, target_type, location)
+    else
+      nil -> {:error, :not_found}
+      %{} -> {:error, :folder_not_found}
+      {:error, _} = err -> err
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp persist_reclassified_record({:template, record}, :template, location) do
+    update_file_by_google_doc_id(
+      record.google_doc_id,
+      Map.merge(%{status: "published"}, Map.take(location, [:path, :folder_id]))
+    )
+
+    :ok
+  end
+
+  defp persist_reclassified_record({:document, record}, :document, location) do
+    update_file_by_google_doc_id(
+      record.google_doc_id,
+      Map.merge(%{status: "published"}, Map.take(location, [:path, :folder_id]))
+    )
+
+    :ok
+  end
+
+  defp persist_reclassified_record({:template, record}, :document, location) do
+    repo().transaction(fn ->
+      upsert_document_from_drive(
+        %{"id" => record.google_doc_id, "name" => record.name},
+        location
+        |> Map.take([:path, :folder_id])
+        |> Map.put(:status, "published")
+        |> Map.put(:thumbnail, record.thumbnail)
+      )
+
+      repo().delete(record)
+    end)
+
+    :ok
+  end
+
+  defp persist_reclassified_record({:document, record}, :template, location) do
+    repo().transaction(fn ->
+      upsert_template_from_drive(
+        %{"id" => record.google_doc_id, "name" => record.name},
+        location
+        |> Map.take([:path, :folder_id])
+        |> Map.put(:status, "published")
+        |> Map.put(:thumbnail, record.thumbnail)
+      )
+
+      repo().delete(record)
+    end)
+
+    :ok
+  end
+
+  defp find_file_record(file_id) do
+    case repo().get_by(Template, google_doc_id: file_id) do
+      nil ->
+        case repo().get_by(Document, google_doc_id: file_id) do
+          nil -> nil
+          record -> {:document, record}
+        end
+
+      record ->
+        {:template, record}
+    end
+  end
+
+  # ===========================================================================
   # Deleting (soft — moves to deleted folder)
   # ===========================================================================
 
@@ -340,35 +498,27 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   defp move_to_deleted_folder(file_id, folder_key) do
-    folder_id =
-      case get_folder_ids() do
-        %{^folder_key => id} when is_binary(id) -> id
-        _ -> nil
-      end
+    with {:ok, folder_id} <- resolve_deleted_folder_id(folder_key),
+         :ok <- GoogleDocsClient.move_file(file_id, folder_id) do
+      update_file_by_google_doc_id(file_id, %{
+        status: "trashed",
+        folder_id: folder_id,
+        path: deleted_folder_path(folder_key)
+      })
 
-    # If folder ID is missing, re-discover (creates folders if needed) and retry
-    folder_id =
-      if folder_id do
-        folder_id
-      else
+      :ok
+    end
+  end
+
+  defp resolve_deleted_folder_id(folder_key) do
+    case get_folder_ids() do
+      %{^folder_key => id} when is_binary(id) ->
+        {:ok, id}
+
+      _ ->
         case refresh_folders() do
-          %{^folder_key => id} when is_binary(id) -> id
-          _ -> nil
-        end
-      end
-
-    case folder_id do
-      nil ->
-        {:error, :deleted_folder_not_found}
-
-      id ->
-        case GoogleDocsClient.move_file(file_id, id) do
-          :ok ->
-            mark_status_by_google_doc_id(file_id, "trashed")
-            :ok
-
-          error ->
-            error
+          %{^folder_key => id} when is_binary(id) -> {:ok, id}
+          _ -> {:error, :deleted_folder_not_found}
         end
     end
   end
@@ -436,6 +586,50 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
     end
   end
+
+  defp schema_type(Template), do: :template
+  defp schema_type(Document), do: :document
+
+  defp managed_location_attrs(type) do
+    managed_location(type)
+    |> Map.take([:path, :folder_id])
+  end
+
+  defp managed_location(:template) do
+    ids = get_folder_ids()
+    config = GoogleDocsClient.get_folder_config()
+
+    %{
+      path: join_path(config.templates_path, config.templates_name),
+      folder_id: ids[:templates_folder_id]
+    }
+  end
+
+  defp managed_location(:document) do
+    ids = get_folder_ids()
+    config = GoogleDocsClient.get_folder_config()
+
+    %{
+      path: join_path(config.documents_path, config.documents_name),
+      folder_id: ids[:documents_folder_id]
+    }
+  end
+
+  defp deleted_folder_id(:template), do: get_folder_ids()[:deleted_templates_folder_id]
+  defp deleted_folder_id(:document), do: get_folder_ids()[:deleted_documents_folder_id]
+
+  defp deleted_folder_path(:deleted_templates_folder_id) do
+    config = GoogleDocsClient.get_folder_config()
+    join_path(join_path(config.deleted_path, config.deleted_name), config.templates_name)
+  end
+
+  defp deleted_folder_path(:deleted_documents_folder_id) do
+    config = GoogleDocsClient.get_folder_config()
+    join_path(join_path(config.deleted_path, config.deleted_name), config.documents_name)
+  end
+
+  defp join_path("", name), do: name
+  defp join_path(path, name), do: "#{path}/#{name}"
 
   # ===========================================================================
   # Folders

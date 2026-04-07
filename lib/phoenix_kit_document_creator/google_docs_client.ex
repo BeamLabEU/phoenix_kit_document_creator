@@ -285,6 +285,78 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   def get_folder_url(_), do: nil
 
+  @doc "Fetch Google Drive file metadata needed for sync classification."
+  def file_status(file_id) when is_binary(file_id) and file_id != "" do
+    case authenticated_request(:get, "#{@drive_base}/files/#{file_id}",
+           params: [fields: "id,trashed,parents"]
+         ) do
+      {:ok, %{status: 200, body: %{"trashed" => trashed} = body}} when is_boolean(trashed) ->
+        {:ok,
+         %{
+           trashed: trashed,
+           parents: Map.get(body, "parents", [])
+         }}
+
+      {:ok, %{status: 404}} ->
+        {:ok, :not_found}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:unexpected_status, status, body}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def file_status(_), do: {:error, :invalid_file_id}
+
+  @doc "Resolve the current parent folder and path for a Drive file."
+  def file_location(file_id) when is_binary(file_id) and file_id != "" do
+    case file_status(file_id) do
+      {:ok, %{parents: parents} = meta} ->
+        folder_id = parents |> List.first() || "root"
+
+        with {:ok, path} <- resolve_folder_path(folder_id) do
+          {:ok, %{folder_id: folder_id, path: path, trashed: meta.trashed}}
+        end
+
+      {:ok, :not_found} ->
+        {:error, :not_found}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def file_location(_), do: {:error, :invalid_file_id}
+
+  defp resolve_folder_path("root"), do: {:ok, ""}
+
+  defp resolve_folder_path(folder_id) do
+    case authenticated_request(:get, "#{@drive_base}/files/#{folder_id}",
+           params: [fields: "id,name,parents"]
+         ) do
+      {:ok, %{status: 200, body: %{"name" => name} = body}} ->
+        parent_id = body |> Map.get("parents", []) |> List.first() || "root"
+
+        with {:ok, parent_path} <- resolve_folder_path(parent_id) do
+          {:ok, append_folder_path(parent_path, name)}
+        end
+
+      {:ok, %{status: 404}} ->
+        {:error, :folder_not_found}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:unexpected_status, status, body}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp append_folder_path("", name), do: name
+  defp append_folder_path(path, name), do: "#{path}/#{name}"
+
   # ===========================================================================
   # Google Docs API
   # ===========================================================================

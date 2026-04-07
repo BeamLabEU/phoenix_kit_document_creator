@@ -18,7 +18,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   @primary_key {:uuid, UUIDv7, autogenerate: true}
   @foreign_key_type UUIDv7
 
-  @statuses ~w(published trashed lost)
+  @statuses ~w(published trashed lost unfiled)
 
   schema "phoenix_kit_doc_templates" do
     field(:name, :string)
@@ -27,6 +27,8 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     field(:status, :string, default: "published")
 
     field(:google_doc_id, :string)
+    field(:path, :string)
+    field(:folder_id, :string)
 
     field(:content_html, :string, default: "")
     field(:content_css, :string, default: "")
@@ -60,6 +62,8 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     :description,
     :status,
     :google_doc_id,
+    :path,
+    :folder_id,
     :content_html,
     :content_css,
     :content_native,
@@ -107,7 +111,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   @doc "Changeset for upserting from Google Drive sync data."
   def sync_changeset(template, attrs) do
     template
-    |> cast(attrs, [:name, :google_doc_id, :status, :thumbnail, :variables])
+    |> cast(attrs, [:name, :google_doc_id, :status, :thumbnail, :variables, :path, :folder_id])
     |> validate_required([:name, :google_doc_id])
     |> validate_inclusion(:status, @statuses)
   end

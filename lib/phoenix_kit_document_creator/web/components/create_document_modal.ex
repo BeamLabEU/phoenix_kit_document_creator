@@ -7,6 +7,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
   Step 3: Create document and redirect to Google Docs.
   """
   use Phoenix.Component
+  use Gettext, backend: PhoenixKitWeb.Gettext
 
   attr(:open, :boolean, required: true)
   attr(:templates, :list, default: [])
@@ -36,8 +37,8 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
 
   defp render_choose(assigns) do
     ~H"""
-    <h3 class="font-bold text-lg">Create New Document</h3>
-    <p class="text-sm text-base-content/60 mt-1">Start blank or choose a template.</p>
+    <h3 class="font-bold text-lg">{gettext("Create New Document")}</h3>
+    <p class="text-sm text-base-content/60 mt-1">{gettext("Start blank or choose a template.")}</p>
 
     <div class="mt-4 space-y-3">
       <%!-- Blank option --%>
@@ -46,11 +47,11 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
         phx-click="modal_create_blank"
       >
         <span class="hero-document-plus w-5 h-5" />
-        Blank Document
+        {gettext("Blank Document")}
       </button>
 
       <%!-- Templates --%>
-      <div :if={@templates != []} class="divider text-xs text-base-content/40">or from template</div>
+      <div :if={@templates != []} class="divider text-xs text-base-content/40">{gettext("or from template")}</div>
       <div :if={@templates != []} class="flex flex-wrap gap-3 justify-center">
         <button
           :for={tpl <- @templates}
@@ -75,7 +76,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
     </div>
 
     <div class="modal-action">
-      <button class="btn btn-ghost btn-sm" phx-click="modal_close">Cancel</button>
+      <button class="btn btn-ghost btn-sm" phx-click="modal_close">{gettext("Cancel")}</button>
     </div>
     """
   end
@@ -87,7 +88,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
         <span class="hero-arrow-left w-4 h-4" />
       </button>
       <div>
-        <h3 class="font-bold text-lg">Fill Template Variables</h3>
+        <h3 class="font-bold text-lg">{gettext("Fill Template Variables")}</h3>
         <p class="text-sm text-base-content/60">{@selected_template["name"]}</p>
       </div>
     </div>
@@ -96,7 +97,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
       <input type="hidden" name="template_id" value={@selected_template["id"]} />
 
       <div class="form-control">
-        <label class="label py-1"><span class="label-text text-sm font-medium">Document Name</span></label>
+        <label class="label py-1"><span class="label-text text-sm font-medium">{gettext("Document Name")}</span></label>
         <input
           type="text"
           name="doc_name"
@@ -127,10 +128,10 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
       </div>
 
       <div class="modal-action">
-        <button class="btn btn-ghost btn-sm" type="button" phx-click="modal_close">Cancel</button>
+        <button class="btn btn-ghost btn-sm" type="button" phx-click="modal_close">{gettext("Cancel")}</button>
         <button class="btn btn-primary btn-sm" type="submit" disabled={@creating}>
           <span :if={@creating} class="loading loading-spinner loading-xs" />
-          {if @creating, do: "Creating...", else: "Create Document"}
+          {if @creating, do: gettext("Creating..."), else: gettext("Create Document")}
         </button>
       </div>
     </form>
