@@ -48,4 +48,12 @@ The PR adds sync tracking but no Oban worker to periodically sync documents. Thi
 
 ## Post-Review Status
 
-No blockers. Feature-rich but well-structured PR. Ready for release.
+**Precommit failed — 3 dialyzer errors (blocking release):**
+
+1. `lib/phoenix_kit_document_creator/documents.ex:37` — `invalid_contract` — function spec doesn't match implementation
+2. `lib/phoenix_kit_document_creator/documents.ex:585` — `pattern_match_cov` — unreachable pattern
+3. `lib/phoenix_kit_document_creator/documents.ex:598` — `pattern_match` — pattern match issue
+
+Developer needs to fix before release.
+
+No other blockers.
