@@ -24,6 +24,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   under the `"document_creator_folders"` settings key.
   """
 
+  require Logger
+
   alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
 
@@ -203,12 +205,27 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       Task.async(fn -> ensure_folder_path("#{deleted_path}/#{config.documents_name}") end)
     ]
 
+    results =
+      try do
+        Task.await_many(tasks, 30_000)
+      rescue
+        e ->
+          Logger.error("Document Creator folder discovery timed out: #{Exception.message(e)}")
+
+          Enum.map(tasks, fn task ->
+            Task.shutdown(task, :brutal_kill)
+            nil
+          end)
+      end
+
     [templates_id, documents_id, deleted_templates_id, deleted_documents_id] =
-      tasks
-      |> Task.await_many(30_000)
-      |> Enum.map(fn
-        {:ok, id} -> id
-        _ -> nil
+      Enum.map(results, fn
+        {:ok, id} ->
+          id
+
+        other ->
+          if other != nil, do: Logger.warning("Folder discovery failed: #{inspect(other)}")
+          nil
       end)
 
     # Save to folder settings
@@ -299,24 +316,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Fetch Google Drive file metadata needed for sync classification."
   def file_status(file_id) when is_binary(file_id) and file_id != "" do
-    case authenticated_request(:get, "#{@drive_base}/files/#{file_id}",
-           params: [fields: "id,trashed,parents"]
-         ) do
-      {:ok, %{status: 200, body: %{"trashed" => trashed} = body}} when is_boolean(trashed) ->
-        {:ok,
-         %{
-           trashed: trashed,
-           parents: Map.get(body, "parents", [])
-         }}
+    with {:ok, fid} <- validate_file_id(file_id) do
+      case authenticated_request(:get, "#{@drive_base}/files/#{fid}",
+             params: [fields: "id,trashed,parents"]
+           ) do
+        {:ok, %{status: 200, body: %{"trashed" => trashed} = body}} when is_boolean(trashed) ->
+          {:ok,
+           %{
+             trashed: trashed,
+             parents: Map.get(body, "parents", [])
+           }}
 
-      {:ok, %{status: 404}} ->
-        {:ok, :not_found}
+        {:ok, %{status: 404}} ->
+          {:ok, :not_found}
 
-      {:ok, %{status: status, body: body}} ->
-        {:error, {:unexpected_status, status, body}}
+        {:ok, %{status: status, body: body}} ->
+          {:error, {:unexpected_status, status, body}}
 
-      {:error, _} = err ->
-        err
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -342,17 +361,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   def file_location(_), do: {:error, :invalid_file_id}
 
-  defp resolve_folder_path("root"), do: {:ok, ""}
+  @max_folder_depth 20
 
-  defp resolve_folder_path(folder_id) do
+  defp resolve_folder_path(folder_id), do: resolve_folder_path(folder_id, @max_folder_depth)
+
+  defp resolve_folder_path("root", _depth), do: {:ok, ""}
+  defp resolve_folder_path(_folder_id, 0), do: {:error, :max_depth_exceeded}
+
+  defp resolve_folder_path(folder_id, depth) do
     case authenticated_request(:get, "#{@drive_base}/files/#{folder_id}",
            params: [fields: "id,name,parents"]
          ) do
       {:ok, %{status: 200, body: %{"name" => name} = body}} ->
         parent_id = body |> Map.get("parents", []) |> List.first() || "root"
 
-        with {:ok, parent_path} <- resolve_folder_path(parent_id) do
-          {:ok, append_folder_path(parent_path, name)}
+        with {:ok, parent_path} <- resolve_folder_path(parent_id, depth - 1) do
+          {:ok, build_full_path(parent_path, name)}
         end
 
       {:ok, %{status: 404}} ->
@@ -365,9 +389,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         err
     end
   end
-
-  defp append_folder_path("", name), do: name
-  defp append_folder_path(path, name), do: "#{path}/#{name}"
 
   # ===========================================================================
   # Google Docs API
@@ -395,14 +416,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Read a Google Doc's full content."
   def get_document(doc_id) do
-    authenticated_request(:get, "#{@docs_base}/documents/#{doc_id}")
+    with {:ok, fid} <- validate_file_id(doc_id) do
+      authenticated_request(:get, "#{@docs_base}/documents/#{fid}")
+    end
   end
 
   @doc "Send a batchUpdate request to a Google Doc."
   def batch_update(doc_id, requests) when is_list(requests) do
-    authenticated_request(:post, "#{@docs_base}/documents/#{doc_id}:batchUpdate",
-      json: %{requests: requests}
-    )
+    with {:ok, fid} <- validate_file_id(doc_id) do
+      authenticated_request(:post, "#{@docs_base}/documents/#{fid}:batchUpdate",
+        json: %{requests: requests}
+      )
+    end
   end
 
   @doc """
@@ -478,44 +503,50 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Copy a file in Google Drive. Returns the new file's ID."
   def copy_file(file_id, new_name, opts \\ []) do
-    parent = Keyword.get(opts, :parent)
-    body = %{name: new_name}
-    body = if parent, do: Map.put(body, :parents, [parent]), else: body
+    with {:ok, fid} <- validate_file_id(file_id) do
+      parent = Keyword.get(opts, :parent)
+      body = %{name: new_name}
+      body = if parent, do: Map.put(body, :parents, [parent]), else: body
 
-    case authenticated_request(:post, "#{@drive_base}/files/#{file_id}/copy", json: body) do
-      {:ok, %{status: status, body: %{"id" => new_id}}} when status in 200..299 -> {:ok, new_id}
-      {:ok, %{body: body}} -> {:error, "Copy failed: #{inspect(body)}"}
-      {:error, _} = err -> err
+      case authenticated_request(:post, "#{@drive_base}/files/#{fid}/copy", json: body) do
+        {:ok, %{status: status, body: %{"id" => new_id}}} when status in 200..299 -> {:ok, new_id}
+        {:ok, %{body: body}} -> {:error, "Copy failed: #{inspect(body)}"}
+        {:error, _} = err -> err
+      end
     end
   end
 
   @doc "Export a Google Doc as PDF. Returns `{:ok, pdf_binary}`."
   def export_pdf(doc_id) do
-    case authenticated_request(:get, "#{@drive_base}/files/#{doc_id}/export",
-           params: [mimeType: "application/pdf"]
-         ) do
-      {:ok, %{status: 200, body: body}} when is_binary(body) -> {:ok, body}
-      {:ok, %{body: body}} -> {:error, "PDF export failed: #{inspect(body)}"}
-      {:error, _} = err -> err
+    with {:ok, fid} <- validate_file_id(doc_id) do
+      case authenticated_request(:get, "#{@drive_base}/files/#{fid}/export",
+             params: [mimeType: "application/pdf"]
+           ) do
+        {:ok, %{status: 200, body: body}} when is_binary(body) -> {:ok, body}
+        {:ok, %{body: body}} -> {:error, "PDF export failed: #{inspect(body)}"}
+        {:error, _} = err -> err
+      end
     end
   end
 
   @doc "Fetch a document thumbnail as a base64 data URI via the Drive API."
   def fetch_thumbnail(doc_id) when is_binary(doc_id) and doc_id != "" do
-    case authenticated_request(:get, "#{@drive_base}/files/#{doc_id}",
-           params: [fields: "thumbnailLink"]
-         ) do
-      {:ok, %{status: 200, body: %{"thumbnailLink" => link}}} when is_binary(link) ->
-        fetch_thumbnail_image(link)
+    with {:ok, fid} <- validate_file_id(doc_id) do
+      case authenticated_request(:get, "#{@drive_base}/files/#{fid}",
+             params: [fields: "thumbnailLink"]
+           ) do
+        {:ok, %{status: 200, body: %{"thumbnailLink" => link}}} when is_binary(link) ->
+          fetch_thumbnail_image(link)
 
-      {:ok, %{status: 200}} ->
-        {:error, :no_thumbnail}
+        {:ok, %{status: 200}} ->
+          {:error, :no_thumbnail}
 
-      {:ok, %{body: body}} ->
-        {:error, "Failed to get thumbnail link: #{inspect(body)}"}
+        {:ok, %{body: body}} ->
+          {:error, "Failed to get thumbnail link: #{inspect(body)}"}
 
-      {:error, _} = err ->
-        err
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -568,11 +599,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   # Extract content-type from Req response headers.
   # Req >= 0.5 returns headers as %{"content-type" => ["image/png"]}.
+  @allowed_thumbnail_types ~w(image/png image/jpeg image/webp image/gif)
+
   defp extract_content_type(%{"content-type" => [v | _]}) do
-    case String.split(v, ";") do
-      [type | _] -> String.trim(type)
-      _ -> "image/png"
-    end
+    type =
+      case String.split(v, ";") do
+        [type | _] -> String.trim(type)
+        _ -> "image/png"
+      end
+
+    if type in @allowed_thumbnail_types, do: type, else: "image/png"
   end
 
   defp extract_content_type(_), do: "image/png"

@@ -179,7 +179,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
      assign(socket,
        browser_open: true,
        browser_field: field,
-       browser_path: [%{id: "root", name: "My Drive"}],
+       browser_path: [%{id: "root", name: gettext("My Drive")}],
        browser_folders: [],
        browser_loading: true
      )}
@@ -401,7 +401,6 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       </div>
     </div>
 
-    <%!-- Folder browser modal --%>
     <%!-- Folder browser modal --%>
     <div :if={@browser_open} class="modal modal-open">
       <div class="modal-box max-w-md">

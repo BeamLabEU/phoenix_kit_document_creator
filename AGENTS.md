@@ -27,9 +27,17 @@ mix format
 # 3. Compile
 mix compile
 
-# 4. Check types
+# 4. Lint
 mix credo --strict
+
+# 5. Type check
+mix dialyzer
 ```
+
+> **NOTE:** The "Check types" / `mix credo --strict` mislabeling exists in ALL
+> phoenix_kit repos (phoenix_kit, phoenix_kit_ai, phoenix_kit_publishing,
+> phoenix_kit_hello_world). Credo is a linter, not a type checker. Dialyzer is
+> the type checker. This needs to be fixed in all repos.
 
 ## Pre-commit Commands
 
