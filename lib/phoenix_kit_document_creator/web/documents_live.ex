@@ -160,7 +160,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── Create actions ───────────────────────────────────────────────
 
   def handle_event("new_template", _params, socket) do
-    case Documents.create_template() do
+    case Documents.create_template("Untitled Template", actor_opts(socket)) do
       {:ok, %{url: url}} ->
         broadcast_files_changed()
         {:noreply, push_event(socket, "open-url", %{url: url})}
@@ -172,7 +172,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("new_blank_document", _params, socket) do
-    case Documents.create_document() do
+    case Documents.create_document("Untitled Document", actor_opts(socket)) do
       {:ok, %{url: url}} ->
         broadcast_files_changed()
         {:noreply, push_event(socket, "open-url", %{url: url})}
@@ -206,7 +206,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("modal_create_blank", _params, socket) do
-    case Documents.create_document() do
+    case Documents.create_document("Untitled Document", actor_opts(socket)) do
       {:ok, %{url: url}} ->
         broadcast_files_changed()
 
@@ -242,7 +242,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
     if variables == [] do
       # No variables — create directly
-      case Documents.create_document_from_template(file_id, %{}, name: name) do
+      case Documents.create_document_from_template(
+             file_id,
+             %{},
+             [name: name] ++ actor_opts(socket)
+           ) do
         {:ok, %{url: url}} ->
           broadcast_files_changed()
           {:noreply, socket |> assign(modal_open: false) |> push_event("open-url", %{url: url})}
@@ -271,7 +275,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
     socket = assign(socket, modal_creating: true)
 
-    case Documents.create_document_from_template(file_id, variable_values, name: doc_name) do
+    case Documents.create_document_from_template(
+           file_id,
+           variable_values,
+           [name: doc_name] ++ actor_opts(socket)
+         ) do
       {:ok, %{url: url}} ->
         broadcast_files_changed()
 
@@ -315,11 +323,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     file = socket.assigns.unfiled_file || %{}
     file_id = file["id"]
 
+    opts = actor_opts(socket)
+
     result =
       case action do
-        "templates" -> Documents.move_to_templates(file_id)
-        "documents" -> Documents.move_to_documents(file_id)
-        "current" -> Documents.set_correct_location(file_id)
+        "templates" -> Documents.move_to_templates(file_id, opts)
+        "documents" -> Documents.move_to_documents(file_id, opts)
+        "current" -> Documents.set_correct_location(file_id, opts)
         _ -> {:error, :invalid_action}
       end
 
@@ -375,10 +385,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── Delete (soft) ────────────────────────────────────────────────
 
   def handle_event("delete", %{"id" => file_id}, socket) do
+    opts = actor_opts(socket)
+
     result =
       if socket.assigns.live_action == :templates,
-        do: Documents.delete_template(file_id),
-        else: Documents.delete_document(file_id)
+        do: Documents.delete_template(file_id, opts),
+        else: Documents.delete_document(file_id, opts)
 
     case result do
       :ok ->
@@ -824,6 +836,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     |> String.downcase()
     |> String.replace(~r/[^a-z0-9]+/, "-")
     |> Kernel.<>(".pdf")
+  end
+
+  defp actor_opts(socket) do
+    case socket.assigns[:phoenix_kit_current_scope] do
+      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
+      _ -> []
+    end
   end
 
   defp broadcast_files_changed do

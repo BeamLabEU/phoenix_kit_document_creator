@@ -16,7 +16,19 @@ defmodule PhoenixKitDocumentCreator.Documents do
   alias PhoenixKitDocumentCreator.Schemas.Document
   alias PhoenixKitDocumentCreator.Schemas.Template
 
+  @module_key "document_creator"
+
   defp repo, do: PhoenixKit.RepoHelper.repo()
+
+  # ===========================================================================
+  # Activity logging
+  # ===========================================================================
+
+  defp log_activity(attrs) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      PhoenixKit.Activity.log(Map.put(attrs, :module, @module_key))
+    end
+  end
 
   # ===========================================================================
   # DB Listing (fast, no API calls)
@@ -124,8 +136,24 @@ defmodule PhoenixKitDocumentCreator.Documents do
       drive_template_ids = MapSet.new(drive_templates, & &1["id"])
       drive_document_ids = MapSet.new(drive_documents, & &1["id"])
 
-      reconcile_status(Template, drive_template_ids)
-      reconcile_status(Document, drive_document_ids)
+      template_changes = reconcile_status(Template, drive_template_ids)
+      document_changes = reconcile_status(Document, drive_document_ids)
+
+      log_activity(%{
+        action: "sync.completed",
+        mode: "auto",
+        resource_type: "sync",
+        metadata: %{
+          "templates_synced" => length(drive_templates),
+          "documents_synced" => length(drive_documents),
+          "templates_lost" => length(template_changes[:lost] || []),
+          "templates_trashed" => length(template_changes[:trashed] || []),
+          "templates_unfiled" => length(template_changes[:unfiled] || []),
+          "documents_lost" => length(document_changes[:lost] || []),
+          "documents_trashed" => length(document_changes[:trashed] || []),
+          "documents_unfiled" => length(document_changes[:unfiled] || [])
+        }
+      })
 
       :ok
     else
@@ -165,6 +193,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Status reconciliation
   # ===========================================================================
 
+  # Returns a map of status => [uuids] for logging purposes.
   defp reconcile_status(schema, drive_ids) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     managed_location = managed_location(schema_type(schema))
@@ -189,6 +218,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
     update_statuses(schema, Map.get(grouped, :lost, []), "lost", now)
     update_statuses(schema, Map.get(grouped, :trashed, []), "trashed", now)
     update_statuses(schema, Map.get(grouped, :unfiled, []), "unfiled", now)
+
+    grouped
   end
 
   defp classify_file(gid, folder_id, drive_ids, managed_location, deleted_folder_id) do
@@ -279,8 +310,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Creating
   # ===========================================================================
 
-  @doc "Create a blank template in the templates folder. Returns `{:ok, %{doc_id, name, url}}`."
-  def create_template(name \\ "Untitled Template") do
+  @doc """
+  Create a blank template in the templates folder. Returns `{:ok, %{doc_id, name, url}}`.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  """
+  def create_template(name \\ "Untitled Template", opts \\ []) do
     case get_folder_ids() do
       %{templates_folder_id: id} when is_binary(id) ->
         case GoogleDocsClient.create_document(name, parent: id) do
@@ -289,6 +326,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
               %{"id" => doc_id, "name" => name},
               managed_location_attrs(:template)
             )
+
+            log_activity(%{
+              action: "template.created",
+              mode: "manual",
+              actor_uuid: opts[:actor_uuid],
+              resource_type: "template",
+              metadata: %{"name" => name, "google_doc_id" => doc_id}
+            })
 
             {:ok, result}
 
@@ -301,8 +346,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
-  @doc "Create a blank document in the documents folder. Returns `{:ok, %{doc_id, name, url}}`."
-  def create_document(name \\ "Untitled Document") do
+  @doc """
+  Create a blank document in the documents folder. Returns `{:ok, %{doc_id, name, url}}`.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  """
+  def create_document(name \\ "Untitled Document", opts \\ []) do
     case get_folder_ids() do
       %{documents_folder_id: id} when is_binary(id) ->
         case GoogleDocsClient.create_document(name, parent: id) do
@@ -311,6 +362,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
               %{"id" => doc_id, "name" => name},
               managed_location_attrs(:document)
             )
+
+            log_activity(%{
+              action: "document.created",
+              mode: "manual",
+              actor_uuid: opts[:actor_uuid],
+              resource_type: "document",
+              metadata: %{"name" => name, "google_doc_id" => doc_id}
+            })
 
             {:ok, result}
 
@@ -355,6 +414,20 @@ defmodule PhoenixKitDocumentCreator.Documents do
           })
           |> repo().insert()
 
+          log_activity(%{
+            action: "document.created_from_template",
+            mode: "manual",
+            actor_uuid: opts[:actor_uuid],
+            resource_type: "document",
+            metadata: %{
+              "name" => doc_name,
+              "google_doc_id" => new_doc_id,
+              "template_google_doc_id" => template_file_id,
+              "template_uuid" => template_uuid,
+              "variables_used" => Map.keys(variable_values)
+            }
+          })
+
           {:ok, %{doc_id: new_doc_id, url: GoogleDocsClient.get_edit_url(new_doc_id)}}
         end
 
@@ -374,25 +447,89 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Unfiled actions
   # ===========================================================================
 
-  @doc "Move a file into the managed templates folder and classify it as a template."
-  def move_to_templates(file_id) when is_binary(file_id) do
-    reclassify_file(file_id, :template)
+  @doc """
+  Move a file into the managed templates folder and classify it as a template.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  """
+  def move_to_templates(file_id, opts \\ []) when is_binary(file_id) do
+    case reclassify_file(file_id, :template) do
+      :ok ->
+        log_activity(%{
+          action: "file.reclassified",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "template",
+          metadata: %{
+            "google_doc_id" => file_id,
+            "action" => "move_to_templates"
+          }
+        })
+
+        :ok
+
+      error ->
+        error
+    end
   end
 
-  @doc "Move a file into the managed documents folder and classify it as a document."
-  def move_to_documents(file_id) when is_binary(file_id) do
-    reclassify_file(file_id, :document)
+  @doc """
+  Move a file into the managed documents folder and classify it as a document.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  """
+  def move_to_documents(file_id, opts \\ []) when is_binary(file_id) do
+    case reclassify_file(file_id, :document) do
+      :ok ->
+        log_activity(%{
+          action: "file.reclassified",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "document",
+          metadata: %{
+            "google_doc_id" => file_id,
+            "action" => "move_to_documents"
+          }
+        })
+
+        :ok
+
+      error ->
+        error
+    end
   end
 
-  @doc "Persist the file's current parent folder as its accepted location."
-  def set_correct_location(file_id) when is_binary(file_id) do
+  @doc """
+  Persist the file's current parent folder as its accepted location.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  """
+  def set_correct_location(file_id, opts \\ []) when is_binary(file_id) do
     with {:ok, %{folder_id: folder_id, path: path, trashed: false}} <-
            GoogleDocsClient.file_location(file_id),
-         {_type, _record} <- find_file_record(file_id) do
+         {type, _record} <- find_file_record(file_id) do
       update_file_by_google_doc_id(file_id, %{
         status: "published",
         folder_id: folder_id,
         path: path
+      })
+
+      log_activity(%{
+        action: "file.location_accepted",
+        mode: "manual",
+        actor_uuid: opts[:actor_uuid],
+        resource_type: to_string(type),
+        metadata: %{
+          "google_doc_id" => file_id,
+          "folder_id" => folder_id,
+          "path" => path
+        }
       })
 
       :ok
@@ -487,14 +624,54 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Deleting (soft — moves to deleted folder)
   # ===========================================================================
 
-  @doc "Move a document to the deleted/documents folder."
-  def delete_document(file_id) when is_binary(file_id) do
-    move_to_deleted_folder(file_id, :deleted_documents_folder_id)
+  @doc """
+  Move a document to the deleted/documents folder.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  """
+  def delete_document(file_id, opts \\ []) when is_binary(file_id) do
+    case move_to_deleted_folder(file_id, :deleted_documents_folder_id) do
+      :ok ->
+        log_activity(%{
+          action: "document.deleted",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "document",
+          metadata: %{"google_doc_id" => file_id}
+        })
+
+        :ok
+
+      error ->
+        error
+    end
   end
 
-  @doc "Move a template to the deleted/templates folder."
-  def delete_template(file_id) when is_binary(file_id) do
-    move_to_deleted_folder(file_id, :deleted_templates_folder_id)
+  @doc """
+  Move a template to the deleted/templates folder.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  """
+  def delete_template(file_id, opts \\ []) when is_binary(file_id) do
+    case move_to_deleted_folder(file_id, :deleted_templates_folder_id) do
+      :ok ->
+        log_activity(%{
+          action: "template.deleted",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "template",
+          metadata: %{"google_doc_id" => file_id}
+        })
+
+        :ok
+
+      error ->
+        error
+    end
   end
 
   defp move_to_deleted_folder(file_id, folder_key) do
