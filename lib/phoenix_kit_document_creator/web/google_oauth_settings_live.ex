@@ -13,6 +13,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
+  alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
   @impl true
@@ -98,6 +99,11 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
           %{email: ""}
       end
 
+    Documents.log_manual_action("settings.connection_changed", [
+      {:actor_uuid, actor_uuid(socket)},
+      {:metadata, %{"connection_key" => connection_key, "email" => connection_info.email}}
+    ])
+
     {:noreply,
      assign(socket,
        active_connection: connection_key,
@@ -142,6 +148,13 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       updated,
       "document_creator"
     )
+
+    if changed do
+      Documents.log_manual_action("settings.folders_changed", [
+        {:actor_uuid, actor_uuid(socket)},
+        {:metadata, new}
+      ])
+    end
 
     {:noreply,
      assign(socket,
@@ -385,6 +398,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     </div>
 
     <%!-- Folder browser modal --%>
+    <%!-- Folder browser modal --%>
     <div :if={@browser_open} class="modal modal-open">
       <div class="modal-box max-w-md">
         <h3 class="font-bold text-lg">{gettext("Select Folder")}</h3>
@@ -437,5 +451,12 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       <div class="modal-backdrop" phx-click="browser_close"></div>
     </div>
     """
+  end
+
+  defp actor_uuid(socket) do
+    case socket.assigns[:phoenix_kit_current_scope] do
+      %{user: %{uuid: uuid}} -> uuid
+      _ -> nil
+    end
   end
 end

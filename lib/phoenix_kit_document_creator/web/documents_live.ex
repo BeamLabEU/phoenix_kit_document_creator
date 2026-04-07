@@ -361,7 +361,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── PDF export ───────────────────────────────────────────────────
 
   def handle_event("export_pdf", %{"id" => file_id, "name" => name}, socket) do
-    case Documents.export_pdf(file_id) do
+    case Documents.export_pdf(file_id, [name: name] ++ actor_opts(socket)) do
       {:ok, pdf_binary} when byte_size(pdf_binary) <= @max_pdf_push_bytes ->
         base64 = Base.encode64(pdf_binary)
         filename = sanitize_filename(name)
@@ -418,6 +418,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── Refresh ──────────────────────────────────────────────────────
 
   def handle_event("refresh", _params, socket) do
+    Documents.log_manual_action("sync.triggered", actor_opts(socket))
     send(self(), :sync_from_drive)
     {:noreply, assign(socket, loading: true)}
   end

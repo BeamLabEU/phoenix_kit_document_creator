@@ -24,6 +24,23 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Activity logging
   # ===========================================================================
 
+  @doc "Log a manual user action to the activity feed."
+  def log_manual_action(action, opts \\ []) do
+    attrs = %{
+      action: action,
+      mode: "manual",
+      actor_uuid: opts[:actor_uuid]
+    }
+
+    attrs =
+      case opts[:metadata] do
+        meta when is_map(meta) -> Map.put(attrs, :metadata, meta)
+        _ -> attrs
+      end
+
+    log_activity(attrs)
+  end
+
   defp log_activity(attrs) do
     if Code.ensure_loaded?(PhoenixKit.Activity) do
       PhoenixKit.Activity.log(Map.put(attrs, :module, @module_key))
@@ -732,9 +749,34 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # PDF Export
   # ===========================================================================
 
-  @doc "Export a Google Doc to PDF. Returns `{:ok, pdf_binary}`."
-  def export_pdf(file_id) when is_binary(file_id) do
-    GoogleDocsClient.export_pdf(file_id)
+  @doc """
+  Export a Google Doc to PDF. Returns `{:ok, pdf_binary}`.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  - `:name` — document name (for activity metadata)
+  """
+  def export_pdf(file_id, opts \\ []) when is_binary(file_id) do
+    case GoogleDocsClient.export_pdf(file_id) do
+      {:ok, pdf_binary} = result ->
+        log_activity(%{
+          action: "document.exported_pdf",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "document",
+          metadata: %{
+            "google_doc_id" => file_id,
+            "name" => opts[:name],
+            "size_bytes" => byte_size(pdf_binary)
+          }
+        })
+
+        result
+
+      error ->
+        error
+    end
   end
 
   # ===========================================================================
