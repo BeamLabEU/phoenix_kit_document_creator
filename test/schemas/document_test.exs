@@ -105,6 +105,112 @@ defmodule PhoenixKitDocumentCreator.Schemas.DocumentTest do
     end
   end
 
+  describe "status validation" do
+    test "accepts 'published' status" do
+      cs = changeset(%{name: "Doc", status: "published"})
+      assert cs.valid?
+    end
+
+    test "accepts 'trashed' status" do
+      cs = changeset(%{name: "Doc", status: "trashed"})
+      assert cs.valid?
+    end
+
+    test "accepts 'lost' status" do
+      cs = changeset(%{name: "Doc", status: "lost"})
+      assert cs.valid?
+    end
+
+    test "accepts 'unfiled' status" do
+      cs = changeset(%{name: "Doc", status: "unfiled"})
+      assert cs.valid?
+    end
+
+    test "rejects invalid status" do
+      cs = changeset(%{name: "Doc", status: "archived"})
+      refute cs.valid?
+      assert %{status: [_]} = errors_on(cs)
+    end
+  end
+
+  describe "sync_changeset/2" do
+    test "is valid with required fields" do
+      cs = Document.sync_changeset(%Document{}, %{name: "Doc", google_doc_id: "abc123"})
+      assert cs.valid?
+    end
+
+    test "requires google_doc_id" do
+      cs = Document.sync_changeset(%Document{}, %{name: "Doc"})
+      refute cs.valid?
+      assert %{google_doc_id: ["can't be blank"]} = errors_on(cs)
+    end
+
+    test "requires name" do
+      cs = Document.sync_changeset(%Document{}, %{google_doc_id: "abc123"})
+      refute cs.valid?
+      assert %{name: ["can't be blank"]} = errors_on(cs)
+    end
+
+    test "accepts path and folder_id" do
+      cs =
+        Document.sync_changeset(%Document{}, %{
+          name: "Doc",
+          google_doc_id: "abc123",
+          path: "clients/active",
+          folder_id: "folder123"
+        })
+
+      assert cs.valid?
+      assert Ecto.Changeset.get_change(cs, :path) == "clients/active"
+      assert Ecto.Changeset.get_change(cs, :folder_id) == "folder123"
+    end
+
+    test "validates status inclusion" do
+      cs =
+        Document.sync_changeset(%Document{}, %{
+          name: "Doc",
+          google_doc_id: "abc123",
+          status: "invalid"
+        })
+
+      refute cs.valid?
+    end
+  end
+
+  describe "creation_changeset/2" do
+    test "is valid with required fields" do
+      cs =
+        Document.creation_changeset(%Document{}, %{
+          name: "Doc",
+          google_doc_id: "abc123"
+        })
+
+      assert cs.valid?
+    end
+
+    test "accepts template_uuid and variable_values" do
+      uuid = Ecto.UUID.generate()
+
+      cs =
+        Document.creation_changeset(%Document{}, %{
+          name: "Doc",
+          google_doc_id: "abc123",
+          template_uuid: uuid,
+          variable_values: %{"client" => "Acme"},
+          path: "documents",
+          folder_id: "folder456"
+        })
+
+      assert cs.valid?
+      assert Ecto.Changeset.get_change(cs, :template_uuid) == uuid
+    end
+
+    test "requires google_doc_id" do
+      cs = Document.creation_changeset(%Document{}, %{name: "Doc"})
+      refute cs.valid?
+    end
+  end
+
   describe "schema defaults" do
     test "default field values on struct" do
       doc = %Document{}
@@ -117,6 +223,9 @@ defmodule PhoenixKitDocumentCreator.Schemas.DocumentTest do
       assert doc.footer_height == "20mm"
       assert doc.config == %{"paper_size" => "a4", "orientation" => "portrait"}
       assert doc.data == %{}
+      assert doc.status == "published"
+      assert doc.path == nil
+      assert doc.folder_id == nil
     end
   end
 

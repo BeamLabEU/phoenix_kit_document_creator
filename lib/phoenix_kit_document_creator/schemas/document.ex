@@ -19,9 +19,14 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
   @primary_key {:uuid, UUIDv7, autogenerate: true}
   @foreign_key_type UUIDv7
 
+  @statuses ~w(published trashed lost unfiled)
+
   schema "phoenix_kit_doc_documents" do
     field(:name, :string)
     field(:google_doc_id, :string)
+    field(:path, :string)
+    field(:folder_id, :string)
+    field(:status, :string, default: "published")
 
     belongs_to(:template, PhoenixKitDocumentCreator.Schemas.Template,
       foreign_key: :template_uuid,
@@ -54,6 +59,9 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
   @optional_fields [
     :template_uuid,
     :google_doc_id,
+    :path,
+    :folder_id,
+    :status,
     :content_html,
     :content_css,
     :content_native,
@@ -75,5 +83,31 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_length(:name, min: 1, max: 255)
+    |> validate_inclusion(:status, @statuses)
+  end
+
+  @doc "Changeset for upserting from Google Drive sync data."
+  def sync_changeset(document, attrs) do
+    document
+    |> cast(attrs, [:name, :google_doc_id, :status, :thumbnail, :path, :folder_id])
+    |> validate_required([:name, :google_doc_id])
+    |> validate_inclusion(:status, @statuses)
+  end
+
+  @doc "Changeset for creating a document from a template with variable values."
+  def creation_changeset(document, attrs) do
+    document
+    |> cast(attrs, [
+      :name,
+      :google_doc_id,
+      :template_uuid,
+      :variable_values,
+      :status,
+      :thumbnail,
+      :path,
+      :folder_id
+    ])
+    |> validate_required([:name, :google_doc_id])
+    |> validate_inclusion(:status, @statuses)
   end
 end

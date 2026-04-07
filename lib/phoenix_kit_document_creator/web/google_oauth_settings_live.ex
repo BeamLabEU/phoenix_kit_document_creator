@@ -6,13 +6,14 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   Settings → Integrations. This page handles folder configuration only.
   """
   use Phoenix.LiveView
+  use Gettext, backend: PhoenixKitWeb.Gettext
 
   import PhoenixKitWeb.Components.Core.IntegrationPicker
-  import PhoenixKitWeb.Components.Core.Icon, only: [icon: 1]
 
   alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
   alias PhoenixKit.Utils.Routes
+  alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
   @impl true
@@ -39,7 +40,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
     {:ok,
      assign(socket,
-       page_title: "Document Creator — Folders",
+       page_title: gettext("Document Creator — Folders"),
        connected: connected,
        connected_email: connection_info.email,
        active_connection: active_key,
@@ -98,12 +99,17 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
           %{email: ""}
       end
 
+    Documents.log_manual_action("settings.connection_changed", [
+      {:actor_uuid, actor_uuid(socket)},
+      {:metadata, %{"connection_key" => connection_key, "email" => connection_info.email}}
+    ])
+
     {:noreply,
      assign(socket,
        active_connection: connection_key,
        connected: connected,
        connected_email: connection_info.email,
-       success: "Connection updated"
+       success: gettext("Connection updated")
      )}
   end
 
@@ -143,6 +149,13 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       "document_creator"
     )
 
+    if changed do
+      Documents.log_manual_action("settings.folders_changed", [
+        {:actor_uuid, actor_uuid(socket)},
+        {:metadata, new}
+      ])
+    end
+
     {:noreply,
      assign(socket,
        templates_path: new["folder_path_templates"],
@@ -151,7 +164,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
        documents_name: new["folder_name_documents"],
        deleted_path: new["folder_path_deleted"],
        deleted_name: new["folder_name_deleted"],
-       success: "Folder settings saved",
+       success: gettext("Folder settings saved"),
        error: nil
      )}
   end
@@ -183,7 +196,12 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   end
 
   def handle_event("browser_back", %{"index" => index}, socket) do
-    index = String.to_integer(index)
+    index =
+      case Integer.parse(index) do
+        {n, _} -> n
+        :error -> 0
+      end
+
     path = Enum.take(socket.assigns.browser_path, max(index + 1, 1))
 
     case List.last(path) do
@@ -225,13 +243,17 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     pid = self()
 
     Task.start(fn ->
-      folders =
-        case GoogleDocsClient.list_subfolders(folder_id) do
-          {:ok, folders} -> folders
-          _ -> []
-        end
+      try do
+        folders =
+          case GoogleDocsClient.list_subfolders(folder_id) do
+            {:ok, folders} -> folders
+            _ -> []
+          end
 
-      send(pid, {:drive_folders_loaded, folders})
+        send(pid, {:drive_folders_loaded, folders})
+      rescue
+        _ -> send(pid, {:drive_folders_loaded, []})
+      end
     end)
 
     {:noreply, socket}
@@ -248,9 +270,9 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     ~H"""
     <div class="flex flex-col mx-auto max-w-2xl px-4 py-6 gap-6">
       <div>
-        <h1 class="text-2xl font-bold">Document Creator Settings</h1>
+        <h1 class="text-2xl font-bold">{gettext("Document Creator Settings")}</h1>
         <p class="text-sm text-base-content/60 mt-1">
-          Configure Google Drive folders for templates and documents.
+          {gettext("Configure Google Drive folders for templates and documents.")}
         </p>
       </div>
 
@@ -267,7 +289,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       <%!-- Google Connection --%>
       <div class="card bg-base-100 shadow-sm">
         <div class="card-body">
-          <h2 class="card-title text-lg">Google Account</h2>
+          <h2 class="card-title text-lg">{gettext("Google Account")}</h2>
 
           <.integration_picker
             id="doc-creator-google-picker"
@@ -280,8 +302,8 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
           />
 
           <p class="text-xs text-base-content/50 mt-2">
-            Manage your Google connections in
-            <a href={Routes.path("/admin/settings/integrations")} class="link">Settings → Integrations</a>.
+            {gettext("Manage your Google connections in")}
+            <a href={Routes.path("/admin/settings/integrations")} class="link">{gettext("Settings → Integrations")}</a>.
           </p>
         </div>
       </div>
@@ -289,22 +311,21 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       <%!-- Folder Names --%>
       <div :if={@connected} class="card bg-base-100 shadow-sm">
         <div class="card-body">
-          <h2 class="card-title text-lg">Drive Folders</h2>
+          <h2 class="card-title text-lg">{gettext("Drive Folders")}</h2>
           <p class="text-sm text-base-content/60">
-            Customize the Google Drive folder names used for storage.
-            Folders are created automatically if they don't exist.
+            {gettext("Customize the Google Drive folder names used for storage. Folders are created automatically if they don't exist.")}
           </p>
 
           <form phx-submit="save_folders" class="space-y-4 mt-4">
             <div class="form-control">
-              <label class="label"><span class="label-text">Templates</span></label>
+              <label class="label"><span class="label-text">{gettext("Templates")}</span></label>
               <div class="flex items-center gap-0">
                 <button
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
                   phx-value-field="templates_path"
-                  title={if @templates_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@templates_path}"}
+                  title={if @templates_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @templates_path)}
                 >
                   <span class="hero-folder-open w-4 h-4 shrink-0" />
                   <span class="truncate">{if @templates_path == "", do: "/", else: "#{@templates_path}/"}</span>
@@ -314,21 +335,21 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   name="templates_name"
                   value={@templates_name}
                   class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
-                  placeholder="templates"
+                  placeholder={gettext("templates")}
                 />
                 <input type="hidden" name="templates_path" value={@templates_path} />
               </div>
             </div>
 
             <div class="form-control">
-              <label class="label"><span class="label-text">Documents</span></label>
+              <label class="label"><span class="label-text">{gettext("Documents")}</span></label>
               <div class="flex items-center gap-0">
                 <button
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
                   phx-value-field="documents_path"
-                  title={if @documents_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@documents_path}"}
+                  title={if @documents_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @documents_path)}
                 >
                   <span class="hero-folder-open w-4 h-4 shrink-0" />
                   <span class="truncate">{if @documents_path == "", do: "/", else: "#{@documents_path}/"}</span>
@@ -338,21 +359,21 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   name="documents_name"
                   value={@documents_name}
                   class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
-                  placeholder="documents"
+                  placeholder={gettext("documents")}
                 />
                 <input type="hidden" name="documents_path" value={@documents_path} />
               </div>
             </div>
 
             <div class="form-control">
-              <label class="label"><span class="label-text">Deleted</span></label>
+              <label class="label"><span class="label-text">{gettext("Deleted")}</span></label>
               <div class="flex items-center gap-0">
                 <button
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
                   phx-value-field="deleted_path"
-                  title={if @deleted_path == "", do: "Browse Google Drive — root", else: "Browse Google Drive — #{@deleted_path}"}
+                  title={if @deleted_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @deleted_path)}
                 >
                   <span class="hero-folder-open w-4 h-4 shrink-0" />
                   <span class="truncate">{if @deleted_path == "", do: "/", else: "#{@deleted_path}/"}</span>
@@ -362,20 +383,18 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   name="deleted_name"
                   value={@deleted_name}
                   class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
-                  placeholder="deleted"
+                  placeholder={gettext("deleted")}
                 />
                 <input type="hidden" name="deleted_path" value={@deleted_path} />
               </div>
             </div>
 
             <p class="text-xs text-base-content/50">
-              Click the path button to browse your Google Drive. Deleted items go to
-              subfolders inside the deleted folder.
-              Folders are created automatically if they don't exist.
+              {gettext("Click the path button to browse your Google Drive. Deleted items go to subfolders inside the deleted folder. Folders are created automatically if they don't exist.")}
             </p>
 
             <button type="submit" class="btn btn-primary btn-sm">
-              Save Folder Settings
+              {gettext("Save Folder Settings")}
             </button>
           </form>
         </div>
@@ -383,9 +402,10 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     </div>
 
     <%!-- Folder browser modal --%>
+    <%!-- Folder browser modal --%>
     <div :if={@browser_open} class="modal modal-open">
       <div class="modal-box max-w-md">
-        <h3 class="font-bold text-lg">Select Folder</h3>
+        <h3 class="font-bold text-lg">{gettext("Select Folder")}</h3>
 
         <%!-- Breadcrumb --%>
         <div class="flex items-center gap-1 mt-3 text-sm flex-wrap">
@@ -406,7 +426,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
             <span class="loading loading-spinner loading-md" />
           </div>
           <div :if={not @browser_loading and @browser_folders == []} class="flex justify-center py-8 text-base-content/40 text-sm">
-            No subfolders
+            {gettext("No subfolders")}
           </div>
           <ul :if={not @browser_loading and @browser_folders != []} class="menu menu-sm p-0">
             <li :for={folder <- @browser_folders}>
@@ -426,14 +446,21 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
         <%!-- Actions --%>
         <div class="modal-action">
-          <button class="btn btn-ghost btn-sm" phx-click="browser_close">Cancel</button>
+          <button class="btn btn-ghost btn-sm" phx-click="browser_close">{gettext("Cancel")}</button>
           <button class="btn btn-primary btn-sm" phx-click="browser_select">
-            Select Current Folder
+            {gettext("Select Current Folder")}
           </button>
         </div>
       </div>
       <div class="modal-backdrop" phx-click="browser_close"></div>
     </div>
     """
+  end
+
+  defp actor_uuid(socket) do
+    case socket.assigns[:phoenix_kit_current_scope] do
+      %{user: %{uuid: uuid}} -> uuid
+      _ -> nil
+    end
   end
 end

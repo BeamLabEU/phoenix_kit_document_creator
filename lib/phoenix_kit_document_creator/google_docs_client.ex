@@ -2,10 +2,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @moduledoc """
   Google Docs and Drive API client for the Document Creator module.
 
-  Google Drive is the single source of truth. Templates and documents are
-  stored as Google Docs in dedicated Drive folders. This module handles
-  folder discovery, file listing, document creation, template variable
-  substitution, thumbnails, and PDF export.
+  This module provides **direct Google Drive and Docs API access** without
+  touching the local database. Use it when you need raw Drive operations:
+  creating files, listing folders, moving files, exporting PDFs, reading
+  document content, and substituting template variables.
+
+  For combined Drive + DB operations, use `PhoenixKitDocumentCreator.Documents`.
+
+  ## Capabilities
+
+  - **Folders**: `find_folder_by_name/2`, `create_folder/2`, `find_or_create_folder/2`,
+    `ensure_folder_path/2`, `discover_folders/0`, `list_subfolders/1`
+  - **Files**: `list_folder_files/1`, `move_file/2`, `copy_file/3`, `create_document/2`
+  - **Docs**: `get_document/1`, `get_document_text/1`, `batch_update/2`, `replace_all_text/2`
+  - **Export**: `export_pdf/1`, `fetch_thumbnail/1`
+  - **Status**: `file_status/1`, `file_location/1`
+  - **URLs**: `get_edit_url/1`, `get_folder_url/1`
 
   OAuth credentials and tokens are managed by `PhoenixKit.Integrations`
   under the `"google"` provider. Folder configuration is stored separately
@@ -285,6 +297,78 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   def get_folder_url(_), do: nil
 
+  @doc "Fetch Google Drive file metadata needed for sync classification."
+  def file_status(file_id) when is_binary(file_id) and file_id != "" do
+    case authenticated_request(:get, "#{@drive_base}/files/#{file_id}",
+           params: [fields: "id,trashed,parents"]
+         ) do
+      {:ok, %{status: 200, body: %{"trashed" => trashed} = body}} when is_boolean(trashed) ->
+        {:ok,
+         %{
+           trashed: trashed,
+           parents: Map.get(body, "parents", [])
+         }}
+
+      {:ok, %{status: 404}} ->
+        {:ok, :not_found}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:unexpected_status, status, body}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def file_status(_), do: {:error, :invalid_file_id}
+
+  @doc "Resolve the current parent folder and path for a Drive file."
+  def file_location(file_id) when is_binary(file_id) and file_id != "" do
+    case file_status(file_id) do
+      {:ok, %{parents: parents} = meta} ->
+        folder_id = parents |> List.first() || "root"
+
+        with {:ok, path} <- resolve_folder_path(folder_id) do
+          {:ok, %{folder_id: folder_id, path: path, trashed: meta.trashed}}
+        end
+
+      {:ok, :not_found} ->
+        {:error, :not_found}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def file_location(_), do: {:error, :invalid_file_id}
+
+  defp resolve_folder_path("root"), do: {:ok, ""}
+
+  defp resolve_folder_path(folder_id) do
+    case authenticated_request(:get, "#{@drive_base}/files/#{folder_id}",
+           params: [fields: "id,name,parents"]
+         ) do
+      {:ok, %{status: 200, body: %{"name" => name} = body}} ->
+        parent_id = body |> Map.get("parents", []) |> List.first() || "root"
+
+        with {:ok, parent_path} <- resolve_folder_path(parent_id) do
+          {:ok, append_folder_path(parent_path, name)}
+        end
+
+      {:ok, %{status: 404}} ->
+        {:error, :folder_not_found}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:unexpected_status, status, body}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp append_folder_path("", name), do: name
+  defp append_folder_path(path, name), do: "#{path}/#{name}"
+
   # ===========================================================================
   # Google Docs API
   # ===========================================================================
@@ -484,8 +568,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   # Extract content-type from Req response headers.
   # Req >= 0.5 returns headers as %{"content-type" => ["image/png"]}.
-  defp extract_content_type(%{"content-type" => [v | _]}),
-    do: v |> String.split(";") |> hd() |> String.trim()
+  defp extract_content_type(%{"content-type" => [v | _]}) do
+    case String.split(v, ";") do
+      [type | _] -> String.trim(type)
+      _ -> "image/png"
+    end
+  end
 
   defp extract_content_type(_), do: "image/png"
 end
