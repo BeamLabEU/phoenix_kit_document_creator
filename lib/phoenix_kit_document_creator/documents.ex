@@ -25,6 +25,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "Log a manual user action to the activity feed."
+  @spec log_manual_action(String.t(), keyword()) :: :ok
   def log_manual_action(action, opts \\ []) do
     attrs = %{
       action: action,
@@ -52,6 +53,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "List templates from the local DB. Returns maps compatible with the LiveView."
+  @spec list_templates_from_db() :: [map()]
   def list_templates_from_db do
     Template
     |> where([t], t.status in ["published", "lost", "unfiled"])
@@ -62,6 +64,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc "List documents from the local DB. Returns maps compatible with the LiveView."
+  @spec list_documents_from_db() :: [map()]
   def list_documents_from_db do
     Document
     |> where([d], d.status in ["published", "lost", "unfiled"])
@@ -88,6 +91,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "Load cached thumbnails from DB for a list of google_doc_ids."
+  @spec load_cached_thumbnails([String.t()] | any()) :: %{String.t() => String.t()}
   def load_cached_thumbnails(google_doc_ids) when is_list(google_doc_ids) do
     template_thumbs =
       Template
@@ -107,6 +111,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   def load_cached_thumbnails(_), do: %{}
 
   @doc "Persist a thumbnail data URI to the DB by google_doc_id."
+  @spec persist_thumbnail(String.t(), String.t()) :: :ok
   def persist_thumbnail(google_doc_id, data_uri) when is_binary(google_doc_id) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -135,6 +140,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   marks DB records as "lost" if their google_doc_id is no longer in Drive,
   and recovers "lost" records that reappear.
   """
+  @spec sync_from_drive() :: :ok | {:error, :sync_failed}
   def sync_from_drive do
     with %{templates_folder_id: tid, documents_folder_id: did}
          when is_binary(tid) and is_binary(did) <- get_folder_ids(),
@@ -183,6 +189,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "Upsert a template record from a Google Drive file map."
+  @spec upsert_template_from_drive(map(), map()) ::
+          {:ok, Template.t()} | {:error, Ecto.Changeset.t()}
   def upsert_template_from_drive(%{"id" => gid, "name" => name} = _file, extra_attrs \\ %{}) do
     attrs = Map.merge(%{google_doc_id: gid, name: name, status: "published"}, extra_attrs)
 
@@ -195,6 +203,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc "Upsert a document record from a Google Drive file map."
+  @spec upsert_document_from_drive(map(), map()) ::
+          {:ok, Document.t()} | {:error, Ecto.Changeset.t()}
   def upsert_document_from_drive(%{"id" => gid, "name" => name} = _file, extra_attrs \\ %{}) do
     attrs = Map.merge(%{google_doc_id: gid, name: name, status: "published"}, extra_attrs)
 
@@ -296,6 +306,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "List all templates from the Google Drive templates folder."
+  @spec list_templates() :: [map()]
   def list_templates do
     case get_folder_ids() do
       %{templates_folder_id: id} when is_binary(id) ->
@@ -310,6 +321,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc "List all documents from the Google Drive documents folder."
+  @spec list_documents() :: [map()]
   def list_documents do
     case get_folder_ids() do
       %{documents_folder_id: id} when is_binary(id) ->
@@ -334,6 +346,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
   """
+  @spec create_template(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_template(name \\ "Untitled Template", opts \\ []) do
     case get_folder_ids() do
       %{templates_folder_id: id} when is_binary(id) ->
@@ -370,6 +383,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
   """
+  @spec create_document(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_document(name \\ "Untitled Document", opts \\ []) do
     case get_folder_ids() do
       %{documents_folder_id: id} when is_binary(id) ->
@@ -407,6 +421,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
   3. Persists the document record with variable_values and template link
   4. Returns `{:ok, %{doc_id, url}}`
   """
+  @spec create_document_from_template(String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
   def create_document_from_template(template_file_id, variable_values, opts \\ []) do
     doc_name = Keyword.get(opts, :name, "New Document")
 
@@ -471,6 +487,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
   """
+  @spec move_to_templates(String.t(), keyword()) :: :ok | {:error, term()}
   def move_to_templates(file_id, opts \\ []) when is_binary(file_id) do
     case reclassify_file(file_id, :template) do
       :ok ->
@@ -499,6 +516,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
   """
+  @spec move_to_documents(String.t(), keyword()) :: :ok | {:error, term()}
   def move_to_documents(file_id, opts \\ []) when is_binary(file_id) do
     case reclassify_file(file_id, :document) do
       :ok ->
@@ -527,6 +545,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
   """
+  @spec set_correct_location(String.t(), keyword()) :: :ok | {:error, term()}
   def set_correct_location(file_id, opts \\ []) when is_binary(file_id) do
     with {:ok, %{folder_id: folder_id, path: path, trashed: false}} <-
            GoogleDocsClient.file_location(file_id),
@@ -648,6 +667,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
   """
+  @spec delete_document(String.t(), keyword()) :: :ok | {:error, term()}
   def delete_document(file_id, opts \\ []) when is_binary(file_id) do
     case move_to_deleted_folder(file_id, :deleted_documents_folder_id) do
       :ok ->
@@ -673,6 +693,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
   """
+  @spec delete_template(String.t(), keyword()) :: :ok | {:error, term()}
   def delete_template(file_id, opts \\ []) when is_binary(file_id) do
     case move_to_deleted_folder(file_id, :deleted_templates_folder_id) do
       :ok ->
@@ -722,6 +743,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "Detect `{{ variables }}` in a Google Doc's text content."
+  @spec detect_variables(String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def detect_variables(file_id) when is_binary(file_id) do
     case GoogleDocsClient.get_document_text(file_id) do
       {:ok, text} ->
@@ -757,6 +779,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
   - `:name` — document name (for activity metadata)
   """
+  @spec export_pdf(String.t(), keyword()) :: {:ok, binary()} | {:error, term()}
   def export_pdf(file_id, opts \\ []) when is_binary(file_id) do
     case GoogleDocsClient.export_pdf(file_id) do
       {:ok, pdf_binary} = result ->
@@ -789,6 +812,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   Spawns a task per file that sends `{:thumbnail_result, file_id, data_uri}`
   back to the caller. Also persists thumbnails to the DB.
   """
+  @spec fetch_thumbnails_async([map()], pid()) :: :ok
   def fetch_thumbnails_async(files, caller_pid) when is_list(files) do
     Enum.each(files, fn file ->
       Task.start(fn -> fetch_and_notify_thumbnail(file["id"], caller_pid) end)
@@ -855,16 +879,19 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "Get the folder IDs (auto-discovers if not cached)."
+  @spec get_folder_ids() :: map()
   def get_folder_ids do
     GoogleDocsClient.get_folder_ids()
   end
 
   @doc "Re-discover folder IDs from Drive."
+  @spec refresh_folders() :: map()
   def refresh_folders do
     GoogleDocsClient.discover_folders()
   end
 
   @doc "Get the Google Drive URL for the templates folder."
+  @spec templates_folder_url() :: String.t() | nil
   def templates_folder_url do
     case get_folder_ids() do
       %{templates_folder_id: id} when is_binary(id) -> GoogleDocsClient.get_folder_url(id)
@@ -873,6 +900,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc "Get the Google Drive URL for the documents folder."
+  @spec documents_folder_url() :: String.t() | nil
   def documents_folder_url do
     case get_folder_ids() do
       %{documents_folder_id: id} when is_binary(id) -> GoogleDocsClient.get_folder_url(id)

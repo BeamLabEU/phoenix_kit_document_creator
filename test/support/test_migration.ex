@@ -1,7 +1,7 @@
 defmodule PhoenixKitDocumentCreator.Test.Migration do
   @moduledoc """
   Test-only migration that creates Document Creator tables.
-  Production migrations live in PhoenixKit core (V86).
+  Production migrations live in PhoenixKit core (V86 + V94).
   """
 
   use Ecto.Migration
@@ -17,6 +17,7 @@ defmodule PhoenixKitDocumentCreator.Test.Migration do
       add(:css, :text, default: "")
       add(:native, :map)
       add(:height, :string, default: "25mm", size: 20)
+      add(:google_doc_id, :string, size: 255)
       add(:data, :map, default: %{})
       add(:created_by_uuid, :uuid)
 
@@ -32,7 +33,10 @@ defmodule PhoenixKitDocumentCreator.Test.Migration do
       add(:name, :string, null: false, size: 255)
       add(:slug, :string, size: 255)
       add(:description, :text)
-      add(:status, :string, default: "published", size: 20)
+      add(:status, :string, default: "published", null: false, size: 20)
+      add(:google_doc_id, :string, size: 255)
+      add(:path, :string, size: 500)
+      add(:folder_id, :string, size: 255)
       add(:content_html, :text, default: "")
       add(:content_css, :text, default: "")
       add(:content_native, :map)
@@ -67,11 +71,21 @@ defmodule PhoenixKitDocumentCreator.Test.Migration do
     create_if_not_exists(unique_index(:phoenix_kit_doc_templates, [:slug]))
     create_if_not_exists(index(:phoenix_kit_doc_templates, [:status]))
 
+    execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_doc_templates_google_doc_id_unique_idx
+      ON phoenix_kit_doc_templates (google_doc_id)
+      WHERE google_doc_id IS NOT NULL
+    """)
+
     create_if_not_exists table(:phoenix_kit_doc_documents,
                            primary_key: false
                          ) do
       add(:uuid, :uuid, primary_key: true, default: fragment("gen_random_uuid()"))
       add(:name, :string, null: false, size: 255)
+      add(:google_doc_id, :string, size: 255)
+      add(:path, :string, size: 500)
+      add(:folder_id, :string, size: 255)
+      add(:status, :string, default: "published", null: false, size: 20)
 
       add(
         :template_uuid,
@@ -97,6 +111,13 @@ defmodule PhoenixKitDocumentCreator.Test.Migration do
     end
 
     create_if_not_exists(index(:phoenix_kit_doc_documents, [:template_uuid]))
+    create_if_not_exists(index(:phoenix_kit_doc_documents, [:status]))
+
+    execute("""
+    CREATE UNIQUE INDEX IF NOT EXISTS phoenix_kit_doc_documents_google_doc_id_unique_idx
+      ON phoenix_kit_doc_documents (google_doc_id)
+      WHERE google_doc_id IS NOT NULL
+    """)
   end
 
   def down do
