@@ -160,7 +160,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── Create actions ───────────────────────────────────────────────
 
   def handle_event("new_template", _params, socket) do
-    case Documents.create_template("Untitled Template", actor_opts(socket)) do
+    case Documents.create_template(gettext("Untitled Template"), actor_opts(socket)) do
       {:ok, %{url: url}} ->
         broadcast_files_changed()
         {:noreply, push_event(socket, "open-url", %{url: url})}
@@ -172,7 +172,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("new_blank_document", _params, socket) do
-    case Documents.create_document("Untitled Document", actor_opts(socket)) do
+    case Documents.create_document(gettext("Untitled Document"), actor_opts(socket)) do
       {:ok, %{url: url}} ->
         broadcast_files_changed()
         {:noreply, push_event(socket, "open-url", %{url: url})}
@@ -206,7 +206,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("modal_create_blank", _params, socket) do
-    case Documents.create_document("Untitled Document", actor_opts(socket)) do
+    case Documents.create_document(gettext("Untitled Document"), actor_opts(socket)) do
       {:ok, %{url: url}} ->
         broadcast_files_changed()
 
@@ -227,43 +227,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("modal_select_template", %{"id" => file_id, "name" => name}, socket) do
-    # Detect variables from the template
-    variables =
-      case Documents.detect_variables(file_id) do
-        {:ok, vars} ->
-          PhoenixKitDocumentCreator.Variable.build_definitions(vars)
-          |> Enum.map(&Map.from_struct/1)
-
-        _ ->
-          []
-      end
-
-    template = %{"id" => file_id, "name" => name}
-
-    if variables == [] do
-      # No variables — create directly
-      case Documents.create_document_from_template(
-             file_id,
-             %{},
-             [name: name] ++ actor_opts(socket)
-           ) do
-        {:ok, %{url: url}} ->
-          broadcast_files_changed()
-          {:noreply, socket |> assign(modal_open: false) |> push_event("open-url", %{url: url})}
-
-        {:error, reason} ->
-          Logger.error("Failed to create from template: #{inspect(reason)}")
-
-          {:noreply,
-           assign(socket, error: gettext("Failed to create document. Please try again."))}
-      end
-    else
-      {:noreply,
-       assign(socket,
-         modal_step: "variables",
-         modal_selected_template: template,
-         modal_variables: variables
-       )}
+    case verify_known_file(socket, file_id) do
+      :ok -> do_modal_select_template(socket, file_id, name)
+      _ -> {:noreply, socket}
     end
   end
 
@@ -306,12 +272,18 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         %{"id" => file_id, "name" => name, "path" => path_value},
         socket
       ) do
-    {:noreply,
-     assign(socket,
-       unfiled_modal_open: true,
-       unfiled_working: false,
-       unfiled_file: %{"id" => file_id, "name" => name, "path" => path_value}
-     )}
+    case verify_known_file(socket, file_id) do
+      :ok ->
+        {:noreply,
+         assign(socket,
+           unfiled_modal_open: true,
+           unfiled_working: false,
+           unfiled_file: %{"id" => file_id, "name" => name, "path" => path_value}
+         )}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event("unfiled_close", _params, socket) do
@@ -361,30 +333,107 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── PDF export ───────────────────────────────────────────────────
 
   def handle_event("export_pdf", %{"id" => file_id, "name" => name}, socket) do
-    case Documents.export_pdf(file_id, [name: name] ++ actor_opts(socket)) do
-      {:ok, pdf_binary} when byte_size(pdf_binary) <= @max_pdf_push_bytes ->
-        base64 = Base.encode64(pdf_binary)
-        filename = sanitize_filename(name)
-        {:noreply, push_event(socket, "download-pdf", %{base64: base64, filename: filename})}
+    case verify_known_file(socket, file_id) do
+      :ok ->
+        case Documents.export_pdf(file_id, [name: name] ++ actor_opts(socket)) do
+          {:ok, pdf_binary} when byte_size(pdf_binary) <= @max_pdf_push_bytes ->
+            base64 = Base.encode64(pdf_binary)
+            filename = sanitize_filename(name)
+            {:noreply, push_event(socket, "download-pdf", %{base64: base64, filename: filename})}
 
-      {:ok, _large_pdf} ->
-        {:noreply,
-         assign(socket,
-           error:
-             gettext(
-               "PDF is too large to download directly. Please export from Google Docs instead."
-             )
-         )}
+          {:ok, _large_pdf} ->
+            {:noreply,
+             assign(socket,
+               error:
+                 gettext(
+                   "PDF is too large to download directly. Please export from Google Docs instead."
+                 )
+             )}
 
-      {:error, reason} ->
-        Logger.error("PDF export failed: #{inspect(reason)}")
-        {:noreply, assign(socket, error: gettext("PDF export failed. Please try again."))}
+          {:error, reason} ->
+            Logger.error("PDF export failed: #{inspect(reason)}")
+            {:noreply, assign(socket, error: gettext("PDF export failed. Please try again."))}
+        end
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
   # ── Delete (soft) ────────────────────────────────────────────────
 
   def handle_event("delete", %{"id" => file_id}, socket) do
+    case verify_known_file(socket, file_id) do
+      :ok -> do_delete(socket, file_id)
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # ── Refresh ──────────────────────────────────────────────────────
+
+  def handle_event("refresh", _params, socket) do
+    Documents.log_manual_action("sync.triggered", actor_opts(socket))
+    send(self(), :sync_from_drive)
+    {:noreply, assign(socket, loading: true)}
+  end
+
+  def handle_event("silent_refresh", _params, socket) do
+    if not socket.assigns.loading and not within_cooldown?(socket) do
+      send(self(), :sync_from_drive)
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("dismiss_error", _params, socket) do
+    {:noreply, assign(socket, error: nil)}
+  end
+
+  # ── Event helpers ──────────────────────────────────────────────────
+
+  defp do_modal_select_template(socket, file_id, name) do
+    variables =
+      case Documents.detect_variables(file_id) do
+        {:ok, vars} ->
+          PhoenixKitDocumentCreator.Variable.build_definitions(vars)
+          |> Enum.map(&Map.from_struct/1)
+
+        _ ->
+          []
+      end
+
+    template = %{"id" => file_id, "name" => name}
+
+    if variables == [] do
+      create_from_template_directly(socket, file_id, name)
+    else
+      {:noreply,
+       assign(socket,
+         modal_step: "variables",
+         modal_selected_template: template,
+         modal_variables: variables
+       )}
+    end
+  end
+
+  defp create_from_template_directly(socket, file_id, name) do
+    case Documents.create_document_from_template(
+           file_id,
+           %{},
+           [name: name] ++ actor_opts(socket)
+         ) do
+      {:ok, %{url: url}} ->
+        broadcast_files_changed()
+        {:noreply, socket |> assign(modal_open: false) |> push_event("open-url", %{url: url})}
+
+      {:error, reason} ->
+        Logger.error("Failed to create from template: #{inspect(reason)}")
+
+        {:noreply, assign(socket, error: gettext("Failed to create document. Please try again."))}
+    end
+  end
+
+  defp do_delete(socket, file_id) do
     opts = actor_opts(socket)
 
     result =
@@ -413,26 +462,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         Logger.error("Delete failed: #{inspect(reason)}")
         {:noreply, assign(socket, error: gettext("Delete failed. Please try again."))}
     end
-  end
-
-  # ── Refresh ──────────────────────────────────────────────────────
-
-  def handle_event("refresh", _params, socket) do
-    Documents.log_manual_action("sync.triggered", actor_opts(socket))
-    send(self(), :sync_from_drive)
-    {:noreply, assign(socket, loading: true)}
-  end
-
-  def handle_event("silent_refresh", _params, socket) do
-    if not socket.assigns.loading and not within_cooldown?(socket) do
-      send(self(), :sync_from_drive)
-    end
-
-    {:noreply, socket}
-  end
-
-  def handle_event("dismiss_error", _params, socket) do
-    {:noreply, assign(socket, error: nil)}
   end
 
   # ── Render ─────────────────────────────────────────────────────────
@@ -793,8 +822,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     """
   end
 
-  defp pretty_path(nil), do: "root"
-  defp pretty_path(""), do: "root"
+  defp pretty_path(nil), do: gettext("root")
+  defp pretty_path(""), do: gettext("root")
   defp pretty_path(path), do: path
 
   defp unfiled_success_message("templates"), do: gettext("Moved to templates")
@@ -843,6 +872,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     case socket.assigns[:phoenix_kit_current_scope] do
       %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
       _ -> []
+    end
+  end
+
+  defp verify_known_file(socket, file_id) do
+    if Enum.any?(socket.assigns.templates, &(&1["id"] == file_id)) or
+         Enum.any?(socket.assigns.documents, &(&1["id"] == file_id)) do
+      :ok
+    else
+      :unknown
     end
   end
 

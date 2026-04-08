@@ -21,6 +21,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   import Ecto.Query
 
+  require Logger
+
   alias PhoenixKitDocumentCreator.GoogleDocsClient
   alias PhoenixKitDocumentCreator.Schemas.Document
   alias PhoenixKitDocumentCreator.Schemas.Template
@@ -49,6 +51,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
       end
 
     log_activity(attrs)
+    :ok
   end
 
   defp log_activity(attrs) do
@@ -89,9 +92,9 @@ defmodule PhoenixKitDocumentCreator.Documents do
       "name" => record.name,
       "modifiedTime" =>
         if(record.updated_at, do: DateTime.to_iso8601(record.updated_at), else: nil),
-      "status" => Map.get(record, :status, "published"),
-      "path" => Map.get(record, :path),
-      "folder_id" => Map.get(record, :folder_id)
+      "status" => record.status || "published",
+      "path" => record.path,
+      "folder_id" => record.folder_id
     }
   end
 
@@ -189,7 +192,9 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
       :ok
     else
-      _ -> {:error, :sync_failed}
+      reason ->
+        Logger.error("Document Creator sync_from_drive failed: #{inspect(reason)}")
+        {:error, :sync_failed}
     end
   end
 
@@ -311,40 +316,6 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   # ===========================================================================
-  # Listing (from Google Drive — used by sync)
-  # ===========================================================================
-
-  @doc "List all templates from the Google Drive templates folder."
-  @spec list_templates() :: [map()]
-  def list_templates do
-    case get_folder_ids() do
-      %{templates_folder_id: id} when is_binary(id) ->
-        case GoogleDocsClient.list_folder_files(id) do
-          {:ok, files} -> files
-          _ -> []
-        end
-
-      _ ->
-        []
-    end
-  end
-
-  @doc "List all documents from the Google Drive documents folder."
-  @spec list_documents() :: [map()]
-  def list_documents do
-    case get_folder_ids() do
-      %{documents_folder_id: id} when is_binary(id) ->
-        case GoogleDocsClient.list_folder_files(id) do
-          {:ok, files} -> files
-          _ -> []
-        end
-
-      _ ->
-        []
-    end
-  end
-
-  # ===========================================================================
   # Creating
   # ===========================================================================
 
@@ -440,42 +411,56 @@ defmodule PhoenixKitDocumentCreator.Documents do
         with {:ok, new_doc_id} <-
                GoogleDocsClient.copy_file(template_file_id, doc_name, parent: folder_id),
              {:ok, _} <- GoogleDocsClient.replace_all_text(new_doc_id, variable_values) do
-          # Look up the template's DB uuid by its google_doc_id
-          template_uuid = get_template_uuid_by_google_doc_id(template_file_id)
-
-          # Persist document with variable values and template link
-          %Document{}
-          |> Document.creation_changeset(%{
-            name: doc_name,
-            google_doc_id: new_doc_id,
-            template_uuid: template_uuid,
-            variable_values: variable_values,
-            status: "published",
-            path: managed_location(:document).path,
-            folder_id: managed_location(:document).folder_id
-          })
-          |> repo().insert()
-
-          log_activity(%{
-            action: "document.created_from_template",
-            mode: "manual",
-            actor_uuid: opts[:actor_uuid],
-            resource_type: "document",
-            metadata: %{
-              "name" => doc_name,
-              "google_doc_id" => new_doc_id,
-              "template_google_doc_id" => template_file_id,
-              "template_uuid" => template_uuid,
-              "variables_used" => Map.keys(variable_values)
-            }
-          })
-
-          {:ok, %{doc_id: new_doc_id, url: GoogleDocsClient.get_edit_url(new_doc_id)}}
+          persist_created_document(new_doc_id, template_file_id, doc_name, variable_values, opts)
+        else
+          {:error, _} = err -> err
         end
 
       _ ->
         {:error, :documents_folder_not_found}
     end
+  end
+
+  defp persist_created_document(new_doc_id, template_file_id, doc_name, variable_values, opts) do
+    template_uuid = get_template_uuid_by_google_doc_id(template_file_id)
+    location = managed_location(:document)
+
+    result =
+      %Document{}
+      |> Document.creation_changeset(%{
+        name: doc_name,
+        google_doc_id: new_doc_id,
+        template_uuid: template_uuid,
+        variable_values: variable_values,
+        status: "published",
+        path: location.path,
+        folder_id: location.folder_id
+      })
+      |> repo().insert()
+
+    case result do
+      {:ok, _record} ->
+        log_activity(%{
+          action: "document.created_from_template",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "document",
+          metadata: %{
+            "name" => doc_name,
+            "google_doc_id" => new_doc_id,
+            "template_google_doc_id" => template_file_id,
+            "template_uuid" => template_uuid,
+            "variables_used" => Map.keys(variable_values)
+          }
+        })
+
+      {:error, changeset} ->
+        Logger.error("Failed to persist document from template: #{inspect(changeset.errors)}")
+    end
+
+    # Return success even if DB insert failed — the Drive doc exists
+    # and the next sync will pick it up
+    {:ok, %{doc_id: new_doc_id, url: GoogleDocsClient.get_edit_url(new_doc_id)}}
   end
 
   defp get_template_uuid_by_google_doc_id(google_doc_id) do
@@ -582,7 +567,6 @@ defmodule PhoenixKitDocumentCreator.Documents do
       {:ok, %{trashed: true}} -> {:error, :file_trashed}
       nil -> {:error, :not_found}
       {:error, _} = err -> err
-      _ -> {:error, :not_found}
     end
   end
 
@@ -595,10 +579,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
          :ok <- GoogleDocsClient.move_file(file_id, folder_id) do
       persist_reclassified_record(source_record, target_type, location)
     else
-      nil -> {:error, :not_found}
+      %{folder_id: nil} -> {:error, :folder_not_found}
       %{} -> {:error, :folder_not_found}
+      false -> {:error, :not_found}
       {:error, _} = err -> err
-      _ -> {:error, :not_found}
     end
   end
 
@@ -621,35 +605,37 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   defp persist_reclassified_record({:template, record}, :document, location) do
-    repo().transaction(fn ->
-      upsert_document_from_drive(
-        %{"id" => record.google_doc_id, "name" => record.name},
-        location
-        |> Map.take([:path, :folder_id])
-        |> Map.put(:status, "published")
-        |> Map.put(:thumbnail, record.thumbnail)
-      )
+    case repo().transaction(fn ->
+           upsert_document_from_drive(
+             %{"id" => record.google_doc_id, "name" => record.name},
+             location
+             |> Map.take([:path, :folder_id])
+             |> Map.put(:status, "published")
+             |> Map.put(:thumbnail, record.thumbnail)
+           )
 
-      repo().delete(record)
-    end)
-
-    :ok
+           repo().delete(record)
+         end) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, {:transaction_failed, reason}}
+    end
   end
 
   defp persist_reclassified_record({:document, record}, :template, location) do
-    repo().transaction(fn ->
-      upsert_template_from_drive(
-        %{"id" => record.google_doc_id, "name" => record.name},
-        location
-        |> Map.take([:path, :folder_id])
-        |> Map.put(:status, "published")
-        |> Map.put(:thumbnail, record.thumbnail)
-      )
+    case repo().transaction(fn ->
+           upsert_template_from_drive(
+             %{"id" => record.google_doc_id, "name" => record.name},
+             location
+             |> Map.take([:path, :folder_id])
+             |> Map.put(:status, "published")
+             |> Map.put(:thumbnail, record.thumbnail)
+           )
 
-      repo().delete(record)
-    end)
-
-    :ok
+           repo().delete(record)
+         end) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, {:transaction_failed, reason}}
+    end
   end
 
   defp find_file_record(file_id) do
