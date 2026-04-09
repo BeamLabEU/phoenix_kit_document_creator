@@ -1,3 +1,15 @@
+## 0.2.4 - 2026-04-09
+
+### Fixed
+- Fix 3 dialyzer errors (invalid contract, pattern match issues)
+- Fix sync_from_drive error swallowing (now logs reason)
+- Fix schema field access (direct instead of Map.get)
+
+### Changed
+- Refactor create_document: extract persist_created_document/5
+- Remove dead list_templates/list_documents (replaced by DB versions)
+- Graceful DB insert failure (Drive doc still returned, sync picks it up)
+
 ## 0.2.3 - 2026-04-06
 
 ### Changed
