@@ -148,6 +148,7 @@ The module exposes two complementary APIs:
 - **Translations**: All user-facing strings use `gettext()` via `PhoenixKitWeb.Gettext` backend
 - **CSS sources**: `css_sources/0` returns `[:phoenix_kit_document_creator]` for Tailwind scanning
 - **Required integrations**: `["google"]` — declares dependency on Google provider
+- **Admin routing** — plugin LiveView routes are auto-discovered by PhoenixKit and compiled into `live_session :phoenix_kit_admin`. Never hand-register them in a parent app's `router.ex`; use `live_view:` on a tab or a route module. See `phoenix_kit/guides/custom-admin-pages.md` for the authoritative reference
 
 ## Running Tests
 
