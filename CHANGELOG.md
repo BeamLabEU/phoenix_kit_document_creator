@@ -1,3 +1,8 @@
+## 0.2.5 - 2026-04-12
+
+### Fixed
+- Add routing anti-pattern warning to AGENTS.md
+
 ## 0.2.4 - 2026-04-09
 
 ### Fixed
