@@ -70,7 +70,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
     Template
     |> where([t], t.status in ["published", "lost", "unfiled"])
     |> where([t], not is_nil(t.google_doc_id))
-    |> order_by([t], desc: t.updated_at)
+    |> order_by([t], desc: t.inserted_at)
     |> repo().all()
     |> Enum.map(&schema_to_file_map/1)
   end
@@ -81,7 +81,29 @@ defmodule PhoenixKitDocumentCreator.Documents do
     Document
     |> where([d], d.status in ["published", "lost", "unfiled"])
     |> where([d], not is_nil(d.google_doc_id))
-    |> order_by([d], desc: d.updated_at)
+    |> order_by([d], desc: d.inserted_at)
+    |> repo().all()
+    |> Enum.map(&schema_to_file_map/1)
+  end
+
+  @doc "List trashed templates from the local DB."
+  @spec list_trashed_templates_from_db() :: [map()]
+  def list_trashed_templates_from_db do
+    Template
+    |> where([t], t.status == "trashed")
+    |> where([t], not is_nil(t.google_doc_id))
+    |> order_by([t], desc: t.inserted_at)
+    |> repo().all()
+    |> Enum.map(&schema_to_file_map/1)
+  end
+
+  @doc "List trashed documents from the local DB."
+  @spec list_trashed_documents_from_db() :: [map()]
+  def list_trashed_documents_from_db do
+    Document
+    |> where([d], d.status == "trashed")
+    |> where([d], not is_nil(d.google_doc_id))
+    |> order_by([d], desc: d.inserted_at)
     |> repo().all()
     |> Enum.map(&schema_to_file_map/1)
   end
@@ -730,6 +752,69 @@ defmodule PhoenixKitDocumentCreator.Documents do
           %{^folder_key => id} when is_binary(id) -> {:ok, id}
           _ -> {:error, :deleted_folder_not_found}
         end
+    end
+  end
+
+  # ===========================================================================
+  # Restoring (from trashed → published)
+  # ===========================================================================
+
+  @doc "Restore a trashed document back to the documents folder."
+  @spec restore_document(String.t(), keyword()) :: :ok | {:error, term()}
+  def restore_document(file_id, opts \\ []) when is_binary(file_id) do
+    case move_from_deleted_folder(file_id, :document) do
+      :ok ->
+        log_activity(%{
+          action: "document.restored",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "document",
+          metadata: %{"google_doc_id" => file_id}
+        })
+
+        :ok
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Restore a trashed template back to the templates folder."
+  @spec restore_template(String.t(), keyword()) :: :ok | {:error, term()}
+  def restore_template(file_id, opts \\ []) when is_binary(file_id) do
+    case move_from_deleted_folder(file_id, :template) do
+      :ok ->
+        log_activity(%{
+          action: "template.restored",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "template",
+          metadata: %{"google_doc_id" => file_id}
+        })
+
+        :ok
+
+      error ->
+        error
+    end
+  end
+
+  defp move_from_deleted_folder(file_id, type) do
+    location = managed_location(type)
+
+    with %{folder_id: folder_id} when is_binary(folder_id) <- location,
+         :ok <- GoogleDocsClient.move_file(file_id, folder_id) do
+      update_file_by_google_doc_id(file_id, %{
+        status: "published",
+        folder_id: folder_id,
+        path: location.path
+      })
+
+      :ok
+    else
+      %{folder_id: nil} -> {:error, :live_folder_not_found}
+      %{} -> {:error, :live_folder_not_found}
+      error -> error
     end
   end
 

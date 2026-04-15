@@ -29,15 +29,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       end
 
     # Load from DB immediately (fast, no API call)
-    {templates, documents} =
+    {templates, documents, trashed_templates, trashed_documents} =
       if google_connected do
-        {Documents.list_templates_from_db(), Documents.list_documents_from_db()}
+        {Documents.list_templates_from_db(), Documents.list_documents_from_db(),
+         Documents.list_trashed_templates_from_db(), Documents.list_trashed_documents_from_db()}
       else
-        {[], []}
+        {[], [], [], []}
       end
 
     # Pre-load cached thumbnails from DB
-    all_ids = Enum.map(templates ++ documents, & &1["id"])
+    all_ids =
+      Enum.map(templates ++ documents ++ trashed_templates ++ trashed_documents, & &1["id"])
 
     cached_thumbnails =
       if all_ids != [], do: Documents.load_cached_thumbnails(all_ids), else: %{}
@@ -60,6 +62,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        google_connected: google_connected,
        templates: templates,
        documents: documents,
+       trashed_templates: trashed_templates,
+       trashed_documents: trashed_documents,
+       status_mode: "active",
+       pending_files: MapSet.new(),
        thumbnails: cached_thumbnails,
        loading: google_connected and db_empty,
        last_loaded_at: nil,
@@ -99,14 +105,18 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   def handle_info(:sync_complete, socket) do
     templates = Documents.list_templates_from_db()
     documents = Documents.list_documents_from_db()
+    trashed_templates = Documents.list_trashed_templates_from_db()
+    trashed_documents = Documents.list_trashed_documents_from_db()
 
     # Load cached thumbnails from DB
-    all_ids = Enum.map(templates ++ documents, & &1["id"])
+    all_ids =
+      Enum.map(templates ++ documents ++ trashed_templates ++ trashed_documents, & &1["id"])
+
     cached_thumbnails = Documents.load_cached_thumbnails(all_ids)
 
     # Fetch fresh thumbnails for any files missing them
     missing_thumb_files =
-      (templates ++ documents)
+      (templates ++ documents ++ trashed_templates ++ trashed_documents)
       |> Enum.filter(fn f -> is_nil(cached_thumbnails[f["id"]]) end)
 
     if missing_thumb_files != [], do: load_thumbnails_async(missing_thumb_files)
@@ -115,6 +125,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
      assign(socket,
        templates: templates,
        documents: documents,
+       trashed_templates: trashed_templates,
+       trashed_documents: trashed_documents,
        thumbnails: Map.merge(socket.assigns.thumbnails, cached_thumbnails),
        loading: false,
        last_loaded_at: now_ms()
@@ -146,6 +158,31 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     {:noreply, socket}
   end
 
+  def handle_info({:perform_file_action, action, file_id}, socket) do
+    is_template = socket.assigns.live_action == :templates
+    spec = action_spec(action, is_template)
+
+    socket =
+      case spec.backend.(file_id, actor_opts(socket)) do
+        :ok ->
+          broadcast_files_changed()
+
+          socket
+          |> apply_optimistic_move(file_id, spec)
+          |> put_flash(:info, spec.success)
+
+        {:error, reason} ->
+          Logger.error("#{action} failed for #{file_id}: #{inspect(reason)}")
+          assign(socket, error: spec.failure)
+      end
+
+    {:noreply,
+     assign(socket, pending_files: MapSet.delete(socket.assigns.pending_files, file_id))}
+  end
+
+  # Catch-all to avoid crashing on unexpected messages
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   defp load_thumbnails_async(files) do
     Documents.fetch_thumbnails_async(files, self())
   end
@@ -155,6 +192,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   @impl true
   def handle_event("switch_view", %{"mode" => mode}, socket) do
     {:noreply, assign(socket, view_mode: mode)}
+  end
+
+  def handle_event("switch_status", %{"mode" => mode}, socket)
+      when mode in ["active", "trashed"] do
+    {:noreply, assign(socket, status_mode: mode)}
   end
 
   # ── Create actions ───────────────────────────────────────────────
@@ -369,6 +411,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
+  # ── Restore (from trash) ─────────────────────────────────────────
+
+  def handle_event("restore", %{"id" => file_id}, socket) do
+    case verify_known_file(socket, file_id) do
+      :ok -> do_restore(socket, file_id)
+      _ -> {:noreply, socket}
+    end
+  end
+
   # ── Refresh ──────────────────────────────────────────────────────
 
   def handle_event("refresh", _params, socket) do
@@ -433,35 +484,78 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
-  defp do_delete(socket, file_id) do
-    opts = actor_opts(socket)
+  defp do_delete(socket, file_id), do: schedule_file_action(socket, file_id, :delete)
+  defp do_restore(socket, file_id), do: schedule_file_action(socket, file_id, :restore)
 
-    result =
-      if socket.assigns.live_action == :templates,
-        do: Documents.delete_template(file_id, opts),
-        else: Documents.delete_document(file_id, opts)
+  # Optimistically marks the file as pending so the card renders a spinner,
+  # then kicks off the backend call asynchronously via `handle_info`.
+  defp schedule_file_action(socket, file_id, action) do
+    if MapSet.member?(socket.assigns.pending_files, file_id) do
+      {:noreply, socket}
+    else
+      send(self(), {:perform_file_action, action, file_id})
 
-    case result do
-      :ok ->
-        broadcast_files_changed()
-
-        socket =
-          if socket.assigns.live_action == :templates do
-            assign(socket,
-              templates: Enum.reject(socket.assigns.templates, &(&1["id"] == file_id))
-            )
-          else
-            assign(socket,
-              documents: Enum.reject(socket.assigns.documents, &(&1["id"] == file_id))
-            )
-          end
-
-        {:noreply, put_flash(socket, :info, gettext("Moved to deleted folder"))}
-
-      {:error, reason} ->
-        Logger.error("Delete failed: #{inspect(reason)}")
-        {:noreply, assign(socket, error: gettext("Delete failed. Please try again."))}
+      {:noreply, assign(socket, pending_files: MapSet.put(socket.assigns.pending_files, file_id))}
     end
+  end
+
+  defp action_spec(:delete, true) do
+    %{
+      backend: &Documents.delete_template/2,
+      source: :templates,
+      dest: :trashed_templates,
+      new_status: "trashed",
+      success: gettext("Moved to deleted folder"),
+      failure: gettext("Delete failed. Please try again.")
+    }
+  end
+
+  defp action_spec(:delete, false) do
+    %{
+      backend: &Documents.delete_document/2,
+      source: :documents,
+      dest: :trashed_documents,
+      new_status: "trashed",
+      success: gettext("Moved to deleted folder"),
+      failure: gettext("Delete failed. Please try again.")
+    }
+  end
+
+  defp action_spec(:restore, true) do
+    %{
+      backend: &Documents.restore_template/2,
+      source: :trashed_templates,
+      dest: :templates,
+      new_status: "published",
+      success: gettext("Restored"),
+      failure: gettext("Restore failed. Please try again.")
+    }
+  end
+
+  defp action_spec(:restore, false) do
+    %{
+      backend: &Documents.restore_document/2,
+      source: :trashed_documents,
+      dest: :documents,
+      new_status: "published",
+      success: gettext("Restored"),
+      failure: gettext("Restore failed. Please try again.")
+    }
+  end
+
+  defp apply_optimistic_move(socket, file_id, spec) do
+    source_list = Map.fetch!(socket.assigns, spec.source)
+    dest_list = Map.fetch!(socket.assigns, spec.dest)
+    file = Enum.find(source_list, &(&1["id"] == file_id))
+
+    new_source = Enum.reject(source_list, &(&1["id"] == file_id))
+
+    new_dest =
+      if file, do: [Map.put(file, "status", spec.new_status) | dest_list], else: dest_list
+
+    socket
+    |> assign(spec.source, new_source)
+    |> assign(spec.dest, new_dest)
   end
 
   # ── Render ─────────────────────────────────────────────────────────
@@ -477,7 +571,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             <span class="hero-exclamation-triangle w-12 h-12 text-warning" />
             <h2 class="card-title mt-2">{gettext("Google Account Not Connected")}</h2>
             <p class="text-sm text-base-content/60 max-w-md">
-              {gettext("The Document Creator uses Google Docs for editing and Google Drive for storage. Connect a Google account in Settings to get started.")}
+              {gettext(
+                "The Document Creator uses Google Docs for editing and Google Drive for storage. Connect a Google account in Settings to get started."
+              )}
             </p>
             <div class="card-actions mt-4">
               <a href={settings_path()} class="btn btn-primary btn-sm">
@@ -498,26 +594,80 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               <span :if={not @loading} class="hero-arrow-path w-4 h-4" />
             </button>
             <%= if @live_action == :templates do %>
-              <a :if={templates_folder_url()} href={templates_folder_url()} target="_blank" class="btn btn-ghost btn-sm">
+              <a
+                :if={templates_folder_url()}
+                href={templates_folder_url()}
+                target="_blank"
+                class="btn btn-ghost btn-sm"
+              >
                 <span class="hero-folder-open w-4 h-4" /> {gettext("Open Folder")}
               </a>
-              <button class="btn btn-primary btn-sm" phx-click="new_template">
+              <button
+                class="btn btn-primary btn-sm"
+                phx-click="new_template"
+                phx-disable-with={gettext("Creating...")}
+              >
                 <span class="hero-plus w-4 h-4" /> {gettext("New Template")}
               </button>
             <% else %>
-              <a :if={documents_folder_url()} href={documents_folder_url()} target="_blank" class="btn btn-ghost btn-sm">
+              <a
+                :if={documents_folder_url()}
+                href={documents_folder_url()}
+                target="_blank"
+                class="btn btn-ghost btn-sm"
+              >
                 <span class="hero-folder-open w-4 h-4" /> {gettext("Open Folder")}
               </a>
-              <button class="btn btn-primary btn-sm" phx-click="open_modal">
+              <button
+                class="btn btn-primary btn-sm"
+                phx-click="open_modal"
+                phx-disable-with={gettext("Opening...")}
+              >
                 <span class="hero-document-plus w-4 h-4" /> {gettext("New Document")}
               </button>
             <% end %>
           </div>
         </div>
 
-        <%!-- View Toggle --%>
-        <div class="flex items-center justify-end">
-          <div class="flex gap-1">
+        <%!-- Status Tabs (Active / Trash) — auto-hidden when trash is empty --%>
+        <% trashed_count =
+          if @live_action == :templates,
+            do: length(@trashed_templates),
+            else: length(@trashed_documents) %>
+        <% active_count =
+          if @live_action == :templates,
+            do: length(@templates),
+            else: length(@documents) %>
+        <% all_status_tabs = [
+          {"active", gettext("Active"), active_count, nil},
+          {"trashed", gettext("Trash"), trashed_count, "error"}
+        ] %>
+        <% visible_status_tabs =
+          Enum.filter(all_status_tabs, fn {mode, _label, count, _color} ->
+            count > 0 or @status_mode == mode
+          end) %>
+        <%!-- Status tabs + view toggle on one row --%>
+        <% show_status_tabs = length(visible_status_tabs) > 1 %>
+        <div class={"flex items-center justify-between gap-2 #{if show_status_tabs, do: "border-b border-base-200"}"}>
+          <div class="flex items-center gap-0.5 min-w-0 overflow-x-auto">
+            <%= if show_status_tabs do %>
+              <%= for {mode, label, _count, color} <- visible_status_tabs do %>
+                <button
+                  type="button"
+                  phx-click="switch_status"
+                  phx-value-mode={mode}
+                  class={"px-3 py-1 text-xs font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer #{cond do
+                    @status_mode == mode and color == "error" -> "border-error text-error"
+                    @status_mode == mode -> "border-primary text-primary"
+                    true -> "border-transparent text-base-content/50 hover:text-base-content"
+                  end}"}
+                >
+                  {label}
+                </button>
+              <% end %>
+            <% end %>
+          </div>
+          <div class="flex gap-1 flex-shrink-0">
             <button
               class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "cards", do: "btn-active"}"}
               phx-click="switch_view"
@@ -592,11 +742,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
         <%!-- Content --%>
         <%= if not @loading do %>
-          <%= if @live_action == :templates do %>
-            {render_file_grid(assign_files(assigns, @templates))}
-          <% else %>
-            {render_file_grid(assign_files(assigns, @documents))}
-          <% end %>
+          <% files_for_mode =
+            case {@live_action, @status_mode} do
+              {:templates, "trashed"} -> @trashed_templates
+              {:templates, _} -> @templates
+              {_, "trashed"} -> @trashed_documents
+              {_, _} -> @documents
+            end %>
+          {render_file_grid(assign_files(assigns, files_for_mode))}
         <% end %>
       <% end %>
     </div>
@@ -628,7 +781,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         </p>
 
         <div class="rounded-lg bg-base-200/70 px-3 py-2 text-sm text-base-content/70">
-          {gettext("Saved location:")} <span class="font-medium text-base-content">{pretty_path(@unfiled_file["path"])}</span>
+          {gettext("Saved location:")}
+          <span class="font-medium text-base-content">{pretty_path(@unfiled_file["path"])}</span>
         </div>
       </div>
 
@@ -636,13 +790,31 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <button type="button" class="btn btn-ghost" phx-click="unfiled_close">
           {gettext("Cancel")}
         </button>
-        <button type="button" class="btn btn-primary btn-outline" phx-click="unfiled_action" phx-value-action="current" disabled={@unfiled_working}>
+        <button
+          type="button"
+          class="btn btn-primary btn-outline"
+          phx-click="unfiled_action"
+          phx-value-action="current"
+          disabled={@unfiled_working}
+        >
           {gettext("Set This As Correct Location")}
         </button>
-        <button type="button" class="btn btn-primary btn-outline" phx-click="unfiled_action" phx-value-action="documents" disabled={@unfiled_working}>
+        <button
+          type="button"
+          class="btn btn-primary btn-outline"
+          phx-click="unfiled_action"
+          phx-value-action="documents"
+          disabled={@unfiled_working}
+        >
           {gettext("Move To Documents")}
         </button>
-        <button type="button" class="btn btn-primary" phx-click="unfiled_action" phx-value-action="templates" disabled={@unfiled_working}>
+        <button
+          type="button"
+          class="btn btn-primary"
+          phx-click="unfiled_action"
+          phx-value-action="templates"
+          disabled={@unfiled_working}
+        >
           {gettext("Move To Templates")}
         </button>
       </:actions>
@@ -666,7 +838,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           var a = document.createElement("a");
           a.href = "data:application/pdf;base64," + e.detail.base64;
           a.download = e.detail.filename;
+          document.body.appendChild(a);
           a.click();
+          a.remove();
         });
         // Silently check for changes when tab regains focus (user returns from Google Docs)
         (function() {
@@ -688,37 +862,71 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── File grid ──────────────────────────────────────────────────
 
   defp assign_files(assigns, files) do
-    %{files: files, view_mode: assigns.view_mode, thumbnails: assigns.thumbnails}
+    %{
+      files: files,
+      view_mode: assigns.view_mode,
+      status_mode: assigns.status_mode,
+      pending_files: assigns.pending_files,
+      thumbnails: assigns.thumbnails
+    }
   end
 
   defp render_file_grid(assigns) do
     ~H"""
     <div :if={@files == []} class="card bg-base-100 shadow-sm">
       <div class="card-body items-center text-center py-12">
-        <span class="hero-document-text w-12 h-12 text-base-content/20" />
-        <p class="text-sm text-base-content/50 mt-2">{gettext("No files yet")}</p>
+        <%= if @status_mode == "trashed" do %>
+          <span class="hero-trash w-12 h-12 text-base-content/20" />
+          <p class="text-sm text-base-content/50 mt-2">{gettext("Trash is empty")}</p>
+        <% else %>
+          <span class="hero-document-text w-12 h-12 text-base-content/20" />
+          <p class="text-sm text-base-content/50 mt-2">{gettext("No files yet")}</p>
+        <% end %>
       </div>
     </div>
 
     <%= if @view_mode == "cards" do %>
-      <div :if={@files != []} class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+      <div
+        :if={@files != []}
+        class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4"
+      >
         <div
           :for={file <- @files}
-          class="group flex flex-col card bg-base-100"
+          class={"group flex flex-col card bg-base-100 relative #{if MapSet.member?(@pending_files, file["id"]), do: "opacity-40 pointer-events-none"}"}
           style="border: 1.5px solid currentColor; border-radius: 8px; overflow: hidden; padding-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.3);"
         >
+          <div
+            :if={MapSet.member?(@pending_files, file["id"])}
+            class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"
+          >
+            <span class="loading loading-spinner loading-lg text-base-content opacity-100" />
+          </div>
           <%!-- Preview --%>
-          <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" style="display:flex;justify-content:center;padding:16px 16px 24px 16px;background:oklch(var(--color-base-200));">
+          <a
+            href={GoogleDocsClient.get_edit_url(file["id"])}
+            target="_blank"
+            style="display:flex;justify-content:center;padding:16px 16px 24px 16px;background:oklch(var(--color-base-200));"
+          >
             {render_thumbnail(%{thumbnail: @thumbnails[file["id"]]})}
           </a>
 
           <%!-- Info --%>
           <div class="p-3 flex-1 flex flex-col">
             <div class="flex items-center gap-1.5">
-              <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="font-medium text-sm truncate link link-hover">
+              <a
+                href={GoogleDocsClient.get_edit_url(file["id"])}
+                target="_blank"
+                class="font-medium text-sm truncate link link-hover"
+              >
                 {file["name"]}
               </a>
-              <span :if={file["status"] == "lost"} class="badge badge-warning badge-xs" title={gettext("File not found in Google Drive")}>{gettext("lost")}</span>
+              <span
+                :if={file["status"] == "lost"}
+                class="badge badge-warning badge-xs"
+                title={gettext("File not found in Google Drive")}
+              >
+                {gettext("lost")}
+              </span>
               <button
                 :if={file["status"] == "unfiled"}
                 type="button"
@@ -727,8 +935,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 phx-value-id={file["id"]}
                 phx-value-name={file["name"]}
                 phx-value-path={file["path"] || ""}
-                title={gettext("File exists in Drive but is outside the configured Document Creator folders")}
-              >{gettext("unfiled")}</button>
+                title={
+                  gettext(
+                    "File exists in Drive but is outside the configured Document Creator folders"
+                  )
+                }
+              >
+                {gettext("unfiled")}
+              </button>
             </div>
             <p :if={file["modifiedTime"]} class="text-xs text-base-content/40 mt-auto pt-2">
               {format_time(file["modifiedTime"])}
@@ -737,13 +951,23 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
           <%!-- Actions --%>
           <div class="flex gap-1 px-2 pb-2 pt-1">
-            <a
-              href={GoogleDocsClient.get_edit_url(file["id"])}
-              target="_blank"
-              class="flex-1 btn btn-ghost btn-xs py-2"
-            >
-              <span class="hero-pencil-square w-3 h-3" /> {gettext("Edit")}
-            </a>
+            <%= if @status_mode == "trashed" do %>
+              <a
+                href={GoogleDocsClient.get_edit_url(file["id"])}
+                target="_blank"
+                class="flex-1 btn btn-ghost btn-xs py-2"
+              >
+                <span class="hero-eye w-3 h-3" /> {gettext("View")}
+              </a>
+            <% else %>
+              <a
+                href={GoogleDocsClient.get_edit_url(file["id"])}
+                target="_blank"
+                class="flex-1 btn btn-ghost btn-xs py-2"
+              >
+                <span class="hero-pencil-square w-3 h-3" /> {gettext("Edit")}
+              </a>
+            <% end %>
             <button
               class="flex-1 btn btn-ghost btn-xs py-2"
               phx-click="export_pdf"
@@ -752,14 +976,24 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             >
               <span class="hero-arrow-down-tray w-3 h-3" /> {gettext("PDF")}
             </button>
-            <button
-              class="btn btn-ghost btn-xs py-2 text-error"
-              phx-click="delete"
-              phx-value-id={file["id"]}
-              data-confirm={gettext("Delete \"%{name}\"? It will be moved to the deleted folder.", name: file["name"])}
-            >
-              <span class="hero-trash w-3 h-3" />
-            </button>
+            <%= if @status_mode == "trashed" do %>
+              <button
+                class="btn btn-ghost btn-xs py-2 text-success"
+                phx-click="restore"
+                phx-value-id={file["id"]}
+                title={gettext("Restore")}
+              >
+                <span class="hero-arrow-uturn-left w-3 h-3" />
+              </button>
+            <% else %>
+              <button
+                class="btn btn-ghost btn-xs py-2 text-error"
+                phx-click="delete"
+                phx-value-id={file["id"]}
+              >
+                <span class="hero-trash w-3 h-3" />
+              </button>
+            <% end %>
           </div>
         </div>
       </div>
@@ -776,13 +1010,24 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           </thead>
           <tbody>
             <tr :for={file <- @files} class="hover:bg-base-200/50">
+              <%= if MapSet.member?(@pending_files, file["id"]) do %>
+                <td colspan="4" class="text-center py-6">
+                  <span class="loading loading-spinner loading-sm text-base-content/40" />
+                </td>
+              <% else %>
               <td>
-                <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="font-medium link link-hover">
+                <a
+                  href={GoogleDocsClient.get_edit_url(file["id"])}
+                  target="_blank"
+                  class="font-medium link link-hover"
+                >
                   {file["name"]}
                 </a>
               </td>
               <td>
-                <span :if={file["status"] == "lost"} class="badge badge-warning badge-xs">{gettext("lost")}</span>
+                <span :if={file["status"] == "lost"} class="badge badge-warning badge-xs">
+                  {gettext("lost")}
+                </span>
                 <button
                   :if={file["status"] == "unfiled"}
                   type="button"
@@ -791,29 +1036,69 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   phx-value-id={file["id"]}
                   phx-value-name={file["name"]}
                   phx-value-path={file["path"] || ""}
-                  title={gettext("File exists in Drive but is outside the configured Document Creator folders")}
-                >{gettext("unfiled")}</button>
+                  title={
+                    gettext(
+                      "File exists in Drive but is outside the configured Document Creator folders"
+                    )
+                  }
+                >
+                  {gettext("unfiled")}
+                </button>
               </td>
               <td class="text-base-content/60 text-nowrap">{format_time(file["modifiedTime"])}</td>
               <td class="text-right">
                 <div class="flex gap-1 justify-end">
-                  <a href={GoogleDocsClient.get_edit_url(file["id"])} target="_blank" class="btn btn-ghost btn-xs" title={gettext("Edit")}>
-                    <span class="hero-pencil-square w-3.5 h-3.5" />
-                  </a>
-                  <button class="btn btn-ghost btn-xs" phx-click="export_pdf" phx-value-id={file["id"]} phx-value-name={file["name"]} title={gettext("Export PDF")}>
+                  <%= if @status_mode == "trashed" do %>
+                    <a
+                      href={GoogleDocsClient.get_edit_url(file["id"])}
+                      target="_blank"
+                      class="btn btn-ghost btn-xs"
+                      title={gettext("View")}
+                    >
+                      <span class="hero-eye w-3.5 h-3.5" />
+                    </a>
+                  <% else %>
+                    <a
+                      href={GoogleDocsClient.get_edit_url(file["id"])}
+                      target="_blank"
+                      class="btn btn-ghost btn-xs"
+                      title={gettext("Edit")}
+                    >
+                      <span class="hero-pencil-square w-3.5 h-3.5" />
+                    </a>
+                  <% end %>
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    phx-click="export_pdf"
+                    phx-value-id={file["id"]}
+                    phx-value-name={file["name"]}
+                    title={gettext("Export PDF")}
+                  >
                     <span class="hero-arrow-down-tray w-3.5 h-3.5" />
                   </button>
-                  <button
-                    class="btn btn-ghost btn-xs text-error"
-                    phx-click="delete"
-                    phx-value-id={file["id"]}
-                    data-confirm={gettext("Delete \"%{name}\"? It will be moved to the deleted folder.", name: file["name"])}
-                    title={gettext("Delete")}
-                  >
-                    <span class="hero-trash w-3.5 h-3.5" />
-                  </button>
+                  <%= if @status_mode == "trashed" do %>
+                    <button
+                      class="btn btn-ghost btn-xs text-success gap-1"
+                      phx-click="restore"
+                      phx-value-id={file["id"]}
+                      title={gettext("Restore")}
+                    >
+                      <span class="hero-arrow-uturn-left w-3.5 h-3.5" />
+                      <span class="text-xs">{gettext("Restore")}</span>
+                    </button>
+                  <% else %>
+                    <button
+                      class="btn btn-ghost btn-xs text-error"
+                      phx-click="delete"
+                      phx-value-id={file["id"]}
+                      title={gettext("Delete")}
+                    >
+                      <span class="hero-trash w-3.5 h-3.5" />
+                    </button>
+                  <% end %>
                 </div>
               </td>
+              <% end %>
             </tr>
           </tbody>
         </table>
@@ -876,12 +1161,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   defp verify_known_file(socket, file_id) do
-    if Enum.any?(socket.assigns.templates, &(&1["id"] == file_id)) or
-         Enum.any?(socket.assigns.documents, &(&1["id"] == file_id)) do
-      :ok
-    else
-      :unknown
-    end
+    known? =
+      Enum.any?(socket.assigns.templates, &(&1["id"] == file_id)) or
+        Enum.any?(socket.assigns.documents, &(&1["id"] == file_id)) or
+        Enum.any?(socket.assigns.trashed_templates, &(&1["id"] == file_id)) or
+        Enum.any?(socket.assigns.trashed_documents, &(&1["id"] == file_id))
+
+    if known?, do: :ok, else: :unknown
   end
 
   defp broadcast_files_changed do

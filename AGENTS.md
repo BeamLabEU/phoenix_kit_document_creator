@@ -227,3 +227,9 @@ gh release create 0.1.0 \
 ### PR Reviews
 
 PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` directory. Use `{AGENT}_REVIEW.md` naming (e.g., `CLAUDE_REVIEW.md`, `GEMINI_REVIEW.md`). See `dev_docs/pull_requests/README.md`.
+
+## TODOs
+
+- Add a migration with indexes on `status` and `inserted_at DESC` for both tables: `create index(:phoenix_kit_doc_documents, [:status])`, `create index(:phoenix_kit_doc_templates, [:status])`, `create index(:phoenix_kit_doc_documents, [inserted_at: :desc])`, `create index(:phoenix_kit_doc_templates, [inserted_at: :desc])`. The trash tabs in `DocumentsLive` run `WHERE status = ? ORDER BY inserted_at DESC` queries on every mount/sync; full-scans + filesort are fine today but will slow down once either table grows.
+
+- **Store Drive's real `modifiedTime` and sort/display by it.** Today `schema_to_file_map/1` exposes the DB `updated_at` as `"modifiedTime"`, and the list queries in `documents.ex` sort by `inserted_at DESC` as a **workaround** — `updated_at` gets bumped on every sync (because `upsert_*_from_drive` uses `on_conflict: {:replace, [..., :updated_at]}`), making any `updated_at`-based ordering chaotic. The proper fix is to add a `drive_modified_at` column (from the Google Drive `modifiedTime` field on list responses), populate it in `upsert_*_from_drive`, sort by that, and have `schema_to_file_map` expose it as `"modifiedTime"`. Then the "modified" timestamp and ordering reflect what the user actually did in Google Docs, not when we last ran a sync — and the `inserted_at` sort can revert.
