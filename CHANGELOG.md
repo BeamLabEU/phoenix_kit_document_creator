@@ -1,3 +1,20 @@
+## 0.2.6 - 2026-04-15
+
+### Added
+- Trash tab in DocumentsLive with Active/Trash status toggle (auto-hidden when empty)
+- Restore from trash — `restore_template/2`, `restore_document/2`, and `list_trashed_*_from_db/0`
+- Pending spinner overlay on cards during async delete/restore (layout-stable)
+- `phx-disable-with` on New Template / New Document buttons
+
+### Changed
+- Sort document/template lists by `inserted_at DESC` (workaround; see AGENTS.md TODO for `drive_modified_at`)
+- Remove delete confirmation popup — soft delete is recoverable from Trash
+- Refactor delete flow into data-driven `action_spec/2` shared with restore
+
+### Fixed
+- PDF download: anchor now appended to DOM before `.click()` (fixes Firefox)
+- Catch-all `handle_info/2` to avoid crashes on unexpected messages
+
 ## 0.2.5 - 2026-04-12
 
 ### Fixed
