@@ -185,6 +185,73 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
       end
     end
 
+    describe "list_trashed_templates_from_db/0" do
+      test "returns only trashed templates" do
+        {:ok, _} =
+          Documents.upsert_template_from_drive(%{"id" => "ltt1", "name" => "Active"})
+
+        {:ok, t2} =
+          Documents.upsert_template_from_drive(%{"id" => "ltt2", "name" => "Trashed A"})
+
+        {:ok, t3} =
+          Documents.upsert_template_from_drive(%{"id" => "ltt3", "name" => "Trashed B"})
+
+        Template
+        |> where([t], t.uuid in ^[t2.uuid, t3.uuid])
+        |> Repo.update_all(set: [status: "trashed"])
+
+        results = Documents.list_trashed_templates_from_db()
+        ids = Enum.map(results, & &1["id"])
+
+        refute "ltt1" in ids
+        assert "ltt2" in ids
+        assert "ltt3" in ids
+      end
+
+      test "excludes templates without google_doc_id" do
+        Repo.insert!(%Template{name: "No GDoc", status: "trashed"})
+
+        results = Documents.list_trashed_templates_from_db()
+        names = Enum.map(results, & &1["name"])
+
+        refute "No GDoc" in names
+      end
+
+      test "returns empty list when nothing is trashed" do
+        {:ok, _} =
+          Documents.upsert_template_from_drive(%{"id" => "ltt_none", "name" => "Active"})
+
+        assert Documents.list_trashed_templates_from_db() == []
+      end
+    end
+
+    describe "list_trashed_documents_from_db/0" do
+      test "returns only trashed documents" do
+        {:ok, _} =
+          Documents.upsert_document_from_drive(%{"id" => "ltd1", "name" => "Active"})
+
+        {:ok, d2} =
+          Documents.upsert_document_from_drive(%{"id" => "ltd2", "name" => "Trashed"})
+
+        Document
+        |> where([d], d.uuid == ^d2.uuid)
+        |> Repo.update_all(set: [status: "trashed"])
+
+        results = Documents.list_trashed_documents_from_db()
+        ids = Enum.map(results, & &1["id"])
+
+        refute "ltd1" in ids
+        assert "ltd2" in ids
+      end
+
+      test "returns empty list when nothing is trashed" do
+        {:ok, _} =
+          Documents.upsert_document_from_drive(%{"id" => "ltd_none", "name" => "Active"})
+
+        assert Documents.list_trashed_documents_from_db() == []
+      end
+    end
+
     # ===========================================================================
     # Thumbnails
     # ===========================================================================
