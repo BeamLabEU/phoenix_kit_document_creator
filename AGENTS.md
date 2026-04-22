@@ -108,7 +108,7 @@ test/
 - **Folder config stored separately**: Folder paths and cached folder IDs are stored in `"document_creator_folders"` settings key (not in the integration data).
 - **Connection selection**: The module stores the selected Google connection UUID in `"document_creator_settings"` → `"google_connection"`. Multiple Google connections are supported via the integration picker component.
 - **No own Ecto repo**: Uses the host app's repo via `PhoenixKit.RepoHelper.repo()`.
-- **Unified Drive listing primitive**: All Drive file/folder listing goes through `GoogleDocsClient.DriveWalker`. `list_folder_files/1` and `list_subfolders/1` on the client are thin wrappers; pagination (`nextPageToken` looping at `pageSize: 1000`) lives in one place. The walker also does batched-parents queries (`'a' in parents or 'b' in parents …` chunked at 40 folder IDs per request) so walking a tree of N subfolders takes roughly `O(folders) + O(ceil(folders / 40))` Drive calls instead of `O(folders)` sequential list calls.
+- **Unified Drive listing primitive**: All Drive file/folder listing goes through `GoogleDocsClient.DriveWalker`. `list_folder_files/1` and `list_subfolders/1` on the client are thin wrappers; pagination (`nextPageToken` looping at `pageSize: 1000`) lives in one place. Both folder discovery and file listing across a walked tree use batched-parents queries (`'a' in parents or 'b' in parents …` chunked at 40 folder IDs per request) — one request per BFS level for folders, one batched sweep for files — so walking a tree of N subfolders costs roughly `O(ceil(N / 40))` Drive calls per level instead of `O(N)` sequential list calls. Folder ownership is resolved from each returned folder's `parents` field by matching against the current BFS level.
 
 ## Data Flow
 

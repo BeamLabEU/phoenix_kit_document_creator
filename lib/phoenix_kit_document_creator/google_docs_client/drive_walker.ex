@@ -15,10 +15,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker do
     * every Google Doc found in any of those folders, annotated with the
       `folder_id` that contains it and the `path` of that folder.
 
-  The walker uses Drive's `in parents` OR-batching to list files for many
-  folders in a single request (chunked to stay under Drive's query-length
-  limit), and streams result pages via `nextPageToken` — the old
-  `pageSize: 100` listing silently dropped data past the first page.
+  The walker uses Drive's `in parents` OR-batching for **both** folder
+  discovery and file listing — one batched request per BFS level instead
+  of one request per folder, chunked at 40 parent IDs per query to stay
+  under Drive's query-length limit. All pages are streamed via
+  `nextPageToken` (the old `pageSize: 100` listing silently dropped data
+  past the first page). Folder ownership is resolved from each returned
+  folder's `parents` field.
   """
 
   alias PhoenixKitDocumentCreator.GoogleDocsClient
@@ -104,31 +107,84 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker do
 
   # ---- Folder BFS ---------------------------------------------------------
 
+  # Level-by-level BFS: at each level, issue a single batched
+  # `mimeType = 'folder' and (a in parents or b in parents …)` query
+  # (chunked at @chunk_size) instead of one request per folder. Folder
+  # ownership is resolved from each returned folder's `parents` field by
+  # matching against the current level's parent_lookup.
   defp bfs_folders(root_id, root_path, max_depth) do
     initial = %{root_id => %{name: "", path: root_path}}
-    bfs_step([{root_id, root_path, 0}], initial, max_depth)
+    bfs_level([{root_id, root_path}], initial, 1, max_depth)
   end
 
-  defp bfs_step([], acc, _max_depth), do: {:ok, acc}
+  # `depth` is the depth of the level about to be fetched (root's children = 1).
+  # Stopping at `depth > max_depth` mirrors the prior per-folder walker: the
+  # deepest folders recorded in the index are at `max_depth`; their children
+  # are not enumerated.
+  defp bfs_level(_parents, acc, depth, max_depth) when depth > max_depth, do: {:ok, acc}
+  defp bfs_level([], acc, _depth, _max_depth), do: {:ok, acc}
 
-  defp bfs_step([{_fid, _path, depth} | rest], acc, max_depth) when depth >= max_depth do
-    bfs_step(rest, acc, max_depth)
-  end
+  defp bfs_level(parents, acc, depth, max_depth) do
+    parent_lookup = Map.new(parents)
 
-  defp bfs_step([{fid, path, depth} | rest], acc, max_depth) do
-    case list_folders(fid) do
-      {:ok, subs} ->
-        {new_acc, new_queue} =
-          Enum.reduce(subs, {acc, rest}, fn %{"id" => sid, "name" => sname}, {a, q} ->
-            spath = join_path(path, sname)
-            {Map.put(a, sid, %{name: sname, path: spath}), q ++ [{sid, spath, depth + 1}]}
+    case list_subfolders_of(Map.keys(parent_lookup)) do
+      {:ok, raw_folders} ->
+        {new_acc, next_level} =
+          Enum.reduce(raw_folders, {acc, []}, fn folder, {a, nl} ->
+            add_child_folder(folder, parent_lookup, a, nl)
           end)
 
-        bfs_step(new_queue, new_acc, max_depth)
+        bfs_level(next_level, new_acc, depth + 1, max_depth)
 
       {:error, _} = err ->
         err
     end
+  end
+
+  defp add_child_folder(folder, parent_lookup, acc, next_level) do
+    %{"id" => sid, "name" => sname} = folder
+    parent_ids = folder["parents"] || []
+
+    # A Drive folder can theoretically have multiple parents (shared/starred);
+    # the first parent that matches our query-set is the "owning" parent for
+    # pathing. If none match (shouldn't happen given our query), skip.
+    case Enum.find(parent_ids, &Map.has_key?(parent_lookup, &1)) do
+      nil ->
+        {acc, next_level}
+
+      parent_id ->
+        spath = join_path(parent_lookup[parent_id], sname)
+
+        {
+          Map.put(acc, sid, %{name: sname, path: spath}),
+          [{sid, spath} | next_level]
+        }
+    end
+  end
+
+  defp list_subfolders_of([]), do: {:ok, []}
+
+  defp list_subfolders_of(folder_ids) do
+    folder_ids
+    |> Enum.chunk_every(@chunk_size)
+    |> Enum.reduce_while({:ok, []}, fn chunk, {:ok, acc} ->
+      case list_subfolders_chunk(chunk) do
+        {:ok, folders} -> {:cont, {:ok, acc ++ folders}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp list_subfolders_chunk(folder_ids) do
+    parents_q =
+      folder_ids
+      |> Enum.map_join(" or ", fn id -> "'#{escape(id)}' in parents" end)
+
+    q =
+      "mimeType = 'application/vnd.google-apps.folder' and trashed = false and " <>
+        "(#{parents_q})"
+
+    paginate(q, "files(id,name,parents)")
   end
 
   # ---- Batched file listing ----------------------------------------------
@@ -222,6 +278,5 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker do
   defp escape(value), do: value |> to_string() |> String.replace("'", "\\'")
 
   defp join_path("", name), do: name
-  defp join_path(nil, name), do: name
   defp join_path(path, name), do: "#{path}/#{name}"
 end
