@@ -688,10 +688,16 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Settings lookup can fail (e.g. in tests without the core schema, or
   # when folder discovery hasn't run). A nil default is safe: the next
   # `sync_from_drive/0` will rewrite `folder_id`/`path` from the walker.
+  # Rescue only the exception classes this path can plausibly raise —
+  # missing Settings/config shapes (KeyError/BadMapError/MatchError),
+  # bad args to Map.get inputs (ArgumentError), and DB unavailability
+  # (Postgrex/DBConnection). A bare `rescue _` would also swallow
+  # RuntimeError and FunctionClauseError from future typos.
   defp default_managed(kind, key) do
     Map.get(managed_location(kind), key)
   rescue
-    _ -> nil
+    _ in [ArgumentError, KeyError, MatchError, BadMapError] -> nil
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> nil
   end
 
   defp maybe_emit_pubsub(opts) do

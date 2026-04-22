@@ -469,7 +469,7 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
             emit_pubsub: false
           )
 
-        refute_receive {:files_changed, _}, 50
+        refute_receive {:files_changed, _}, 200
       end
 
       test "broadcasts by default" do

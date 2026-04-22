@@ -14,19 +14,25 @@ db_config = Application.get_env(:phoenix_kit_document_creator, TestRepo, [])
 db_name = db_config[:database] || "phoenix_kit_document_creator_test"
 
 db_check =
-  case System.cmd("psql", ["-lqt"], stderr_to_stdout: true) do
-    {output, 0} ->
-      exists =
-        output
-        |> String.split("\n")
-        |> Enum.any?(fn line ->
-          line |> String.split("|") |> List.first("") |> String.trim() == db_name
-        end)
+  try do
+    case System.cmd("psql", ["-lqt"], stderr_to_stdout: true) do
+      {output, 0} ->
+        exists =
+          output
+          |> String.split("\n")
+          |> Enum.any?(fn line ->
+            line |> String.split("|") |> List.first("") |> String.trim() == db_name
+          end)
 
-      if exists, do: :exists, else: :not_found
+        if exists, do: :exists, else: :not_found
 
-    _ ->
-      :try_connect
+      _ ->
+        :try_connect
+    end
+  rescue
+    # `psql` not on PATH (sandboxes, CI images without the client) —
+    # fall through to the connect attempt instead of crashing the suite.
+    ErlangError -> :try_connect
   end
 
 repo_available =
@@ -104,6 +110,7 @@ case Supervisor.start_link(
      ) do
   {:ok, _} -> :ok
   {:error, {:already_started, _}} -> :ok
+  {:error, reason} -> raise "PubSub test supervisor failed to start: #{inspect(reason)}"
 end
 
 # Exclude integration tests when DB is not available
