@@ -16,7 +16,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
-  @pubsub_topic "document_creator:files"
+  @pubsub_topic PhoenixKitDocumentCreator.Documents.pubsub_topic()
   @refresh_cooldown_ms :timer.seconds(5)
   @max_pdf_push_bytes 5_000_000
 

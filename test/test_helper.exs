@@ -93,6 +93,19 @@ Application.put_env(:phoenix_kit_document_creator, :test_repo_available, repo_av
 {:ok, _pid} = PhoenixKit.PubSub.Manager.start_link([])
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
 
+# `PhoenixKit.PubSubHelper.broadcast/2` derives its PubSub server from the
+# host app's config; tests run without a parent app, so start the fallback
+# `PhoenixKit.PubSub` registry to exercise broadcast paths (e.g. the
+# `Documents.register_existing_document/2` pubsub option).
+case Supervisor.start_link(
+       [{Phoenix.PubSub, name: PhoenixKit.PubSub}],
+       strategy: :one_for_one,
+       name: PhoenixKitDocumentCreator.Test.PubSubSupervisor
+     ) do
+  {:ok, _} -> :ok
+  {:error, {:already_started, _}} -> :ok
+end
+
 # Exclude integration tests when DB is not available
 exclude = if repo_available, do: [], else: [:integration]
 

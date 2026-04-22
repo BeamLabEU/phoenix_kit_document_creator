@@ -28,6 +28,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
+  alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
 
   @default_provider "google"
   @folder_settings_key "document_creator_folders"
@@ -260,52 +261,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @doc "The Settings key used for folder configuration."
   def folder_settings_key, do: @folder_settings_key
 
-  @doc "List subfolders within a parent folder. Returns `{:ok, [%{id, name}]}`."
-  def list_subfolders(parent_id \\ "root") do
-    q =
-      "mimeType = 'application/vnd.google-apps.folder' and '#{escape_query_value(parent_id)}' in parents and trashed = false"
-
-    case authenticated_request(:get, "#{@drive_base}/files",
-           params: [q: q, fields: "files(id,name)", orderBy: "name", pageSize: 100]
-         ) do
-      {:ok, %{status: 200, body: %{"files" => files}}} -> {:ok, files}
-      {:ok, %{status: 200}} -> {:ok, []}
-      {:ok, %{body: body}} -> {:error, "List subfolders failed: #{inspect(body)}"}
-      {:error, _} = err -> err
-    end
-  end
+  @doc """
+  List subfolders within a parent folder (non-recursive, fully paginated).
+  Returns `{:ok, [%{"id" => ..., "name" => ...}]}`.
+  """
+  def list_subfolders(parent_id \\ "root"), do: DriveWalker.list_folders(parent_id)
 
   @doc """
-  List Google Docs in a Drive folder.
-  Returns `{:ok, [%{id, name, modified_time, thumbnail_link}]}`.
+  List Google Docs directly in a Drive folder (non-recursive, fully paginated).
+
+  Returns `{:ok, [%{"id" => ..., "name" => ..., "modifiedTime" => ..., "thumbnailLink" => ..., "parents" => [...]}]}`.
+
+  For recursive traversal across subfolders, use
+  `PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker.walk_tree/2`.
   """
-  def list_folder_files(folder_id) when is_binary(folder_id) and folder_id != "" do
-    q =
-      "'#{escape_query_value(folder_id)}' in parents and mimeType = 'application/vnd.google-apps.document' and trashed = false"
-
-    case authenticated_request(:get, "#{@drive_base}/files",
-           params: [
-             q: q,
-             fields: "files(id,name,modifiedTime,thumbnailLink)",
-             orderBy: "modifiedTime desc",
-             pageSize: 100
-           ]
-         ) do
-      {:ok, %{status: 200, body: %{"files" => files}}} ->
-        {:ok, files}
-
-      {:ok, %{status: 200}} ->
-        {:ok, []}
-
-      {:ok, %{body: body}} ->
-        {:error, "List files failed: #{inspect(body)}"}
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  def list_folder_files(_), do: {:ok, []}
+  def list_folder_files(folder_id), do: DriveWalker.list_files(folder_id)
 
   @doc "Get the Google Drive folder URL."
   def get_folder_url(folder_id) when is_binary(folder_id) and folder_id != "" do
@@ -578,7 +548,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # Internal: Authenticated HTTP requests via PhoenixKit.Integrations
   # ===========================================================================
 
-  defp authenticated_request(method, url, opts \\ []) do
+  @doc false
+  # Public so `GoogleDocsClient.DriveWalker` can reuse the same auth +
+  # auto-refresh path without duplicating credential plumbing. Not part of
+  # the public API — may change without notice.
+  def authenticated_request(method, url, opts \\ []) do
     Integrations.authenticated_request(active_provider_key(), method, url, opts)
   end
 

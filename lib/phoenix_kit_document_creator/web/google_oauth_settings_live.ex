@@ -263,6 +263,10 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     {:noreply, assign(socket, browser_folders: folders, browser_loading: false)}
   end
 
+  # Catch-all so unexpected messages (Task supervisor signals, stray
+  # PubSub traffic, etc.) don't crash the LiveView.
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   # ── Render ─────────────────────────────────────────────────────────
 
   @impl true

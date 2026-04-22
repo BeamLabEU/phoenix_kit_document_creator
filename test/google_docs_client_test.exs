@@ -95,6 +95,32 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
     end
   end
 
+  describe "DriveWalker" do
+    alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
+
+    test "list_files returns {:ok, []} for nil" do
+      assert DriveWalker.list_files(nil) == {:ok, []}
+    end
+
+    test "list_files returns {:ok, []} for empty string" do
+      assert DriveWalker.list_files("") == {:ok, []}
+    end
+
+    test "list_folders returns {:ok, []} for nil" do
+      assert DriveWalker.list_folders(nil) == {:ok, []}
+    end
+
+    test "list_folders returns {:ok, []} for empty string" do
+      assert DriveWalker.list_folders("") == {:ok, []}
+    end
+
+    test "exports walk_tree/2" do
+      exports = DriveWalker.__info__(:functions)
+      assert {:walk_tree, 1} in exports
+      assert {:walk_tree, 2} in exports
+    end
+  end
+
   describe "fetch_thumbnail/1" do
     test "returns {:error, :no_doc_id} for nil" do
       assert GoogleDocsClient.fetch_thumbnail(nil) == {:error, :no_doc_id}

@@ -18,26 +18,25 @@ Elixir library (Hex package) that adds document template management and PDF gene
 
 ## Development Workflow
 
-```
-# 1. Make changes
+```bash
+# One-shot: format + credo --strict + dialyzer
+mix quality
 
-# 2. Format code
-mix format
+# CI mode: format --check-formatted + credo --strict + dialyzer
+mix quality.ci
 
-# 3. Compile
-mix compile
-
-# 4. Lint
-mix credo --strict
-
-# 5. Type check
-mix dialyzer
+# Full precommit: compile + quality
+mix precommit
 ```
 
-> **NOTE:** The "Check types" / `mix credo --strict` mislabeling exists in ALL
-> phoenix_kit repos (phoenix_kit, phoenix_kit_ai, phoenix_kit_publishing,
-> phoenix_kit_hello_world). Credo is a linter, not a type checker. Dialyzer is
-> the type checker. This needs to be fixed in all repos.
+Or step-by-step:
+
+```bash
+mix format           # format code
+mix compile          # compile
+mix credo --strict   # lint
+mix dialyzer         # type check
+```
 
 ## Pre-commit Commands
 
@@ -63,8 +62,10 @@ git status
 lib/
   phoenix_kit_document_creator.ex          # Main module — PhoenixKit.Module behaviour, tab registration
   phoenix_kit_document_creator/
-    documents.ex                           # Context module — list/create/sync/export via Google Drive
+    documents.ex                           # Context module — list/create/sync/export, register_existing_*
     google_docs_client.ex                  # Google Docs + Drive API client with OAuth 2.0
+    google_docs_client/
+      drive_walker.ex                      # Paginated + recursive Drive traversal (BFS + batched `in parents`)
     variable.ex                            # Extract {{ variables }} from text, guess types
     paths.ex                               # Centralized route path helpers
     schemas/
@@ -93,11 +94,12 @@ test/
 - **Google Drive is source of truth for content**: All document content lives in Google Drive. The Phoenix app is a coordinator — it manages OAuth, lists files, substitutes variables, and exports PDFs via API.
 - **Local DB mirrors metadata**: File metadata (name, google_doc_id, status, thumbnails, variables, path, folder_id) is mirrored to the local database for fast listing and audit tracking. Listing reads from DB; background sync keeps it current with Drive.
 - **Four-status system**: Templates and documents have a `status` field:
-  - `"published"` — file is in the expected Drive folder (normal state)
+  - `"published"` — file lives inside the managed tree (root or any descendant subfolder)
   - `"trashed"` — soft-deleted via app (moved to deleted folder) or found in Drive trash
   - `"lost"` — disappeared from Drive (manually deleted by someone in Google). Recovers automatically if reappearing.
-  - `"unfiled"` — exists in Drive but outside the configured managed folders. The UI provides a resolution popup (move to templates/documents, or accept current location).
-- **Path and folder tracking**: Each template/document record stores `path` (human-readable folder path) and `folder_id` (Drive folder ID) for its accepted location. Used during reconciliation to determine if a file is in the right place.
+  - `"unfiled"` — exists in Drive but outside the managed tree. The UI provides a resolution popup (move to templates/documents, or accept current location).
+- **Nested subfolders inside the managed tree are `:published`**: `sync_from_drive/0` walks the entire managed tree recursively via `GoogleDocsClient.DriveWalker.walk_tree/2`. Any Google Doc in any descendant of the templates/documents root is treated as `:published`; reconciliation builds a `MapSet` of every enumerated folder ID and `classify_by_location/5` accepts a parent that matches the managed root **or** any descendant. Consumers are free to organise files into subfolders (e.g. `documents/order-123/sub-4/`) without the library reclassifying them as `:unfiled`.
+- **Path convention**: `path` is a forward-slash-separated human-readable string anchored at the Drive root, **including the managed folder name**. A doc in the documents root → `"documents"`. A doc in `documents/order-123/sub-4` → `"documents/order-123/sub-4"`. Deleted-tree files → `"deleted/documents"`. Walker-produced paths follow this same shape; the register functions default to the managed-root path when the caller omits `:path`.
 - **Variable tracking**: When creating a document from a template, `variable_values` (the actual substitution values) are persisted to the Document record for debugging. Variable definitions detected in templates are saved to the Template `variables` field.
 - **No local editor**: Editing happens in Google Docs. No GrapesJS, TipTap, or other JS editors.
 - **No local PDF generation**: PDFs are exported via the Drive API. No ChromicPDF, Gotenberg, or Chrome dependency.
@@ -106,6 +108,7 @@ test/
 - **Folder config stored separately**: Folder paths and cached folder IDs are stored in `"document_creator_folders"` settings key (not in the integration data).
 - **Connection selection**: The module stores the selected Google connection UUID in `"document_creator_settings"` → `"google_connection"`. Multiple Google connections are supported via the integration picker component.
 - **No own Ecto repo**: Uses the host app's repo via `PhoenixKit.RepoHelper.repo()`.
+- **Unified Drive listing primitive**: All Drive file/folder listing goes through `GoogleDocsClient.DriveWalker`. `list_folder_files/1` and `list_subfolders/1` on the client are thin wrappers; pagination (`nextPageToken` looping at `pageSize: 1000`) lives in one place. The walker also does batched-parents queries (`'a' in parents or 'b' in parents …` chunked at 40 folder IDs per request) so walking a tree of N subfolders takes roughly `O(folders) + O(ceil(folders / 40))` Drive calls instead of `O(folders)` sequential list calls.
 
 ## Data Flow
 
@@ -115,10 +118,11 @@ Mount → DB read (instant) → render
 Google Drive API → upsert DB → reconcile status → re-read DB → update assigns
 ```
 
-- **Sync**: `Documents.sync_from_drive/0` fetches files from Drive, upserts to DB with `status: "published"`, then runs `reconcile_status` which checks each tracked record against Drive and classifies as published/lost/trashed/unfiled.
-- **Create**: After Google API creates/copies a file, the DB record is immediately written with path/folder_id.
+- **Sync**: `Documents.sync_from_drive/0` recursively walks both managed trees via `DriveWalker.walk_tree/2`, upserts every Doc found (including subfolders) with its actual parent `folder_id` and human-readable `path`, then `reconcile_status/3` reconciles DB records against the walk, using a `MapSet` of all enumerated folder IDs (root + descendants) for classification.
+- **Create**: After Google API creates/copies a file, the DB record is immediately written with path/folder_id. `create_document_from_template/3` accepts `:parent_folder_id` and `:path` options for placing the new document into a consumer-managed subfolder.
+- **Consumer-registered files**: `register_existing_document/2` and `register_existing_template/2` upsert a Drive file into the local DB **without any Drive API calls** — for wrappers that do their own copy/placement (e.g. into `order-N/sub-M/`) and just need the record to appear in `list_documents_from_db/0`. Missing `:folder_id` or `:path` default to the managed root; the next sync rewrites both from the walker, so stale or incomplete consumer-supplied metadata self-heals. Registering a file outside the managed tree is allowed — it gets classified `:unfiled` on next sync, same as manually-moved files.
 - **Delete**: After moving a file to the Drive deleted folder, the DB status is set to "trashed".
-- **Unfiled resolution**: Files outside managed folders can be moved to templates/documents or their current location can be accepted as correct.
+- **Unfiled resolution**: Files outside the managed tree can be moved to templates/documents or their current location can be accepted as correct.
 - **Thumbnails**: Fetched async from Drive, persisted to DB, loaded from DB cache on page load.
 
 ## Database Tables (V86 + V94)
@@ -133,11 +137,13 @@ Migration V86 (core) creates the tables. V94 adds `google_doc_id`, `status`, `pa
 
 ## Public API Layers
 
-The module exposes two complementary APIs:
+The module exposes three complementary APIs:
 
-1. **`PhoenixKitDocumentCreator.GoogleDocsClient`** — Direct Google Drive/Docs API access. No local DB operations. Use for: creating files, listing folders, moving files, exporting PDFs, reading document content, template variable substitution. Another module can use this to interact with Google Drive directly.
+1. **`PhoenixKitDocumentCreator.GoogleDocsClient`** — Direct Google Drive/Docs API access. No local DB operations. Use for: creating files, listing folders, moving files, exporting PDFs, reading document content, template variable substitution.
 
-2. **`PhoenixKitDocumentCreator.Documents`** — Combined Drive + DB operations. Coordinates between Google Drive and the local database. Includes DB-only functions (`list_templates_from_db`, `load_cached_thumbnails`) and combined functions (`create_template`, `sync_from_drive`, `delete_document`). All public functions have `@spec` annotations. Mutating functions accept `opts` with `:actor_uuid` for activity logging.
+2. **`PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker`** — Paginated + recursive Drive traversal. `list_files/1` and `list_folders/1` are the canonical paginated primitives (`list_folder_files/1` / `list_subfolders/1` on the parent client delegate here). `walk_tree/2` BFS's a folder tree and returns every descendant folder + every Google Doc inside any of them, each annotated with its owning `folder_id` and resolved `path`.
+
+3. **`PhoenixKitDocumentCreator.Documents`** — Combined Drive + DB operations. Coordinates between Google Drive and the local database. Includes DB-only functions (`list_templates_from_db`, `load_cached_thumbnails`, `register_existing_document`, `register_existing_template`) and combined functions (`create_template`, `create_document_from_template`, `sync_from_drive`, `delete_document`). All public functions have `@spec` annotations. Mutating functions accept `opts` with `:actor_uuid` for activity logging; register functions additionally accept `:emit_pubsub` (default `true`) — bulk callers should pass `false` and call `Documents.broadcast_files_changed/0` once at the end so connected admin LiveViews resync exactly once.
 
 ## Critical Conventions
 
@@ -148,7 +154,10 @@ The module exposes two complementary APIs:
 - **Translations**: All user-facing strings use `gettext()` via `PhoenixKitWeb.Gettext` backend
 - **CSS sources**: `css_sources/0` returns `[:phoenix_kit_document_creator]` for Tailwind scanning
 - **Required integrations**: `["google"]` — declares dependency on Google provider
+- **`enabled?/0` must `rescue`** — module discovery runs early in boot, before Settings may be ready. `enabled?/0` wraps the Settings read in a `rescue _ -> false` clause so a missing DB or config doesn't crash the discovery pass. Every `PhoenixKit.Module` implementation follows this pattern — don't omit it on new modules.
+- **Activity logging must not crash the caller** — every mutating context function logs via `PhoenixKit.Activity.log/1`. The `log_activity/1` helper in `Documents` guards with `Code.ensure_loaded?/1`, and `PhoenixKit.Activity.log/1` itself rescues its own DB errors (logs a warning). Don't call `PhoenixKit.Activity.log/1` directly from anywhere but that helper — route through `log_activity/1` so the guard pattern stays uniform.
 - **Admin routing** — plugin LiveView routes are auto-discovered by PhoenixKit and compiled into `live_session :phoenix_kit_admin`. Never hand-register them in a parent app's `router.ex`; use `live_view:` on a tab or a route module. See `phoenix_kit/guides/custom-admin-pages.md` for the authoritative reference
+- **PubSub topic**: `"document_creator:files"` — broadcast `{:files_changed, self()}` after any DB mutation that should trigger other admin sessions to resync. Both `Documents.broadcast_files_changed/0` and the LiveView's local helper use this constant.
 
 ## Running Tests
 
@@ -230,6 +239,23 @@ PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` direct
 
 ## TODOs
 
-- Add a migration with indexes on `status` and `inserted_at DESC` for both tables: `create index(:phoenix_kit_doc_documents, [:status])`, `create index(:phoenix_kit_doc_templates, [:status])`, `create index(:phoenix_kit_doc_documents, [inserted_at: :desc])`, `create index(:phoenix_kit_doc_templates, [inserted_at: :desc])`. The trash tabs in `DocumentsLive` run `WHERE status = ? ORDER BY inserted_at DESC` queries on every mount/sync; full-scans + filesort are fine today but will slow down once either table grows.
+- **More urgent after recursive sync:** Add a migration with indexes on `status` and `inserted_at DESC` for both tables — the new recursive walker can surface many more rows for consumers using nested subfolders, and the list queries are `WHERE status IN (…) ORDER BY inserted_at DESC` on every mount/sync. Indexes: `create index(:phoenix_kit_doc_documents, [:status])`, `create index(:phoenix_kit_doc_templates, [:status])`, `create index(:phoenix_kit_doc_documents, [inserted_at: :desc])`, `create index(:phoenix_kit_doc_templates, [inserted_at: :desc])`. Migration goes in **phoenix_kit core** (`lib/phoenix_kit/migrations/postgres/`), not this module.
 
 - **Store Drive's real `modifiedTime` and sort/display by it.** Today `schema_to_file_map/1` exposes the DB `updated_at` as `"modifiedTime"`, and the list queries in `documents.ex` sort by `inserted_at DESC` as a **workaround** — `updated_at` gets bumped on every sync (because `upsert_*_from_drive` uses `on_conflict: {:replace, [..., :updated_at]}`), making any `updated_at`-based ordering chaotic. The proper fix is to add a `drive_modified_at` column (from the Google Drive `modifiedTime` field on list responses), populate it in `upsert_*_from_drive`, sort by that, and have `schema_to_file_map` expose it as `"modifiedTime"`. Then the "modified" timestamp and ordering reflect what the user actually did in Google Docs, not when we last ran a sync — and the `inserted_at` sort can revert.
+
+- **Replace the bespoke `Web.Components.CreateDocumentModal` with `PhoenixKitWeb.Components.Core.Modal`** — the Core modal already handles Escape-key dismissal, backdrop click, slot-based title/actions, and width presets. The current custom markup duplicates daisyUI modal classes and diverges from every other module's modal UX.
+
+- **`detect_variables/1` writes to the Template table (`variables` column) but does not emit an activity-feed entry.** Other mutating context functions all log via `log_activity/1` — this one is an outlier. Either log it as `"template.variables_detected"` with the extracted keys as metadata, or add a comment explaining why it's considered a cache update rather than a user action.
+
+## External Dependencies
+
+| Package | Range | Role |
+|---|---|---|
+| `phoenix_kit` | `~> 1.7` | Module behaviour, Settings API, admin layout, Integrations, Activity, PubSubHelper, Routes |
+| `phoenix_live_view` | `~> 1.1` | Admin pages |
+| `req` | `~> 0.5` | HTTP client for Google Docs / Drive API |
+| `ex_doc` | `~> 0.39` (dev) | Generated documentation |
+| `credo` | `~> 1.7` (dev/test) | Linting |
+| `dialyxir` | `~> 1.4` (dev/test) | Static type analysis |
+
+No other runtime dependencies. OAuth credentials are stored by `PhoenixKit.Integrations`; the module itself never persists client_id/secret or tokens directly.
