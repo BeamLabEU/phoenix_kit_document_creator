@@ -1,3 +1,25 @@
+## 0.2.7 - 2026-04-22
+
+### Added
+- `GoogleDocsClient.DriveWalker` module — paginated `list_files/1` / `list_folders/1` and recursive `walk_tree/2` (BFS, `pageSize: 1000`, `nextPageToken` looping, batched `'a' in parents or …` queries chunked at 40 IDs per request). Both folder discovery and file listing now cost `O(ceil(N / 40))` Drive calls per BFS level instead of `O(N)` sequential list calls.
+- `Documents.register_existing_document/2` and `register_existing_template/2` — DB-only upsert for Drive files the caller has already created (e.g. consumers that organise files into `documents/order-N/sub-M/`). Validates `google_doc_id` via `validate_file_id/1`, validates `template_uuid` via `foreign_key_constraint`, uses `maybe_put/3` so re-registration without optional fields preserves existing values. Opts: `:actor_uuid` (activity log), `:emit_pubsub` (default `true`).
+- `Documents.pubsub_topic/0` and `Documents.broadcast_files_changed/0` — single source of truth for the `"document_creator:files"` topic; bulk callers can pass `emit_pubsub: false` and broadcast once at the end.
+- `create_document_from_template/3`: new `:parent_folder_id` and `:path` options for placing documents in consumer-managed subfolders.
+- `foreign_key_constraint(:template_uuid)` on `Document` changeset — invalid template UUIDs now return a changeset error instead of raising.
+- Catch-all `handle_info/2` in `GoogleOAuthSettingsLive` to prevent crashes on unexpected messages (Task supervisor signals, stray PubSub traffic).
+
+### Changed
+- `sync_from_drive/0` recursively walks both managed trees and upserts every Google Doc found (including those nested in subfolders) with its actual parent `folder_id` and resolved `path`.
+- `classify_by_location/5` accepts a `MapSet` of enumerated folder IDs so files in descendant subfolders stay `:published` instead of being reclassified as `:unfiled`.
+- Reconcile drops the implicit "file must be in managed root" rule — any descendant of a managed folder is treated as `:published`.
+- `list_folder_files/1` and `list_subfolders/1` on `GoogleDocsClient` now delegate to `DriveWalker` — full pagination instead of the previous silent 100-item cap.
+- Narrowed `Documents.default_managed/2` rescue from bare `_` to a targeted set (`ArgumentError`, `KeyError`, `MatchError`, `BadMapError`, `DBConnection.ConnectionError`, `Postgrex.Error`) so future `FunctionClauseError` / `RuntimeError` bugs propagate instead of being silently swallowed.
+
+### Fixed
+- Silent data loss past 100 items in `list_folder_files/1` / `list_subfolders/1` — both now fully paginate.
+- `test_helper.exs` no longer crashes on module load when `psql` is missing from `PATH` (sandboxes / minimal CI images); degrades to the connect-attempt branch instead.
+- `test_helper.exs` PubSub supervisor bootstrap now raises on unexpected errors instead of silently ignoring them.
+
 ## 0.2.6 - 2026-04-15
 
 ### Added
