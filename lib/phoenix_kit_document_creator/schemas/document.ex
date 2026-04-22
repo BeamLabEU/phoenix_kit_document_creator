@@ -109,5 +109,6 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     ])
     |> validate_required([:name, :google_doc_id])
     |> validate_inclusion(:status, @statuses)
+    |> foreign_key_constraint(:template_uuid)
   end
 end

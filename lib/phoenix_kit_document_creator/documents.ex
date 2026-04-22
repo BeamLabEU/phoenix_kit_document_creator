@@ -24,10 +24,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
   require Logger
 
   alias PhoenixKitDocumentCreator.GoogleDocsClient
+  alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
   alias PhoenixKitDocumentCreator.Schemas.Document
   alias PhoenixKitDocumentCreator.Schemas.Template
 
   @module_key "document_creator"
+  @pubsub_topic "document_creator:files"
 
   defp repo, do: PhoenixKit.RepoHelper.repo()
 
@@ -170,39 +172,48 @@ defmodule PhoenixKitDocumentCreator.Documents do
   @doc """
   Sync local DB with Google Drive.
 
-  Fetches file lists from both Drive folders, upserts all found files,
-  marks DB records as "lost" if their google_doc_id is no longer in Drive,
-  and recovers "lost" records that reappear.
+  Recursively walks both managed trees (templates and documents), upserts every
+  Google Doc found (including those nested in subfolders) with its actual
+  parent `folder_id` and human-readable `path`, then reconciles DB records
+  against the walk — records whose `google_doc_id` is missing from the walk
+  are re-classified via a per-file Drive API call as `trashed`, `lost`, or
+  `unfiled` according to their current Drive parents.
+
+  Files in any descendant of a managed folder are treated as `published`.
   """
   @spec sync_from_drive() :: :ok | {:error, :sync_failed}
   def sync_from_drive do
     with %{templates_folder_id: tid, documents_folder_id: did}
          when is_binary(tid) and is_binary(did) <- get_folder_ids(),
-         {:ok, drive_templates} <- GoogleDocsClient.list_folder_files(tid),
-         {:ok, drive_documents} <- GoogleDocsClient.list_folder_files(did) do
-      Enum.each(
-        drive_templates,
-        &upsert_template_from_drive(&1, managed_location_attrs(:template))
-      )
+         {:ok, template_tree} <-
+           DriveWalker.walk_tree(tid, root_path: managed_location(:template).path),
+         {:ok, document_tree} <-
+           DriveWalker.walk_tree(did, root_path: managed_location(:document).path) do
+      Enum.each(template_tree.files, fn file ->
+        upsert_template_from_drive(file, upsert_attrs_from_walked(file, :template))
+      end)
 
-      Enum.each(
-        drive_documents,
-        &upsert_document_from_drive(&1, managed_location_attrs(:document))
-      )
+      Enum.each(document_tree.files, fn file ->
+        upsert_document_from_drive(file, upsert_attrs_from_walked(file, :document))
+      end)
 
-      drive_template_ids = MapSet.new(drive_templates, & &1["id"])
-      drive_document_ids = MapSet.new(drive_documents, & &1["id"])
+      drive_template_ids = MapSet.new(template_tree.files, & &1["id"])
+      drive_document_ids = MapSet.new(document_tree.files, & &1["id"])
+      template_folder_ids = MapSet.new(Map.keys(template_tree.folders))
+      document_folder_ids = MapSet.new(Map.keys(document_tree.folders))
 
-      template_changes = reconcile_status(Template, drive_template_ids)
-      document_changes = reconcile_status(Document, drive_document_ids)
+      template_changes = reconcile_status(Template, drive_template_ids, template_folder_ids)
+      document_changes = reconcile_status(Document, drive_document_ids, document_folder_ids)
 
       log_activity(%{
         action: "sync.completed",
         mode: "auto",
         resource_type: "sync",
         metadata: %{
-          "templates_synced" => length(drive_templates),
-          "documents_synced" => length(drive_documents),
+          "templates_synced" => length(template_tree.files),
+          "documents_synced" => length(document_tree.files),
+          "template_folders_walked" => map_size(template_tree.folders),
+          "document_folders_walked" => map_size(document_tree.folders),
           "templates_lost" => length(template_changes[:lost] || []),
           "templates_trashed" => length(template_changes[:trashed] || []),
           "templates_unfiled" => length(template_changes[:unfiled] || []),
@@ -218,6 +229,18 @@ defmodule PhoenixKitDocumentCreator.Documents do
         Logger.error("Document Creator sync_from_drive failed: #{inspect(reason)}")
         {:error, :sync_failed}
     end
+  end
+
+  # Extract location attrs for upsert. Prefer the folder_id/path annotated
+  # onto the file by the walker; fall back to managed-root so pre-walker
+  # records don't regress.
+  defp upsert_attrs_from_walked(file, type) do
+    default = managed_location(type)
+
+    %{
+      folder_id: file["folder_id"] || default.folder_id,
+      path: file["path"] || default.path
+    }
   end
 
   # ===========================================================================
@@ -257,7 +280,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   # Returns a map of status => [uuids] for logging purposes.
-  defp reconcile_status(schema, drive_ids) do
+  #
+  # `allowed_folder_ids` is the MapSet of folder IDs the walker enumerated
+  # (the managed root + all descendants). A tracked record whose parent
+  # sits anywhere in that set is `:published` — descendant subfolders are
+  # no longer misclassified as `:unfiled`.
+  defp reconcile_status(schema, drive_ids, allowed_folder_ids) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     managed_location = managed_location(schema_type(schema))
     deleted_folder_id = deleted_folder_id(schema_type(schema))
@@ -272,7 +300,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
       Enum.group_by(
         tracked_records,
         fn {_uuid, gid, folder_id} ->
-          classify_file(gid, folder_id, drive_ids, managed_location, deleted_folder_id)
+          classify_file(
+            gid,
+            folder_id,
+            drive_ids,
+            allowed_folder_ids,
+            managed_location,
+            deleted_folder_id
+          )
         end,
         fn {uuid, _gid, _folder_id} -> uuid end
       )
@@ -285,34 +320,67 @@ defmodule PhoenixKitDocumentCreator.Documents do
     grouped
   end
 
-  defp classify_file(gid, folder_id, drive_ids, managed_location, deleted_folder_id) do
+  defp classify_file(
+         gid,
+         folder_id,
+         drive_ids,
+         allowed_folder_ids,
+         managed_loc,
+         deleted_folder_id
+       ) do
     if MapSet.member?(drive_ids, gid) do
       :published
     else
-      classify_by_api(gid, folder_id, managed_location, deleted_folder_id)
+      classify_by_api(gid, folder_id, allowed_folder_ids, managed_loc, deleted_folder_id)
     end
   end
 
-  defp classify_by_api(gid, folder_id, managed_location, deleted_folder_id) do
+  defp classify_by_api(gid, folder_id, allowed_folder_ids, managed_location, deleted_folder_id) do
     case GoogleDocsClient.file_status(gid) do
       {:ok, %{trashed: true}} ->
         :trashed
 
       {:ok, %{parents: parents}} when is_list(parents) ->
-        classify_by_location(parents, folder_id, managed_location, deleted_folder_id)
+        classify_by_location(
+          parents,
+          folder_id,
+          allowed_folder_ids,
+          managed_location,
+          deleted_folder_id
+        )
 
       _ ->
         :lost
     end
   end
 
-  defp classify_by_location(parents, folder_id, managed_location, deleted_folder_id) do
+  @doc false
+  # Classify a tracked file into :published / :trashed / :unfiled based on
+  # its Drive parents, the record's stored folder_id, the managed-location
+  # configuration, the deleted-folder ID, and the MapSet of folder IDs
+  # enumerated by the most recent walker run. Exposed for testing.
+  def classify_by_location(
+        parents,
+        folder_id,
+        allowed_folder_ids,
+        managed_location,
+        deleted_folder_id
+      )
+      when is_list(parents) do
     accepted_folder_id = folder_id || managed_location.folder_id
 
     cond do
-      is_binary(deleted_folder_id) and deleted_folder_id in parents -> :trashed
-      is_binary(accepted_folder_id) and accepted_folder_id in parents -> :published
-      true -> :unfiled
+      is_binary(deleted_folder_id) and deleted_folder_id in parents ->
+        :trashed
+
+      is_binary(accepted_folder_id) and accepted_folder_id in parents ->
+        :published
+
+      Enum.any?(parents, &MapSet.member?(allowed_folder_ids, &1)) ->
+        :published
+
+      true ->
+        :unfiled
     end
   end
 
@@ -418,34 +486,72 @@ defmodule PhoenixKitDocumentCreator.Documents do
   @doc """
   Create a document from a template by copying and filling variables.
 
-  1. Copies the template Google Doc to the documents folder
+  1. Copies the template Google Doc into the target folder
   2. Replaces all `{{variable}}` placeholders with values
   3. Persists the document record with variable_values and template link
   4. Returns `{:ok, %{doc_id, url}}`
+
+  ## Options
+
+  - `:name` — document name (default `"New Document"`)
+  - `:actor_uuid` — UUID of the user performing the action (activity log)
+  - `:parent_folder_id` — Drive folder ID to copy into. Defaults to the
+    managed documents folder. Supply this to place the new document in a
+    subfolder (e.g. `order-123/sub-4/`) you manage yourself.
+  - `:path` — human-readable path string to store on the record. Only
+    meaningful when `:parent_folder_id` is also supplied. If omitted when
+    `:parent_folder_id` is given, the stored `path` is left unset and the
+    next `sync_from_drive/0` fills it from the walker.
   """
   @spec create_document_from_template(String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def create_document_from_template(template_file_id, variable_values, opts \\ []) do
     doc_name = Keyword.get(opts, :name, "New Document")
 
-    case get_folder_ids() do
-      %{documents_folder_id: folder_id} when is_binary(folder_id) ->
-        with {:ok, new_doc_id} <-
-               GoogleDocsClient.copy_file(template_file_id, doc_name, parent: folder_id),
-             {:ok, _} <- GoogleDocsClient.replace_all_text(new_doc_id, variable_values) do
-          persist_created_document(new_doc_id, template_file_id, doc_name, variable_values, opts)
-        else
-          {:error, _} = err -> err
-        end
-
-      _ ->
-        {:error, :documents_folder_not_found}
+    with {:ok, target} <- resolve_create_target(opts),
+         {:ok, new_doc_id} <-
+           GoogleDocsClient.copy_file(template_file_id, doc_name, parent: target.folder_id),
+         {:ok, _} <- GoogleDocsClient.replace_all_text(new_doc_id, variable_values) do
+      persist_created_document(
+        new_doc_id,
+        template_file_id,
+        doc_name,
+        variable_values,
+        target,
+        opts
+      )
     end
   end
 
-  defp persist_created_document(new_doc_id, template_file_id, doc_name, variable_values, opts) do
+  defp resolve_create_target(opts) do
+    case Keyword.get(opts, :parent_folder_id) do
+      nil ->
+        case get_folder_ids() do
+          %{documents_folder_id: id} when is_binary(id) ->
+            loc = managed_location(:document)
+            {:ok, %{folder_id: id, path: loc.path}}
+
+          _ ->
+            {:error, :documents_folder_not_found}
+        end
+
+      folder_id when is_binary(folder_id) and folder_id != "" ->
+        {:ok, %{folder_id: folder_id, path: Keyword.get(opts, :path)}}
+
+      _ ->
+        {:error, :invalid_parent_folder_id}
+    end
+  end
+
+  defp persist_created_document(
+         new_doc_id,
+         template_file_id,
+         doc_name,
+         variable_values,
+         target,
+         opts
+       ) do
     template_uuid = get_template_uuid_by_google_doc_id(template_file_id)
-    location = managed_location(:document)
 
     result =
       %Document{}
@@ -455,8 +561,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
         template_uuid: template_uuid,
         variable_values: variable_values,
         status: "published",
-        path: location.path,
-        folder_id: location.folder_id
+        path: target.path,
+        folder_id: target.folder_id
       })
       |> repo().insert()
 
@@ -472,7 +578,9 @@ defmodule PhoenixKitDocumentCreator.Documents do
             "google_doc_id" => new_doc_id,
             "template_google_doc_id" => template_file_id,
             "template_uuid" => template_uuid,
-            "variables_used" => Map.keys(variable_values)
+            "variables_used" => Map.keys(variable_values),
+            "folder_id" => target.folder_id,
+            "path" => target.path
           }
         })
 
@@ -490,6 +598,231 @@ defmodule PhoenixKitDocumentCreator.Documents do
     |> where([t], t.google_doc_id == ^google_doc_id)
     |> select([t], t.uuid)
     |> repo().one()
+  end
+
+  # ===========================================================================
+  # Registering existing Drive files (consumer-managed create flows)
+  # ===========================================================================
+
+  @doc """
+  Register a Drive document that the caller has already created (or already
+  knows about) into the local DB.
+
+  Use this when your own wrapper code handles the Drive-side work (copy,
+  placement in a subfolder, variable substitution) and you just need the
+  file to appear in `list_documents_from_db/0` and be classified correctly
+  by future `sync_from_drive/0` runs.
+
+  **Makes no Drive API calls.** This is a pure DB upsert — garbage inputs
+  do not error, they self-correct on the next sync (the walker rewrites
+  `path`/`folder_id`, and files that are not actually in the managed tree
+  get classified `:unfiled` or `:lost` per the usual reconciliation rules).
+
+  ## `attrs` — map keyed by atoms or strings
+
+  | Key               | Required | Notes                                                     |
+  | ----------------- | -------- | --------------------------------------------------------- |
+  | `google_doc_id`   | yes      | Drive file ID                                             |
+  | `name`            | yes      | Display name                                              |
+  | `template_uuid`   | no       | UUID of the source template, if applicable                |
+  | `variable_values` | no       | Map of variables substituted during generation            |
+  | `folder_id`       | no       | Actual Drive folder holding the file. Defaults to managed |
+  | `path`            | no       | Human-readable path. Defaults to managed root path        |
+  | `status`          | no       | Defaults to `"published"`                                 |
+  | `thumbnail`       | no       | Optional data URI                                         |
+
+  If `:folder_id` points outside the managed documents tree, the next
+  `sync_from_drive/0` will classify the record as `:unfiled` and surface
+  the resolution popup in the admin UI.
+
+  ## `opts`
+
+  - `:actor_uuid` — user UUID for the activity log
+  - `:emit_pubsub` — default `true`. Broadcasts `:files_changed` on the
+    `document_creator:files` topic so connected admin LiveViews re-sync.
+    Bulk callers (e.g. a backfill script registering hundreds of rows)
+    should pass `false` and trigger **one** broadcast or sync at the end:
+
+        Enum.each(rows, &Documents.register_existing_document(&1, emit_pubsub: false))
+        Documents.broadcast_files_changed()
+  """
+  @spec register_existing_document(map(), keyword()) ::
+          {:ok, Document.t()} | {:error, Ecto.Changeset.t() | term()}
+  def register_existing_document(attrs, opts \\ []) when is_map(attrs) do
+    register_existing(:document, attrs, opts)
+  end
+
+  @doc """
+  Register a Drive template that the caller has already created or knows about.
+
+  Symmetric to `register_existing_document/2` — see its documentation for the
+  `attrs` shape and options. Unlike documents, template registration does not
+  accept `template_uuid` or `variable_values`.
+  """
+  @spec register_existing_template(map(), keyword()) ::
+          {:ok, Template.t()} | {:error, Ecto.Changeset.t() | term()}
+  def register_existing_template(attrs, opts \\ []) when is_map(attrs) do
+    register_existing(:template, attrs, opts)
+  end
+
+  defp register_existing(kind, attrs, opts) do
+    with {:ok, a} <- normalize_register_attrs(attrs),
+         file = %{"id" => a.google_doc_id, "name" => a.name},
+         extra = register_upsert_extras(a, kind),
+         {:ok, record} <- do_register_upsert(kind, file, extra, a) do
+      log_register(kind, record, a, opts)
+      maybe_emit_pubsub(opts)
+      {:ok, record}
+    end
+  end
+
+  defp register_upsert_extras(a, kind) do
+    %{
+      folder_id: a[:folder_id] || default_managed(kind, :folder_id),
+      path: a[:path] || default_managed(kind, :path),
+      status: a[:status] || "published",
+      thumbnail: a[:thumbnail]
+    }
+  end
+
+  # Settings lookup can fail (e.g. in tests without the core schema, or
+  # when folder discovery hasn't run). A nil default is safe: the next
+  # `sync_from_drive/0` will rewrite `folder_id`/`path` from the walker.
+  defp default_managed(kind, key) do
+    Map.get(managed_location(kind), key)
+  rescue
+    _ -> nil
+  end
+
+  defp maybe_emit_pubsub(opts) do
+    if Keyword.get(opts, :emit_pubsub, true), do: broadcast_files_changed()
+  end
+
+  defp do_register_upsert(:template, file, extra, _a) do
+    upsert_template_from_drive(file, extra)
+  end
+
+  defp do_register_upsert(:document, file, extra, a) do
+    base_attrs = %{
+      name: file["name"],
+      google_doc_id: file["id"],
+      status: extra[:status] || "published",
+      path: extra[:path],
+      folder_id: extra[:folder_id]
+    }
+
+    # Only include optional fields when the caller actually supplied them;
+    # otherwise the nil would clobber a previously-set value on re-register.
+    attrs =
+      base_attrs
+      |> maybe_put(:template_uuid, a[:template_uuid])
+      |> maybe_put(:variable_values, a[:variable_values])
+      |> maybe_put(:thumbnail, extra[:thumbnail])
+
+    # Replace list intentionally mirrors `upsert_document_from_drive/2` —
+    # `template_uuid` / `variable_values` / `thumbnail` are preserved across
+    # re-registrations so a second call that omits them does not reset them.
+    %Document{}
+    |> Document.creation_changeset(attrs)
+    |> repo().insert(
+      on_conflict: {:replace, [:name, :status, :path, :folder_id, :updated_at]},
+      conflict_target: {:unsafe_fragment, "(google_doc_id) WHERE google_doc_id IS NOT NULL"}
+    )
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp normalize_register_attrs(attrs) do
+    a = atomize_register_attrs(attrs)
+
+    cond do
+      not (is_binary(a[:google_doc_id]) and a[:google_doc_id] != "") ->
+        {:error, :missing_google_doc_id}
+
+      match?({:error, _}, GoogleDocsClient.validate_file_id(a[:google_doc_id])) ->
+        {:error, :invalid_google_doc_id}
+
+      not (is_binary(a[:name]) and a[:name] != "") ->
+        {:error, :missing_name}
+
+      true ->
+        {:ok, a}
+    end
+  end
+
+  @register_keys ~w(google_doc_id name template_uuid variable_values folder_id path status thumbnail)a
+
+  defp atomize_register_attrs(attrs) do
+    Enum.reduce(@register_keys, %{}, fn key, acc ->
+      value = Map.get(attrs, key) || Map.get(attrs, to_string(key))
+      if is_nil(value), do: acc, else: Map.put(acc, key, value)
+    end)
+  end
+
+  defp log_register(:template, record, a, opts) do
+    log_activity(%{
+      action: "template.registered_existing",
+      mode: "manual",
+      actor_uuid: opts[:actor_uuid],
+      resource_type: "template",
+      metadata: %{
+        "name" => a[:name],
+        "google_doc_id" => record.google_doc_id,
+        "folder_id" => record.folder_id,
+        "path" => record.path
+      }
+    })
+  end
+
+  defp log_register(:document, record, a, opts) do
+    log_activity(%{
+      action: "document.registered_existing",
+      mode: "manual",
+      actor_uuid: opts[:actor_uuid],
+      resource_type: "document",
+      metadata: %{
+        "name" => a[:name],
+        "google_doc_id" => record.google_doc_id,
+        "folder_id" => record.folder_id,
+        "path" => record.path,
+        "template_uuid" => a[:template_uuid],
+        "variables_used" => (a[:variable_values] && Map.keys(a[:variable_values])) || []
+      }
+    })
+  end
+
+  @doc """
+  The PubSub topic on which `{:files_changed, self()}` messages are
+  broadcast whenever a template or document DB record is mutated.
+
+  Admin LiveViews subscribe to this topic in `mount/3`. Prefer calling
+  this helper over hard-coding the topic string so the two stay in sync.
+  """
+  @spec pubsub_topic() :: String.t()
+  def pubsub_topic, do: @pubsub_topic
+
+  @doc """
+  Broadcast `{:files_changed, self()}` on the `document_creator:files` topic.
+
+  Use this after a bulk `register_existing_document/2` / `register_existing_template/2`
+  call that passed `emit_pubsub: false`, to trigger a single resync in any
+  connected admin LiveViews.
+
+  Silently no-ops if the PubSub system isn't available (e.g. background
+  jobs or tests without a running PubSub registry).
+  """
+  @spec broadcast_files_changed() :: :ok
+  def broadcast_files_changed do
+    if Code.ensure_loaded?(PhoenixKit.PubSubHelper) do
+      try do
+        PhoenixKit.PubSubHelper.broadcast(@pubsub_topic, {:files_changed, self()})
+      rescue
+        _ -> :ok
+      end
+    end
+
+    :ok
   end
 
   # ===========================================================================

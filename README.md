@@ -94,118 +94,175 @@ The module registers 3 admin tabs plus a settings tab:
 
 ## Database Schema
 
-Three tables created by the PhoenixKit migration system (V86 for initial tables, V88 for Google Docs fields):
+Tables are created by PhoenixKit core's migration system (V86 for the initial
+tables, V94 for the `google_doc_id` / `status` / `path` / `folder_id` columns):
 
 ### `phoenix_kit_doc_templates`
 
 | Column | Type | Description |
 |---|---|---|
-| `uuid` | UUID (PK) | Auto-generated |
+| `uuid` | UUID (PK) | Auto-generated (UUIDv7) |
 | `name` | string | Template name |
 | `slug` | string | URL-safe identifier (unique, auto-generated from name) |
 | `description` | text | Template description |
-| `status` | string | `"published"` or `"trashed"` |
-| `content_html` | text | HTML content (cached from Google Doc) |
-| `content_css` | text | CSS styles |
-| `variables` | jsonb | Array of variable definitions |
+| `status` | string | `"published"`, `"trashed"`, `"lost"`, or `"unfiled"` |
+| `google_doc_id` | string | Google Doc ID (partial unique index) |
+| `path` | string | Human-readable Drive path (e.g. `"documents/order-1/sub-4"`) |
+| `folder_id` | string | Drive folder ID of the file's current parent |
+| `variables` | jsonb | Array of variable definitions detected in the template |
 | `config` | jsonb | Configuration (e.g., paper_size) |
 | `thumbnail` | text | Base64 data URI for preview |
-| `google_doc_id` | string | Google Doc ID for API operations |
+| `content_html` / `content_css` / `content_native` | mixed | Legacy columns — no longer populated |
 
 ### `phoenix_kit_doc_documents`
 
 | Column | Type | Description |
 |---|---|---|
-| `uuid` | UUID (PK) | Auto-generated |
+| `uuid` | UUID (PK) | Auto-generated (UUIDv7) |
 | `name` | string | Document name |
+| `status` | string | `"published"`, `"trashed"`, `"lost"`, or `"unfiled"` |
+| `google_doc_id` | string | Google Doc ID (partial unique index) |
+| `path` | string | Human-readable Drive path |
+| `folder_id` | string | Drive folder ID of the file's current parent |
 | `template_uuid` | UUID (FK) | Template this was created from (optional) |
-| `content_html` | text | HTML content (cached from Google Doc) |
-| `content_css` | text | CSS styles |
 | `variable_values` | jsonb | Map of variable values used during creation |
 | `config` | jsonb | Configuration |
 | `thumbnail` | text | Base64 data URI for preview |
-| `google_doc_id` | string | Google Doc ID for API operations |
 | `created_by_uuid` | UUID | Optional FK to users |
+| `content_html` / `content_css` / header/footer cols | mixed | Legacy columns — no longer populated |
 
 ### `phoenix_kit_doc_headers_footers`
 
-| Column | Type | Description |
-|---|---|---|
-| `uuid` | UUID (PK) | Auto-generated |
-| `name` | string | Display name |
-| `type` | string | `"header"` or `"footer"` (discriminator) |
-| `html` | text | HTML content |
-| `css` | text | CSS styles |
-| `height` | string | CSS height value (e.g., `"25mm"`) |
-| `thumbnail` | text | Base64 data URI for preview |
-| `google_doc_id` | string | Google Doc ID for API operations |
-| `created_by_uuid` | UUID | Optional FK to users |
+Legacy table — headers and footers are now handled natively by Google Docs.
+Retained for migration compatibility; a future migration will drop it.
 
 ## Context API
 
-### `PhoenixKitDocumentCreator.Documents`
+The module exposes three layers. See `AGENTS.md` for the full breakdown; the
+quick reference below covers the most common calls.
 
-All operations go through Google Drive — no local database CRUD for document content.
+### `PhoenixKitDocumentCreator.Documents` — combined Drive + DB
 
-#### Templates
-
-```elixir
-Documents.list_templates()                    # All templates from Drive /templates folder
-Documents.create_template(name)               # Create blank Google Doc in /templates
-```
-
-#### Documents
+Reads go to the local DB (fast); writes go to Drive first then DB. Mutating
+functions accept `opts` with `:actor_uuid` for activity logging.
 
 ```elixir
-Documents.list_documents()                    # All documents from Drive /documents folder
-Documents.create_document(name)               # Create blank Google Doc in /documents
+# Listing (DB-only, no Drive round-trip)
+Documents.list_templates_from_db()
+Documents.list_documents_from_db()
+Documents.list_trashed_templates_from_db()
+Documents.list_trashed_documents_from_db()
 
-# Create from template with variable substitution
-Documents.create_document_from_template(template_file_id, %{
-  "client_name" => "Acme Corp",
-  "date" => "2026-03-14"
-}, name: "Acme Contract")
-# Copies template, replaces {{ variables }}, returns {:ok, %{doc_id, url}}
-```
+# Sync (recursive walker — picks up files nested in subfolders too)
+Documents.sync_from_drive()
 
-#### Variables
+# Create
+Documents.create_template("Invoice Template", actor_uuid: uid)
+Documents.create_document("Blank Doc", actor_uuid: uid)
 
-```elixir
+# Create a document from a template, optionally into a subfolder you manage
+Documents.create_document_from_template(template_file_id, %{"client" => "Acme"},
+  name: "Acme Contract",
+  parent_folder_id: sub_folder_id,   # optional — defaults to managed documents root
+  path: "documents/order-1/sub-4",   # optional — human-readable path
+  actor_uuid: uid
+)
+
+# Register a Drive file your own code created (no Drive calls — DB-only upsert)
+Documents.register_existing_document(%{
+  google_doc_id: doc_id,
+  name: "Invoice",
+  template_uuid: tpl_uuid,
+  variable_values: vars,
+  folder_id: sub_folder_id,
+  path: "documents/order-1/sub-4"
+}, actor_uuid: uid)
+
+Documents.register_existing_template(%{google_doc_id: gid, name: "Tpl"})
+
+# Delete (soft — moves to the deleted folder)
+Documents.delete_document(file_id, actor_uuid: uid)
+Documents.delete_template(file_id, actor_uuid: uid)
+Documents.restore_document(file_id, actor_uuid: uid)
+Documents.restore_template(file_id, actor_uuid: uid)
+
+# Unfiled resolution (file found outside the managed tree)
+Documents.move_to_templates(file_id, actor_uuid: uid)
+Documents.move_to_documents(file_id, actor_uuid: uid)
+Documents.set_correct_location(file_id, actor_uuid: uid)
+
+# Variable detection on a template
 Documents.detect_variables(file_id)           # {:ok, ["client_name", "date"]}
+
+# PDF export
+Documents.export_pdf(file_id, name: "Acme Contract", actor_uuid: uid)
+
+# Folder helpers (cached via Settings, lazy-discovered on first access)
+Documents.get_folder_ids()
+Documents.refresh_folders()
+Documents.templates_folder_url()
+Documents.documents_folder_url()
+
+# PubSub — broadcast {:files_changed, self()} on "document_creator:files"
+# topic. Bulk callers passing `emit_pubsub: false` to the register functions
+# should call this once at the end to resync connected admin LiveViews.
+Documents.broadcast_files_changed()
 ```
 
-#### PDF Export
+### `PhoenixKitDocumentCreator.GoogleDocsClient` — direct Drive + Docs API
+
+OAuth credentials and token refresh live in `PhoenixKit.Integrations` under
+the `"google"` provider; this module delegates authentication there.
 
 ```elixir
-Documents.export_pdf(file_id)                 # {:ok, pdf_binary}
+GoogleDocsClient.connection_status()             # {:ok, %{email: ...}} | {:error, reason}
+GoogleDocsClient.get_credentials()               # {:ok, creds} | {:error, :not_configured}
+
+# Folders
+GoogleDocsClient.find_folder_by_name(name, opts)
+GoogleDocsClient.create_folder(name, opts)
+GoogleDocsClient.find_or_create_folder(name, opts)
+GoogleDocsClient.ensure_folder_path("a/b/c", opts)
+GoogleDocsClient.discover_folders()              # resolves all four managed folders
+GoogleDocsClient.list_subfolders(parent_id)      # paginated, alphabetical
+GoogleDocsClient.list_folder_files(folder_id)    # paginated; direct children only
+GoogleDocsClient.get_folder_url(folder_id)
+
+# Files
+GoogleDocsClient.create_document(title, parent: folder_id)
+GoogleDocsClient.copy_file(src_id, new_name, parent: folder_id)
+GoogleDocsClient.move_file(file_id, to_folder_id)
+GoogleDocsClient.export_pdf(file_id)             # {:ok, pdf_binary}
+GoogleDocsClient.fetch_thumbnail(file_id)        # {:ok, "data:image/png;base64,..."}
+GoogleDocsClient.file_status(file_id)            # {:ok, %{trashed: bool, parents: [id]}}
+GoogleDocsClient.file_location(file_id)          # {:ok, %{folder_id, path, trashed}}
+GoogleDocsClient.get_edit_url(file_id)
+
+# Docs
+GoogleDocsClient.get_document(doc_id)
+GoogleDocsClient.get_document_text(doc_id)
+GoogleDocsClient.batch_update(doc_id, requests)
+GoogleDocsClient.replace_all_text(doc_id, %{"var" => "value"})
 ```
 
-#### Folders
+### `PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker` — paginated + recursive traversal
+
+Canonical paginated listing primitive. `list_folder_files/1` and
+`list_subfolders/1` on the parent client delegate here.
 
 ```elixir
-Documents.get_folder_ids()                    # %{templates_folder_id: ..., documents_folder_id: ...}
-Documents.refresh_folders()                   # Re-discover from Drive
-Documents.templates_folder_url()              # Google Drive URL for templates folder
-Documents.documents_folder_url()              # Google Drive URL for documents folder
-```
+alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
 
-### `PhoenixKitDocumentCreator.GoogleDocsClient`
+DriveWalker.list_files(folder_id)                # {:ok, [file_map]} — paginated
+DriveWalker.list_folders(folder_id)              # {:ok, [folder_map]} — paginated, alphabetical
 
-Low-level Google API client used by the Documents context:
-
-```elixir
-GoogleDocsClient.get_credentials()            # {:ok, creds} | {:error, :not_configured}
-GoogleDocsClient.authorization_url(redirect)  # {:ok, url} | {:error, :client_id_not_configured}
-GoogleDocsClient.exchange_code(code, uri)     # {:ok, creds} (exchanges OAuth code for tokens)
-GoogleDocsClient.refresh_access_token()       # {:ok, new_token} (auto-refresh on 401)
-GoogleDocsClient.connection_status()          # {:ok, %{email: ...}} | {:error, reason}
-
-GoogleDocsClient.create_document(title, opts) # Create Google Doc in Drive
-GoogleDocsClient.copy_file(id, name, opts)    # Copy file in Drive
-GoogleDocsClient.replace_all_text(id, vars)   # Substitute {{ variables }} in a Doc
-GoogleDocsClient.get_document_text(id)        # Extract plain text for variable detection
-GoogleDocsClient.export_pdf(id)               # Export as PDF binary
-GoogleDocsClient.fetch_thumbnail(id)          # Fetch thumbnail as base64 data URI
+# BFS the whole tree — returns every descendant folder and every Google Doc
+# in any of them, each file annotated with its owning `folder_id` and the
+# resolved human-readable `path`.
+DriveWalker.walk_tree(root_folder_id,
+  root_path: "documents",   # caller-supplied path to anchor descendants at
+  max_depth: 20             # defensive cap; root is depth 0
+)
 ```
 
 ## Variable System
@@ -217,7 +274,7 @@ Templates support `{{ variable_name }}` placeholders.
 Variables are extracted from Google Doc text content via regex:
 
 ```elixir
-PhoenixKitDocumentCreator.Variable.extract_from_html("<p>Dear {{ client_name }},</p>")
+PhoenixKitDocumentCreator.Variable.extract_variables("Dear {{ client_name }},")
 # => ["client_name"]
 ```
 
@@ -269,13 +326,15 @@ The module registers `"document_creator"` as a permission key. Owner and Admin r
 lib/
   phoenix_kit_document_creator.ex              # Main module (behaviour callbacks, tab registration)
   phoenix_kit_document_creator/
-    documents.ex                               # Context: list/create/export via Google Drive
-    google_docs_client.ex                      # Google Docs + Drive API client with OAuth
+    documents.ex                               # Context: combined Drive + DB operations
+    google_docs_client.ex                      # Google Docs + Drive API client (OAuth via Integrations)
+    google_docs_client/
+      drive_walker.ex                          # Paginated + recursive Drive traversal
     variable.ex                                # Extract {{ variables }} and guess types
     paths.ex                                   # Centralized URL path helpers
     schemas/
       document.ex                              # Document schema
-      header_footer.ex                         # Header/footer schema (type discriminator)
+      header_footer.ex                         # Header/footer schema — legacy, deprecated
       template.ex                              # Template schema (with slug auto-gen)
     web/
       documents_live.ex                        # Landing page (templates + documents tabs)

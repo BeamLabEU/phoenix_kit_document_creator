@@ -307,6 +307,304 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
     end
 
     # ===========================================================================
+    # register_existing_document / register_existing_template
+    # ===========================================================================
+
+    describe "register_existing_document/2" do
+      test "inserts a new document with minimal attrs" do
+        assert {:ok, record} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d1",
+                   name: "Invoice"
+                 })
+
+        assert record.google_doc_id == "reg_d1"
+        assert record.name == "Invoice"
+        assert record.status == "published"
+        # Defaults fall back to managed-root — folder_id may be nil when
+        # discovery hasn't run, which is fine for this unit-level test.
+      end
+
+      test "accepts string keys" do
+        assert {:ok, record} =
+                 Documents.register_existing_document(%{
+                   "google_doc_id" => "reg_d_str",
+                   "name" => "String Keys",
+                   "folder_id" => "sub_folder_1",
+                   "path" => "documents/order-1/sub-2"
+                 })
+
+        assert record.folder_id == "sub_folder_1"
+        assert record.path == "documents/order-1/sub-2"
+      end
+
+      test "stores template_uuid and variable_values" do
+        {:ok, tpl} =
+          Documents.upsert_template_from_drive(%{"id" => "reg_tpl_src", "name" => "Src"})
+
+        {:ok, record} =
+          Documents.register_existing_document(%{
+            google_doc_id: "reg_d_from_tpl",
+            name: "From Template",
+            template_uuid: tpl.uuid,
+            variable_values: %{"client" => "Acme", "amount" => "100"}
+          })
+
+        assert record.template_uuid == tpl.uuid
+        assert record.variable_values == %{"client" => "Acme", "amount" => "100"}
+      end
+
+      test "upsert is idempotent on google_doc_id" do
+        {:ok, _} =
+          Documents.register_existing_document(%{
+            google_doc_id: "reg_d_idem",
+            name: "Original",
+            folder_id: "f1",
+            path: "documents/a"
+          })
+
+        {:ok, updated} =
+          Documents.register_existing_document(%{
+            google_doc_id: "reg_d_idem",
+            name: "Renamed",
+            folder_id: "f2",
+            path: "documents/b"
+          })
+
+        assert updated.name == "Renamed"
+        assert updated.folder_id == "f2"
+        assert updated.path == "documents/b"
+
+        count =
+          Document
+          |> where([d], d.google_doc_id == "reg_d_idem")
+          |> Repo.aggregate(:count)
+
+        assert count == 1
+      end
+
+      test "re-register without template_uuid/variable_values preserves existing values" do
+        {:ok, tpl} =
+          Documents.upsert_template_from_drive(%{
+            "id" => "reg_tpl_preserve",
+            "name" => "Tpl"
+          })
+
+        {:ok, _first} =
+          Documents.register_existing_document(%{
+            google_doc_id: "reg_d_preserve",
+            name: "Original",
+            template_uuid: tpl.uuid,
+            variable_values: %{"client" => "Acme"}
+          })
+
+        {:ok, _second} =
+          Documents.register_existing_document(%{
+            google_doc_id: "reg_d_preserve",
+            name: "Renamed"
+          })
+
+        reloaded =
+          Document
+          |> where([d], d.google_doc_id == "reg_d_preserve")
+          |> Repo.one!()
+
+        assert reloaded.name == "Renamed"
+        assert reloaded.template_uuid == tpl.uuid
+        assert reloaded.variable_values == %{"client" => "Acme"}
+      end
+
+      test "rejects missing google_doc_id" do
+        assert {:error, :missing_google_doc_id} =
+                 Documents.register_existing_document(%{name: "No ID"})
+      end
+
+      test "rejects missing name" do
+        assert {:error, :missing_name} =
+                 Documents.register_existing_document(%{google_doc_id: "reg_noname"})
+      end
+
+      test "rejects google_doc_id with invalid characters (URL-path injection guard)" do
+        assert {:error, :invalid_google_doc_id} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "../etc/passwd",
+                   name: "Evil"
+                 })
+
+        assert {:error, :invalid_google_doc_id} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "abc?query=1",
+                   name: "Evil"
+                 })
+      end
+
+      test "rejects invalid template_uuid with a changeset error (FK constraint)" do
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d_bad_tpl",
+                   name: "With bad tpl",
+                   template_uuid: "01234567-89ab-7def-8000-000000000000"
+                 })
+
+        assert cs.errors[:template_uuid]
+      end
+
+      test "respects explicit status" do
+        {:ok, record} =
+          Documents.register_existing_document(%{
+            google_doc_id: "reg_d_status",
+            name: "Trashed Up Front",
+            status: "trashed"
+          })
+
+        assert record.status == "trashed"
+      end
+
+      test "does not broadcast when emit_pubsub: false" do
+        PhoenixKit.PubSubHelper.subscribe("document_creator:files")
+
+        {:ok, _} =
+          Documents.register_existing_document(
+            %{google_doc_id: "reg_d_quiet", name: "Quiet"},
+            emit_pubsub: false
+          )
+
+        refute_receive {:files_changed, _}, 50
+      end
+
+      test "broadcasts by default" do
+        PhoenixKit.PubSubHelper.subscribe("document_creator:files")
+
+        {:ok, _} =
+          Documents.register_existing_document(%{
+            google_doc_id: "reg_d_loud",
+            name: "Loud"
+          })
+
+        assert_receive {:files_changed, _}, 500
+      end
+    end
+
+    describe "register_existing_template/2" do
+      test "inserts a new template with minimal attrs" do
+        assert {:ok, record} =
+                 Documents.register_existing_template(%{
+                   google_doc_id: "reg_t1",
+                   name: "Tpl"
+                 })
+
+        assert record.google_doc_id == "reg_t1"
+        assert record.name == "Tpl"
+        assert record.status == "published"
+      end
+
+      test "upsert is idempotent on google_doc_id" do
+        {:ok, _} =
+          Documents.register_existing_template(%{
+            google_doc_id: "reg_t_idem",
+            name: "Original",
+            folder_id: "f1",
+            path: "templates/a"
+          })
+
+        {:ok, updated} =
+          Documents.register_existing_template(%{
+            google_doc_id: "reg_t_idem",
+            name: "Renamed",
+            folder_id: "f2",
+            path: "templates/b"
+          })
+
+        assert updated.name == "Renamed"
+        assert updated.folder_id == "f2"
+        assert updated.path == "templates/b"
+
+        count =
+          Template
+          |> where([t], t.google_doc_id == "reg_t_idem")
+          |> Repo.aggregate(:count)
+
+        assert count == 1
+      end
+
+      test "rejects missing google_doc_id" do
+        assert {:error, :missing_google_doc_id} =
+                 Documents.register_existing_template(%{name: "No ID"})
+      end
+    end
+
+    # ===========================================================================
+    # classify_by_location (MapSet-based nested-folder classification)
+    # ===========================================================================
+
+    describe "classify_by_location/5" do
+      test "published when parent matches file's stored folder_id" do
+        result =
+          Documents.classify_by_location(
+            ["sub_folder_xyz"],
+            "sub_folder_xyz",
+            MapSet.new([]),
+            %{folder_id: "managed_root"},
+            nil
+          )
+
+        assert result == :published
+      end
+
+      test "published when parent is in the allowed-folders MapSet (descendant subfolder)" do
+        result =
+          Documents.classify_by_location(
+            ["nested_subfolder_id"],
+            nil,
+            MapSet.new(["managed_root", "nested_subfolder_id", "other_sub"]),
+            %{folder_id: "managed_root"},
+            nil
+          )
+
+        assert result == :published
+      end
+
+      test "published when parent is the managed root fallback" do
+        result =
+          Documents.classify_by_location(
+            ["managed_root"],
+            nil,
+            MapSet.new([]),
+            %{folder_id: "managed_root"},
+            nil
+          )
+
+        assert result == :published
+      end
+
+      test "trashed when deleted folder is among parents" do
+        result =
+          Documents.classify_by_location(
+            ["deleted_folder_id"],
+            "managed_root",
+            MapSet.new(["managed_root", "deleted_folder_id"]),
+            %{folder_id: "managed_root"},
+            "deleted_folder_id"
+          )
+
+        assert result == :trashed
+      end
+
+      test "unfiled when parent is outside managed tree" do
+        result =
+          Documents.classify_by_location(
+            ["random_other_folder"],
+            nil,
+            MapSet.new(["managed_root"]),
+            %{folder_id: "managed_root"},
+            "deleted_folder_id"
+          )
+
+        assert result == :unfiled
+      end
+    end
+
+    # ===========================================================================
     # detect_variables (DB persistence)
     # ===========================================================================
 
