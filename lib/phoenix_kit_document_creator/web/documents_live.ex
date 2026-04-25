@@ -88,7 +88,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   def handle_info(:sync_from_drive, socket) do
     pid = self()
 
-    Task.start(fn ->
+    # `Task.start_link/1` (not `Task.start/1`) so the spawned task is
+    # linked to the LV process — it dies cleanly when the admin closes
+    # the tab. Without this, an unsupervised orphan keeps running with
+    # nowhere to send :sync_complete. The sync_from_drive write path is
+    # idempotent, so dying mid-sync is safe; next sync restarts.
+    Task.start_link(fn ->
       try do
         Documents.sync_from_drive()
         send(pid, :sync_complete)

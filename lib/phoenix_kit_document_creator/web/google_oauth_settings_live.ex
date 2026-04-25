@@ -242,7 +242,12 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   def handle_info({:load_drive_folders, folder_id}, socket) do
     pid = self()
 
-    Task.start(fn ->
+    # `Task.start_link/1` (not `Task.start/1`) so the spawned task is
+    # linked to the LV — closing the tab kills the in-flight Drive
+    # fetch instead of leaving an orphan that has nowhere to send
+    # :drive_folders_loaded. Pure render-only fetch; nothing writes
+    # to the DB.
+    Task.start_link(fn ->
       try do
         folders =
           case GoogleDocsClient.list_subfolders(folder_id) do

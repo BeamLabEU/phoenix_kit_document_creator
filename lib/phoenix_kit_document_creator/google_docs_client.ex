@@ -42,6 +42,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # ===========================================================================
 
   @doc "Returns the active provider key, including connection slug if configured."
+  @spec active_provider_key() :: String.t()
   def active_provider_key do
     case Settings.get_json_setting(@settings_key, %{}) do
       %{"google_connection" => key} when is_binary(key) and key != "" -> key
@@ -50,11 +51,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Get stored OAuth credentials via PhoenixKit.Integrations."
+  @spec get_credentials() :: {:ok, map()} | {:error, atom()}
   def get_credentials do
     Integrations.get_credentials(active_provider_key())
   end
 
   @doc "Check if connected. Returns `{:ok, %{email: email}}` or `{:error, reason}`."
+  @spec connection_status() :: {:ok, %{email: String.t()}} | {:error, atom()}
   def connection_status do
     case Integrations.get_integration(active_provider_key()) do
       {:ok, data} ->
@@ -78,6 +81,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Find a folder by name, optionally within a parent folder.
   Returns `{:ok, folder_id}` or `{:error, :not_found}`.
   """
+  @spec find_folder_by_name(String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, :not_found | :folder_search_failed | term()}
   def find_folder_by_name(name, opts \\ []) do
     parent = Keyword.get(opts, :parent, "root")
 
@@ -106,6 +111,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Create a folder in Google Drive. Optionally specify a parent folder.
   Returns `{:ok, folder_id}`.
   """
+  @spec create_folder(String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, :create_folder_failed | term()}
   def create_folder(name, opts \\ []) do
     parent = Keyword.get(opts, :parent)
 
@@ -130,6 +137,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Optionally specify a parent folder.
   Returns `{:ok, folder_id}`.
   """
+  @spec find_or_create_folder(String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
   def find_or_create_folder(name, opts \\ []) do
     case find_folder_by_name(name, opts) do
       {:ok, id} -> {:ok, id}
