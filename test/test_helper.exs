@@ -95,9 +95,21 @@ repo_available =
 
 Application.put_env(:phoenix_kit_document_creator, :test_repo_available, repo_available)
 
+# Pin `PhoenixKit.Config.url_prefix/0` to "/" via :persistent_term so
+# tests that boot before any settings read get a stable value (the LV
+# routes use `Routes.path/1`, which reads this).
+:persistent_term.put(:phoenix_kit_url_prefix, "/")
+
 # Start minimal PhoenixKit services needed for tests
 {:ok, _pid} = PhoenixKit.PubSub.Manager.start_link([])
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
+
+# Start the LiveView test endpoint (used by LV smoke tests). The
+# endpoint depends on PubSub, so spin that up first if it isn't already
+# running.
+{:ok, _} = Application.ensure_all_started(:phoenix)
+{:ok, _} = Application.ensure_all_started(:phoenix_live_view)
+{:ok, _} = PhoenixKitDocumentCreator.Test.Endpoint.start_link()
 
 # `PhoenixKit.PubSubHelper.broadcast/2` derives its PubSub server from the
 # host app's config; tests run without a parent app, so start the fallback

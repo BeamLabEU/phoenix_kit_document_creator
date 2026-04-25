@@ -45,6 +45,12 @@ defmodule PhoenixKitDocumentCreator do
     Settings.get_boolean_setting("document_creator_enabled", false)
   rescue
     _ -> false
+  catch
+    # During test sandbox shutdown the pool checkout exits with
+    # `"owner #PID<...> exited"` — `rescue` doesn't catch :exit signals.
+    # Without this clause, a 1-in-N suite run flakes on the next test
+    # that calls `enabled?/0` from a process the sandbox no longer owns.
+    :exit, _ -> false
   end
 
   @impl PhoenixKit.Module

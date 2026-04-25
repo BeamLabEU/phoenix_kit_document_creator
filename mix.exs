@@ -60,7 +60,11 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       # Code quality
       {:ex_doc, "~> 0.39", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+
+      # Test-only — `Phoenix.LiveViewTest` 1.1+ uses LazyHTML for parsing
+      # rendered HTML; without this the LV smoke tests crash on import.
+      {:lazy_html, "~> 0.1", only: :test}
     ]
   end
 
