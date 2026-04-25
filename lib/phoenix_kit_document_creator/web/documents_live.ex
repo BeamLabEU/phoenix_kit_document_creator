@@ -608,7 +608,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             {if @live_action == :templates, do: gettext("Templates"), else: gettext("Documents")}
           </h1>
           <div class="flex gap-2">
-            <button class="btn btn-ghost btn-sm" phx-click="refresh" disabled={@loading}>
+            <button
+              class="btn btn-ghost btn-sm"
+              phx-click="refresh"
+              disabled={@loading}
+              phx-disable-with={gettext("Refreshing…")}
+            >
               <span :if={@loading} class="loading loading-spinner loading-xs" />
               <span :if={not @loading} class="hero-arrow-path w-4 h-4" />
             </button>
@@ -815,6 +820,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           phx-click="unfiled_action"
           phx-value-action="current"
           disabled={@unfiled_working}
+          phx-disable-with={gettext("Working…")}
         >
           {gettext("Set This As Correct Location")}
         </button>
@@ -824,6 +830,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           phx-click="unfiled_action"
           phx-value-action="documents"
           disabled={@unfiled_working}
+          phx-disable-with={gettext("Working…")}
         >
           {gettext("Move To Documents")}
         </button>
@@ -833,6 +840,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           phx-click="unfiled_action"
           phx-value-action="templates"
           disabled={@unfiled_working}
+          phx-disable-with={gettext("Working…")}
         >
           {gettext("Move To Templates")}
         </button>
@@ -992,6 +1000,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               phx-click="export_pdf"
               phx-value-id={file["id"]}
               phx-value-name={file["name"]}
+              phx-disable-with={gettext("Exporting…")}
             >
               <span class="hero-arrow-down-tray w-3 h-3" /> {gettext("PDF")}
             </button>
@@ -1001,6 +1010,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 phx-click="restore"
                 phx-value-id={file["id"]}
                 title={gettext("Restore")}
+                phx-disable-with={gettext("Restoring…")}
               >
                 <span class="hero-arrow-uturn-left w-3 h-3" />
               </button>
@@ -1009,6 +1019,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 class="btn btn-ghost btn-xs py-2 text-error"
                 phx-click="delete"
                 phx-value-id={file["id"]}
+                phx-disable-with={gettext("Deleting…")}
               >
                 <span class="hero-trash w-3 h-3" />
               </button>
@@ -1092,6 +1103,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                     phx-value-id={file["id"]}
                     phx-value-name={file["name"]}
                     title={gettext("Export PDF")}
+                    phx-disable-with={gettext("Exporting…")}
                   >
                     <span class="hero-arrow-down-tray w-3.5 h-3.5" />
                   </button>
@@ -1101,6 +1113,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                       phx-click="restore"
                       phx-value-id={file["id"]}
                       title={gettext("Restore")}
+                      phx-disable-with={gettext("Restoring…")}
                     >
                       <span class="hero-arrow-uturn-left w-3.5 h-3.5" />
                       <span class="text-xs">{gettext("Restore")}</span>
@@ -1111,6 +1124,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                       phx-click="delete"
                       phx-value-id={file["id"]}
                       title={gettext("Delete")}
+                      phx-disable-with={gettext("Deleting…")}
                     >
                       <span class="hero-trash w-3.5 h-3.5" />
                     </button>

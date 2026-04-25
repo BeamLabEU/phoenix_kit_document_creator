@@ -397,7 +397,11 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
               {gettext("Click the path button to browse your Google Drive. Deleted items go to subfolders inside the deleted folder. Folders are created automatically if they don't exist.")}
             </p>
 
-            <button type="submit" class="btn btn-primary btn-sm">
+            <button
+              type="submit"
+              class="btn btn-primary btn-sm"
+              phx-disable-with={gettext("Saving…")}
+            >
               {gettext("Save Folder Settings")}
             </button>
           </form>
