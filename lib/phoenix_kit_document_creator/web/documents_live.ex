@@ -163,16 +163,29 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     spec = action_spec(action, is_template)
 
     socket =
-      case spec.backend.(file_id, actor_opts(socket)) do
-        :ok ->
-          broadcast_files_changed()
+      try do
+        case spec.backend.(file_id, actor_opts(socket)) do
+          :ok ->
+            broadcast_files_changed()
 
-          socket
-          |> apply_optimistic_move(file_id, spec)
-          |> put_flash(:info, spec.success)
+            socket
+            |> apply_optimistic_move(file_id, spec)
+            |> put_flash(:info, spec.success)
 
-        {:error, reason} ->
-          Logger.error("#{action} failed for #{file_id}: #{inspect(reason)}")
+          {:error, reason} ->
+            Logger.error("#{action} failed for #{file_id}: #{inspect(reason)}")
+            assign(socket, error: spec.failure)
+        end
+      rescue
+        # External Drive/Docs API call can raise — keep the LV alive and
+        # show the user a translated failure flash. Without this, the LV
+        # crashes and `pending_files` is wedged on remount.
+        e ->
+          Logger.error(
+            "#{action} crashed for #{file_id}: #{Exception.message(e)} | " <>
+              Exception.format(:error, e, __STACKTRACE__)
+          )
+
           assign(socket, error: spec.failure)
       end
 
@@ -180,8 +193,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
      assign(socket, pending_files: MapSet.delete(socket.assigns.pending_files, file_id))}
   end
 
-  # Catch-all to avoid crashing on unexpected messages
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  # Catch-all to avoid crashing on unexpected messages. Logs at :debug so
+  # the noise stays out of prod logs but stray messages are still
+  # observable when debugging — silently dropping them was the prior
+  # behaviour and made unexpected PubSub or test fixtures hard to trace.
+  def handle_info(msg, socket) do
+    Logger.debug("DocumentCreator.DocumentsLive: ignoring unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   defp load_thumbnails_async(files) do
     Documents.fetch_thumbnails_async(files, self())
