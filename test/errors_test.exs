@@ -68,7 +68,7 @@ defmodule PhoenixKitDocumentCreator.ErrorsTest do
           data: %{},
           params: %{}
         }
-        |> Map.put(:errors, [name: {"can't be blank", [validation: :required]}])
+        |> Map.put(:errors, name: {"can't be blank", [validation: :required]})
 
       result = Errors.message(changeset)
       assert result =~ "name"

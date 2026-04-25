@@ -2,6 +2,7 @@ defmodule PhoenixKitDocumentCreator.Integration.ActivityLoggingTest do
   use PhoenixKitDocumentCreator.DataCase, async: false
 
   alias PhoenixKitDocumentCreator.Documents
+  alias PhoenixKitDocumentCreator.Test.Repo, as: TestRepo
 
   # Per-action pinning tests. These actions are callable from a context
   # function that doesn't depend on a live Google Drive client — the
@@ -13,10 +14,7 @@ defmodule PhoenixKitDocumentCreator.Integration.ActivityLoggingTest do
 
   setup do
     # Make sure no prior test rows leak in via the shared sandbox.
-    PhoenixKitDocumentCreator.Test.Repo.delete_all(
-      "phoenix_kit_activities",
-      log: false
-    )
+    TestRepo.delete_all("phoenix_kit_activities", log: false)
 
     :ok
   end

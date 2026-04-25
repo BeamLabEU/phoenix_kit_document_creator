@@ -25,8 +25,7 @@ config :phoenix_kit, url_prefix: "/"
 # uses in production — this is an ad-hoc shim for the LV smoke tests.
 config :phoenix_kit_document_creator, PhoenixKitDocumentCreator.Test.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
-  secret_key_base:
-    "+W4z6L3kQ7rRnJW3VbZkV2kqKmF5LrPoT6qDyPzYx9GdN3TfV1eA1CxRn+8wCSdh",
+  secret_key_base: "+W4z6L3kQ7rRnJW3VbZkV2kqKmF5LrPoT6qDyPzYx9GdN3TfV1eA1CxRn+8wCSdh",
   server: false,
   live_view: [signing_salt: "doc-creator-test-lv-salt"]
 
