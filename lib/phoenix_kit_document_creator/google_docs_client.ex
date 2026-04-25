@@ -94,7 +94,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         {:error, :not_found}
 
       {:ok, %{body: body}} ->
-        {:error, "Folder search failed: #{inspect(body)}"}
+        log_drive_error("folder search failed", body)
+        {:error, :folder_search_failed}
 
       {:error, _} = err ->
         err
@@ -112,9 +113,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     body = if parent, do: Map.put(body, :parents, [parent]), else: body
 
     case authenticated_request(:post, "#{@drive_base}/files", json: body) do
-      {:ok, %{status: status, body: %{"id" => id}}} when status in 200..299 -> {:ok, id}
-      {:ok, %{body: body}} -> {:error, "Create folder failed: #{inspect(body)}"}
-      {:error, _} = err -> err
+      {:ok, %{status: status, body: %{"id" => id}}} when status in 200..299 ->
+        {:ok, id}
+
+      {:ok, %{body: body}} ->
+        log_drive_error("create folder failed", body)
+        {:error, :create_folder_failed}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -377,7 +384,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         {:ok, %{doc_id: doc_id, name: file["name"], url: get_edit_url(doc_id)}}
 
       {:ok, %{body: body}} ->
-        {:error, "Create document failed: #{inspect(body)}"}
+        log_drive_error("create document failed", body)
+        {:error, :create_document_failed}
 
       {:error, _} = err ->
         err
@@ -458,13 +466,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
                params: [addParents: to_folder_id, removeParents: remove],
                json: %{}
              ) do
-          {:ok, %{status: status}} when status in 200..299 -> :ok
-          {:ok, %{body: body}} -> {:error, "Move failed: #{inspect(body)}"}
-          {:error, _} = err -> err
+          {:ok, %{status: status}} when status in 200..299 ->
+            :ok
+
+          {:ok, %{body: body}} ->
+            log_drive_error("move failed", body)
+            {:error, :move_failed}
+
+          {:error, _} = err ->
+            err
         end
 
       {:ok, %{body: body}} ->
-        {:error, "Failed to get file parents: #{inspect(body)}"}
+        log_drive_error("get file parents failed", body)
+        {:error, :get_file_parents_failed}
 
       {:error, _} = err ->
         err
@@ -479,9 +494,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       body = if parent, do: Map.put(body, :parents, [parent]), else: body
 
       case authenticated_request(:post, "#{@drive_base}/files/#{fid}/copy", json: body) do
-        {:ok, %{status: status, body: %{"id" => new_id}}} when status in 200..299 -> {:ok, new_id}
-        {:ok, %{body: body}} -> {:error, "Copy failed: #{inspect(body)}"}
-        {:error, _} = err -> err
+        {:ok, %{status: status, body: %{"id" => new_id}}} when status in 200..299 ->
+          {:ok, new_id}
+
+        {:ok, %{body: body}} ->
+          log_drive_error("copy failed", body)
+          {:error, :copy_failed}
+
+        {:error, _} = err ->
+          err
       end
     end
   end
@@ -492,9 +513,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       case authenticated_request(:get, "#{@drive_base}/files/#{fid}/export",
              params: [mimeType: "application/pdf"]
            ) do
-        {:ok, %{status: 200, body: body}} when is_binary(body) -> {:ok, body}
-        {:ok, %{body: body}} -> {:error, "PDF export failed: #{inspect(body)}"}
-        {:error, _} = err -> err
+        {:ok, %{status: 200, body: body}} when is_binary(body) ->
+          {:ok, body}
+
+        {:ok, %{body: body}} ->
+          log_drive_error("PDF export failed", body)
+          {:error, :pdf_export_failed}
+
+        {:error, _} = err ->
+          err
       end
     end
   end
@@ -512,7 +539,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           {:error, :no_thumbnail}
 
         {:ok, %{body: body}} ->
-          {:error, "Failed to get thumbnail link: #{inspect(body)}"}
+          log_drive_error("get thumbnail link failed", body)
+          {:error, :thumbnail_link_failed}
 
         {:error, _} = err ->
           err
@@ -530,10 +558,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         {:ok, "data:#{content_type};base64,#{Base.encode64(body)}"}
 
       {:ok, %{status: status}} ->
-        {:error, "Thumbnail fetch returned #{status}"}
+        Logger.warning("[DocumentCreator] thumbnail fetch returned non-200 | status=#{status}")
+        {:error, :thumbnail_fetch_failed}
 
       {:error, exception} ->
-        {:error, "Thumbnail fetch failed: #{Exception.message(exception)}"}
+        Logger.warning(
+          "[DocumentCreator] thumbnail fetch failed | message=#{Exception.message(exception)}"
+        )
+
+        {:error, :thumbnail_fetch_failed}
     end
   end
 
@@ -586,4 +619,28 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   defp extract_content_type(_), do: "image/png"
+
+  # Truncated logger for Drive API failure responses. The Drive/Docs API
+  # error body can include the full request URL, the file ID, and a
+  # multi-line error message — useful for debugging but a security and
+  # log-bloat concern when shipped at scale. Truncate to a fixed length
+  # so the call site is observable without leaking gigabytes when an
+  # endpoint returns a giant payload.
+  @drive_log_body_limit 500
+
+  defp log_drive_error(label, body) do
+    Logger.warning(
+      "[DocumentCreator] #{label} | body=#{truncate_inspect(body, @drive_log_body_limit)}"
+    )
+  end
+
+  defp truncate_inspect(value, limit) do
+    inspected = inspect(value, limit: :infinity, printable_limit: limit)
+
+    if String.length(inspected) > limit do
+      String.slice(inspected, 0, limit) <> "…(truncated)"
+    else
+      inspected
+    end
+  end
 end

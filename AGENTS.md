@@ -4,6 +4,19 @@
 
 Elixir library (Hex package) that adds document template management and PDF generation to PhoenixKit apps via Google Docs API. Templates and documents live in Google Drive. Variables use `{{ placeholder }}` syntax and are substituted via the Docs API. PDF export uses the Drive API export endpoint.
 
+## What This Module Does NOT Have (by design)
+
+The Google Docs pivot in PR #2 deliberately took several capabilities off the table. Don't reintroduce them without first checking with Max:
+
+- **No local rich-text editor.** Editing happens in Google Docs. Earlier iterations shipped GrapesJS / TipTap / similar — all removed. If a feature seems to want a local editor, it's almost certainly the wrong shape.
+- **No local PDF rendering.** PDFs are exported via the Drive API. No ChromicPDF, no Gotenberg, no Chrome dependency. Headers/footers/page-size/orientation are the responsibility of the Google Doc template, not this module.
+- **No HeaderFooter feature module.** The `Schemas.HeaderFooter` schema is a tombstone for a deprecated header/footer storage scheme; headers and footers live in the Google Doc itself now.
+- **No own Ecto repo.** Uses the host app's repo via `PhoenixKit.RepoHelper.repo()`. Don't add a dedicated repo here.
+- **No own migrations directory.** Tables `phoenix_kit_doc_templates` / `phoenix_kit_doc_documents` / `phoenix_kit_doc_headers_footers` are created by core `phoenix_kit` versioned migrations (V86 + V94). Schema changes — including dropping legacy `content_html`/`content_css`/`content_native`/`header_uuid`/`footer_uuid` columns — happen in core, not here.
+- **No periodic sync scheduler / Oban worker.** Sync runs on demand from the LiveView and via PubSub fan-out. If a consumer needs scheduled refresh, that's a host-app concern, not a feature of this module.
+- **No retry/backoff layer over the Drive API client.** `Integrations.authenticated_request/4` handles 401 token refresh; everything else surfaces as `{:error, _}` to the caller. Adding a Google-specific retry policy is feature work that hasn't been requested.
+- **No telemetry hooks.** None planned; if usage shape changes and observability becomes load-bearing, this gets revisited.
+
 ## Tech Stack
 
 - **Language**: Elixir ~> 1.15
@@ -245,7 +258,6 @@ PR review files go in `dev_docs/pull_requests/{year}/{pr_number}-{slug}/` direct
 
 - **Replace the bespoke `Web.Components.CreateDocumentModal` with `PhoenixKitWeb.Components.Core.Modal`** — the Core modal already handles Escape-key dismissal, backdrop click, slot-based title/actions, and width presets. The current custom markup duplicates daisyUI modal classes and diverges from every other module's modal UX.
 
-- **`detect_variables/1` writes to the Template table (`variables` column) but does not emit an activity-feed entry.** Other mutating context functions all log via `log_activity/1` — this one is an outlier. Either log it as `"template.variables_detected"` with the extracted keys as metadata, or add a comment explaining why it's considered a cache update rather than a user action.
 
 ## External Dependencies
 

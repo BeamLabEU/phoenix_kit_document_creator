@@ -1162,6 +1162,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "Detect `{{ variables }}` in a Google Doc's text content."
+  # No activity log entry: this is a cache update (variables are derived
+  # from the Doc's text and re-detected every time the modal selects a
+  # template). Treating each detection as a user action would flood the
+  # activity feed with one row per template-pick. The mutating writes
+  # that *consume* the detected variables — `create_document_from_template`,
+  # `register_existing_*` — log activity at the right granularity.
   @spec detect_variables(String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def detect_variables(file_id) when is_binary(file_id) do
     case GoogleDocsClient.get_document_text(file_id) do
