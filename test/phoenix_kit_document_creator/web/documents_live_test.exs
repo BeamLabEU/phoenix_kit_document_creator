@@ -66,4 +66,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert Process.alive?(view.pid)
     end
   end
+
+  # NOTE on the connected-branch toolbar: When Google IS connected, mount
+  # renders the action toolbar (Refresh / New Template / New Document /
+  # export_pdf / restore / delete / unfiled_action) — every async-triggering
+  # button there carries phx-disable-with from the C5 sweep. The
+  # connected-branch render is gated on `Documents.list_*_from_db`
+  # querying real Drive-mirror rows; exercising it from a test needs
+  # a Req.Test-style HTTP stub layer that doesn't exist yet (same
+  # blocker that prevents per-action pinning for `template.created`,
+  # `document.deleted`, etc.). The modal pin via `render_component`
+  # in `create_document_modal_test.exs` covers `modal_create_blank`
+  # and `modal_create_from_template` — the async-button paths that
+  # don't depend on the toolbar render. The toolbar's phx-disable-with
+  # attrs are read directly from `lib/.../web/documents_live.ex` —
+  # they're pinned by code-review, not by an LV smoke assertion.
 end

@@ -47,8 +47,13 @@ repo_available =
     try do
       {:ok, _} = TestRepo.start_link()
 
-      # Enable uuid-ossp extension
+      # Enable uuid-ossp + pgcrypto extensions. pgcrypto provides
+      # `gen_random_bytes()` which `uuid_generate_v7()` calls below;
+      # without it any insert into a table that defaults its uuid column
+      # to `uuid_generate_v7()` raises `function gen_random_bytes does
+      # not exist`.
       TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
       # Create uuid_generate_v7() function (normally created by PhoenixKit V40 migration)
       TestRepo.query!("""
