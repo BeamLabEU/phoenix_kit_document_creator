@@ -151,6 +151,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Walk a path like "clients/active/templates", creating folders as needed.
   Returns `{:ok, leaf_folder_id}`.
   """
+  @spec ensure_folder_path(String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
   def ensure_folder_path(path, opts \\ []) do
     parent = Keyword.get(opts, :parent, "root")
     segments = path |> String.split("/") |> Enum.reject(&(&1 == ""))
@@ -164,6 +166,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Get configured folder paths and names from Settings, with defaults."
+  @spec get_folder_config() :: map()
   def get_folder_config do
     creds = Settings.get_json_setting(@folder_settings_key, %{})
 
@@ -207,6 +210,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Looks for folders by name in Drive root, creating them if they don't exist.
   Caches results in Settings.
   """
+  @spec discover_folders() :: %{
+          templates_folder_id: String.t() | nil,
+          documents_folder_id: String.t() | nil,
+          deleted_templates_folder_id: String.t() | nil,
+          deleted_documents_folder_id: String.t() | nil
+        }
   def discover_folders do
     config = get_folder_config()
 
@@ -267,6 +276,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Get cached folder IDs from Settings, or discover them."
+  @spec get_folder_ids() :: map()
   def get_folder_ids do
     case parse_cached_folder_ids(Settings.get_json_setting(@folder_settings_key, nil)) do
       {:ok, ids} -> ids
@@ -275,12 +285,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "The Settings key used for folder configuration."
+  @spec folder_settings_key() :: String.t()
   def folder_settings_key, do: @folder_settings_key
 
   @doc """
   List subfolders within a parent folder (non-recursive, fully paginated).
   Returns `{:ok, [%{"id" => ..., "name" => ...}]}`.
   """
+  @spec list_subfolders(String.t()) :: {:ok, [map()]} | {:error, term()}
   def list_subfolders(parent_id \\ "root"), do: DriveWalker.list_folders(parent_id)
 
   @doc """
@@ -291,9 +303,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   For recursive traversal across subfolders, use
   `PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker.walk_tree/2`.
   """
+  @spec list_folder_files(String.t()) :: {:ok, [map()]} | {:error, term()}
   def list_folder_files(folder_id), do: DriveWalker.list_files(folder_id)
 
   @doc "Get the Google Drive folder URL."
+  @spec get_folder_url(term()) :: String.t() | nil
   def get_folder_url(folder_id) when is_binary(folder_id) and folder_id != "" do
     "https://drive.google.com/drive/folders/#{folder_id}"
   end
@@ -301,6 +315,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def get_folder_url(_), do: nil
 
   @doc "Fetch Google Drive file metadata needed for sync classification."
+  @spec file_status(term()) ::
+          {:ok, %{trashed: boolean(), parents: [String.t()]}}
+          | {:ok, :not_found}
+          | {:error, :invalid_file_id | term()}
   def file_status(file_id) when is_binary(file_id) and file_id != "" do
     with {:ok, fid} <- validate_file_id(file_id) do
       case authenticated_request(:get, "#{@drive_base}/files/#{fid}",
@@ -328,6 +346,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def file_status(_), do: {:error, :invalid_file_id}
 
   @doc "Resolve the current parent folder and path for a Drive file."
+  @spec file_location(term()) ::
+          {:ok, %{folder_id: String.t(), path: String.t(), trashed: boolean()}}
+          | {:error, :invalid_file_id | :not_found | term()}
   def file_location(file_id) when is_binary(file_id) and file_id != "" do
     case file_status(file_id) do
       {:ok, %{parents: parents} = meta} ->
@@ -381,6 +402,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # ===========================================================================
 
   @doc "Create a new blank Google Doc in a specific folder."
+  @spec create_document(String.t(), keyword()) ::
+          {:ok, %{doc_id: String.t(), name: String.t(), url: String.t() | nil}}
+          | {:error, :create_document_failed | term()}
   def create_document(title, opts \\ []) do
     parent = Keyword.get(opts, :parent)
 
@@ -402,6 +426,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Read a Google Doc's full content."
+  @spec get_document(String.t()) :: {:ok, map()} | {:error, term()}
   def get_document(doc_id) do
     with {:ok, fid} <- validate_file_id(doc_id) do
       authenticated_request(:get, "#{@docs_base}/documents/#{fid}")
@@ -409,6 +434,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Send a batchUpdate request to a Google Doc."
+  @spec batch_update(String.t(), [map()]) :: {:ok, map()} | {:error, term()}
   def batch_update(doc_id, requests) when is_list(requests) do
     with {:ok, fid} <- validate_file_id(doc_id) do
       authenticated_request(:post, "#{@docs_base}/documents/#{fid}:batchUpdate",
@@ -421,6 +447,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Replace all `{{variable}}` placeholders in a Google Doc.
   Keys are wrapped in `{{ }}` automatically.
   """
+  @spec replace_all_text(String.t(), map()) :: {:ok, map()} | {:error, term()}
   def replace_all_text(doc_id, variables) when is_map(variables) do
     requests =
       Enum.map(variables, fn {key, value} ->
@@ -436,6 +463,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Extract plain text content from a Google Doc (for variable detection)."
+  @spec get_document_text(String.t()) :: {:ok, String.t()} | {:error, term()}
   def get_document_text(doc_id) do
     case get_document(doc_id) do
       {:ok, %{body: body}} ->
@@ -457,6 +485,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # ===========================================================================
 
   @doc "Move a file to a different folder in Google Drive."
+  @spec move_file(String.t(), String.t()) ::
+          :ok | {:error, :invalid_file_id | :move_failed | :get_file_parents_failed | term()}
   def move_file(file_id, to_folder_id) do
     with {:ok, fid} <- validate_file_id(file_id),
          {:ok, _tid} <- validate_file_id(to_folder_id) do
@@ -496,6 +526,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Copy a file in Google Drive. Returns the new file's ID."
+  @spec copy_file(String.t(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, :invalid_file_id | :copy_failed | term()}
   def copy_file(file_id, new_name, opts \\ []) do
     with {:ok, fid} <- validate_file_id(file_id) do
       parent = Keyword.get(opts, :parent)
@@ -517,6 +549,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Export a Google Doc as PDF. Returns `{:ok, pdf_binary}`."
+  @spec export_pdf(String.t()) ::
+          {:ok, binary()} | {:error, :invalid_file_id | :pdf_export_failed | term()}
   def export_pdf(doc_id) do
     with {:ok, fid} <- validate_file_id(doc_id) do
       case authenticated_request(:get, "#{@drive_base}/files/#{fid}/export",
@@ -536,6 +570,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Fetch a document thumbnail as a base64 data URI via the Drive API."
+  @spec fetch_thumbnail(term()) ::
+          {:ok, String.t()}
+          | {:error,
+             :no_doc_id
+             | :no_thumbnail
+             | :thumbnail_link_failed
+             | :thumbnail_fetch_failed
+             | :invalid_file_id
+             | term()}
   def fetch_thumbnail(doc_id) when is_binary(doc_id) and doc_id != "" do
     with {:ok, fid} <- validate_file_id(doc_id) do
       case authenticated_request(:get, "#{@drive_base}/files/#{fid}",
@@ -580,6 +623,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc "Get the edit URL for a Google Doc."
+  @spec get_edit_url(term()) :: String.t() | nil
   def get_edit_url(doc_id) when is_binary(doc_id) and doc_id != "" do
     "https://docs.google.com/document/d/#{doc_id}/edit"
   end
@@ -594,6 +638,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # Public so `GoogleDocsClient.DriveWalker` can reuse the same auth +
   # auto-refresh path without duplicating credential plumbing. Not part of
   # the public API — may change without notice.
+  @spec authenticated_request(atom(), String.t(), keyword()) ::
+          {:ok, term()} | {:error, term()}
   def authenticated_request(method, url, opts \\ []) do
     Integrations.authenticated_request(active_provider_key(), method, url, opts)
   end
@@ -607,6 +653,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @valid_file_id_pattern ~r/\A[\w-]+\z/
 
   @doc "Validate a Google Drive file/folder ID. Returns `{:ok, id}` or `{:error, :invalid_file_id}`."
+  @spec validate_file_id(term()) :: {:ok, String.t()} | {:error, :invalid_file_id}
   def validate_file_id(id) when is_binary(id) and id != "" do
     if Regex.match?(@valid_file_id_pattern, id), do: {:ok, id}, else: {:error, :invalid_file_id}
   end
