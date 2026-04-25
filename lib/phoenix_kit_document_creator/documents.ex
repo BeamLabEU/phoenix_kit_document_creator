@@ -1228,14 +1228,36 @@ defmodule PhoenixKitDocumentCreator.Documents do
   @doc """
   Fetch thumbnails for a list of Drive files asynchronously.
 
-  Spawns a task per file that sends `{:thumbnail_result, file_id, data_uri}`
-  back to the caller. Also persists thumbnails to the DB.
+  Spawns a single supervised parent task under `PhoenixKit.TaskSupervisor`
+  that fans out via `Task.async_stream/3` with a bounded `max_concurrency`
+  so opening a folder with hundreds of files doesn't fire hundreds of
+  simultaneous Drive requests. Each completion sends `{:thumbnail_result,
+  file_id, data_uri}` back to `caller_pid` and persists the thumbnail to
+  the DB. The parent is `restart: :temporary` so it dies cleanly if the
+  caller LV closes mid-fetch — but in-flight persists still complete.
   """
+  @thumbnail_concurrency 8
+  @thumbnail_task_timeout :timer.seconds(30)
+
   @spec fetch_thumbnails_async([map()], pid()) :: :ok
   def fetch_thumbnails_async(files, caller_pid) when is_list(files) do
-    Enum.each(files, fn file ->
-      Task.start(fn -> fetch_and_notify_thumbnail(file["id"], caller_pid) end)
-    end)
+    Task.Supervisor.start_child(
+      PhoenixKit.TaskSupervisor,
+      fn ->
+        files
+        |> Task.async_stream(
+          fn file -> fetch_and_notify_thumbnail(file["id"], caller_pid) end,
+          max_concurrency: @thumbnail_concurrency,
+          ordered: false,
+          on_timeout: :kill_task,
+          timeout: @thumbnail_task_timeout
+        )
+        |> Stream.run()
+      end,
+      restart: :temporary
+    )
+
+    :ok
   end
 
   defp fetch_and_notify_thumbnail(file_id, caller_pid) do
