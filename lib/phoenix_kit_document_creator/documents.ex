@@ -226,7 +226,20 @@ defmodule PhoenixKitDocumentCreator.Documents do
       :ok
     else
       reason ->
-        Logger.error("Document Creator sync_from_drive failed: #{inspect(reason)}")
+        # Pull the folder IDs from `get_folder_ids/0` again so the log
+        # captures which folder was being walked when the failure
+        # surfaced. Without this, "sync_from_drive failed: {:error, _}"
+        # gives ops nothing to grep — it's the only signal we have when
+        # a sync fails (no per-file activity row is written on failure).
+        ids = get_folder_ids()
+
+        Logger.error(
+          "Document Creator sync_from_drive failed | " <>
+            "templates_folder_id=#{inspect(ids[:templates_folder_id])} | " <>
+            "documents_folder_id=#{inspect(ids[:documents_folder_id])} | " <>
+            "reason=#{inspect(reason)}"
+        )
+
         {:error, :sync_failed}
     end
   end
@@ -566,6 +579,16 @@ defmodule PhoenixKitDocumentCreator.Documents do
       })
       |> repo().insert()
 
+    base_metadata = %{
+      "name" => doc_name,
+      "google_doc_id" => new_doc_id,
+      "template_google_doc_id" => template_file_id,
+      "template_uuid" => template_uuid,
+      "variables_used" => Map.keys(variable_values),
+      "folder_id" => target.folder_id,
+      "path" => target.path
+    }
+
     case result do
       {:ok, _record} ->
         log_activity(%{
@@ -573,23 +596,35 @@ defmodule PhoenixKitDocumentCreator.Documents do
           mode: "manual",
           actor_uuid: opts[:actor_uuid],
           resource_type: "document",
-          metadata: %{
-            "name" => doc_name,
-            "google_doc_id" => new_doc_id,
-            "template_google_doc_id" => template_file_id,
-            "template_uuid" => template_uuid,
-            "variables_used" => Map.keys(variable_values),
-            "folder_id" => target.folder_id,
-            "path" => target.path
-          }
+          metadata: base_metadata
         })
 
       {:error, changeset} ->
-        Logger.error("Failed to persist document from template: #{inspect(changeset.errors)}")
+        # Drive succeeded; DB cache write failed. Log the activity row
+        # anyway with `db_pending: true` so the audit feed reflects the
+        # user-initiated action — without this, an admin could create
+        # 100 documents during a DB hiccup and have zero activity log
+        # entries (the next sync will upsert the records but with the
+        # auto-mode `sync.completed` event, not the manual one).
+        Logger.error(
+          "Document Creator: persist document from template failed | " <>
+            "google_doc_id=#{new_doc_id} | template_uuid=#{template_uuid} | " <>
+            "errors=#{inspect(changeset.errors)}"
+        )
+
+        log_activity(%{
+          action: "document.created_from_template",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "document",
+          metadata: Map.put(base_metadata, "db_pending", true)
+        })
     end
 
-    # Return success even if DB insert failed — the Drive doc exists
-    # and the next sync will pick it up
+    # Return success even if the DB cache write failed — the Drive doc
+    # exists and the next sync will reconcile it. The user-facing flow
+    # works either way (they get the URL and edit in Google Docs); the
+    # `db_pending` activity flag preserves auditability.
     {:ok, %{doc_id: new_doc_id, url: GoogleDocsClient.get_edit_url(new_doc_id)}}
   end
 

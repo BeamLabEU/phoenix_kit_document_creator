@@ -22,37 +22,24 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    google_connected =
-      case GoogleDocsClient.connection_status() do
-        {:ok, _} -> true
-        _ -> false
-      end
-
-    # Load from DB immediately (fast, no API call)
-    {templates, documents, trashed_templates, trashed_documents} =
-      if google_connected do
-        {Documents.list_templates_from_db(), Documents.list_documents_from_db(),
-         Documents.list_trashed_templates_from_db(), Documents.list_trashed_documents_from_db()}
-      else
-        {[], [], [], []}
-      end
-
-    # Pre-load cached thumbnails from DB
-    all_ids =
-      Enum.map(templates ++ documents ++ trashed_templates ++ trashed_documents, & &1["id"])
-
-    cached_thumbnails =
-      if all_ids != [], do: Documents.load_cached_thumbnails(all_ids), else: %{}
-
-    db_empty = templates == [] and documents == []
-
+    # Subscribe BEFORE the initial DB read so a `:files_changed` broadcast
+    # arriving between the read and the subscribe doesn't get dropped on
+    # the floor — without this, an admin who creates a file at the same
+    # moment another admin is mounting would have their broadcast vanish
+    # and the second admin's list would stay stale until the next 2-minute
+    # poll fires. The cost of subscribing first is at most one extra sync
+    # in the rare race where a broadcast does land between subscribe and
+    # read — `within_cooldown?/1` already gates the resulting sync.
     if connected?(socket) do
       PhoenixKit.PubSubHelper.subscribe(@pubsub_topic)
+    end
 
-      if google_connected do
-        send(self(), :sync_from_drive)
-        :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
-      end
+    google_connected = google_connected?()
+    initial = load_initial_state(google_connected)
+
+    if connected?(socket) and google_connected do
+      send(self(), :sync_from_drive)
+      :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
     end
 
     {:ok,
@@ -60,14 +47,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        page_title: gettext("Document Creator"),
        view_mode: "cards",
        google_connected: google_connected,
-       templates: templates,
-       documents: documents,
-       trashed_templates: trashed_templates,
-       trashed_documents: trashed_documents,
+       templates: initial.templates,
+       documents: initial.documents,
+       trashed_templates: initial.trashed_templates,
+       trashed_documents: initial.trashed_documents,
        status_mode: "active",
        pending_files: MapSet.new(),
-       thumbnails: cached_thumbnails,
-       loading: google_connected and db_empty,
+       thumbnails: initial.cached_thumbnails,
+       loading: google_connected and initial.db_empty,
        last_loaded_at: nil,
        error: nil,
        # Modal state
@@ -80,6 +67,38 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        unfiled_file: nil,
        unfiled_working: false
      )}
+  end
+
+  defp google_connected? do
+    case GoogleDocsClient.connection_status() do
+      {:ok, _} -> true
+      _ -> false
+    end
+  end
+
+  defp load_initial_state(google_connected) do
+    {templates, documents, trashed_templates, trashed_documents} =
+      if google_connected do
+        {Documents.list_templates_from_db(), Documents.list_documents_from_db(),
+         Documents.list_trashed_templates_from_db(), Documents.list_trashed_documents_from_db()}
+      else
+        {[], [], [], []}
+      end
+
+    all_ids =
+      Enum.map(templates ++ documents ++ trashed_templates ++ trashed_documents, & &1["id"])
+
+    cached_thumbnails =
+      if all_ids != [], do: Documents.load_cached_thumbnails(all_ids), else: %{}
+
+    %{
+      templates: templates,
+      documents: documents,
+      trashed_templates: trashed_templates,
+      trashed_documents: trashed_documents,
+      cached_thumbnails: cached_thumbnails,
+      db_empty: templates == [] and documents == []
+    }
   end
 
   # ── Sync from Drive ──────────────────────────────────────────────

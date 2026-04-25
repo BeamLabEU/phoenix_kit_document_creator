@@ -70,9 +70,10 @@ defmodule PhoenixKitDocumentCreator do
   @impl PhoenixKit.Module
   def version, do: "0.2.7"
 
-  # Migrations are handled by PhoenixKit core (V86).
-  # @impl PhoenixKit.Module
-  # def migration_module, do: nil
+  # No `migration_module/0` override — migrations are handled by
+  # PhoenixKit core (V86 + V94 create the doc tables; this module owns
+  # no migrations of its own). The `PhoenixKit.Module` behaviour treats
+  # the callback as optional, so omitting it is the canonical pattern.
 
   @impl PhoenixKit.Module
   def permission_metadata do

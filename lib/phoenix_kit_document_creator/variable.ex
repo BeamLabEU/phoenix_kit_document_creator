@@ -35,10 +35,6 @@ defmodule PhoenixKitDocumentCreator.Variable do
 
   def extract_variables(_), do: []
 
-  @doc false
-  @deprecated "Use extract_variables/1 instead"
-  def extract_from_html(text), do: extract_variables(text)
-
   @doc """
   Builds Variable structs from a list of variable names, guessing types from names.
   """

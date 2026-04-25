@@ -602,7 +602,49 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   def fetch_thumbnail(_), do: {:error, :no_doc_id}
 
-  defp fetch_thumbnail_image(url) do
+  # SSRF guard. The `thumbnailLink` URL comes from the Drive API response,
+  # but a compromised network path or a misconfigured proxy could
+  # substitute it with a URL pointing at internal infrastructure
+  # (cloud-metadata endpoints at 169.254.169.254, internal admin panels
+  # at 10/172/192.x, localhost). Reject anything that isn't on Google's
+  # public thumbnail CDN before we pass the URL to `Req.get/1`.
+  @thumbnail_host_suffixes [".googleusercontent.com", ".google.com"]
+
+  defp fetch_thumbnail_image(url) when is_binary(url) do
+    case validate_thumbnail_url(url) do
+      :ok ->
+        do_fetch_thumbnail_image(url)
+
+      {:error, reason} ->
+        Logger.warning(
+          "[DocumentCreator] thumbnail URL rejected | reason=#{reason} | url=#{inspect(url)}"
+        )
+
+        {:error, :thumbnail_fetch_failed}
+    end
+  end
+
+  @doc false
+  # Public-but-not-API: exposed so tests can pin the SSRF guard
+  # without driving a full HTTP fetch. The accepted suffixes are an
+  # allowlist of Google's public thumbnail CDNs.
+  @spec validate_thumbnail_url(String.t()) :: :ok | {:error, :invalid_url | :host_not_allowed}
+  def validate_thumbnail_url(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        if Enum.any?(@thumbnail_host_suffixes, &String.ends_with?(host, &1)),
+          do: :ok,
+          else: {:error, :host_not_allowed}
+
+      _ ->
+        {:error, :invalid_url}
+    end
+  end
+
+  def validate_thumbnail_url(_), do: {:error, :invalid_url}
+
+  defp do_fetch_thumbnail_image(url) do
     case Req.get(url) do
       {:ok, %{status: 200, body: body, headers: headers}} ->
         content_type = extract_content_type(headers)
