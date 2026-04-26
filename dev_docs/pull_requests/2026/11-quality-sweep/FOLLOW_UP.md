@@ -229,26 +229,103 @@ pass review)" above; real findings closed in this batch.
 - 5/5 stable runs at 247
 - `mix format` + `mix credo --strict` + `mix dialyzer` — all clean
 
-## Surfaced as a question (not deferred)
+## Batch 4 — happy-path coverage push 2026-04-26
 
-Per `feedback_followup_is_after_action.md` ("deferred items get
-surfaced as questions, not parked in FOLLOW_UP"):
+User confirmed the Batch 4 retrofit was worth doing on the basis that
+it adds zero deps and converts the test suite from "structural
+baseline" to "real refactor safety net" for the 11 previously-
+uncovered drive-bound actions.
 
-- **Req.Test stub retrofit + Drive-bound action LV mount tests** —
-  enables happy-path coverage of the 11 drive-bound actions
-  documented at `test/integration/activity_logging_test.exs:125-137`
-  (`template.created` / `document.created` / `*.deleted` / `*.restored`
-  / `*.exported_pdf` / `sync.completed` / etc.). Pattern is the AI
-  module's Batch 4 (`e4519a8` + `5bbf273`) — `Application.get_env(:phoenix_kit_document_creator, :req_options, [])`
-  threaded through `GoogleDocsClient.http_*` entry points so tests
-  route HTTP through `Req.Test` plug stubs without external traffic.
-  Production behaviour unchanged when the config is absent. Estimated
-  ~60–90 min based on AI module precedent (which produced +299 tests
-  and lifted coverage 36.96% → 90.93%). Open question for Max — this
-  is a separate batch in scope, comparable to the AI module's Batch 4
-  coverage push.
+### Production change
+
+**`GoogleDocsClient` — backend resolver.** Two HTTP entry points now
+read optional config so tests can route through stubs:
+
+- `defp integrations_backend/0` resolves `Application.get_env(:phoenix_kit_document_creator, :integrations_backend, PhoenixKit.Integrations)`. The three call sites (`get_credentials`, `get_integration`, `authenticated_request`) dispatch through this resolver. Production reads the default when the config is absent — net diff is one line per call site (3 lines added, alias removed).
+- `do_fetch_thumbnail_image/1` (Drive thumbnail CDN) appends `Application.get_env(:phoenix_kit_document_creator, :req_options, [])` to its `Req.get/2` opts (the AI module's pattern, applicable here for the one direct `Req.get/1` call that bypasses `authenticated_request`). Production behaviour unchanged when config absent — net diff is one line.
+
+Combined production diff: ~+8 lines, -1 alias.
+
+### Test infrastructure
+
+**`test/support/stub_integrations.ex`** (new module). Implements the
+three `PhoenixKit.Integrations` callbacks used by `GoogleDocsClient`
+(`get_integration/1`, `get_credentials/1`, `authenticated_request/4`)
+with an in-process ETS-backed dispatcher. ETS instead of process
+dictionary because the LiveView runs in a different process from the
+test process — `Req.Test.allow/3` would be the equivalent for direct
+Req calls; for an Integrations-level stub, a public ETS table works
+without touching core. Tests opt in via:
+
+```elixir
+Application.put_env(
+  :phoenix_kit_document_creator,
+  :integrations_backend,
+  PhoenixKitDocumentCreator.Test.StubIntegrations
+)
+
+StubIntegrations.connected!("admin@example.com")
+StubIntegrations.stub_request(:post, "/drive/v3/files",
+  {:ok, %{status: 200, body: %{"id" => "drv-doc-1"}}})
+```
+
+Unstubbed requests return `{:error, {:unstubbed_request, method, url}}`
+so tests fail loudly when a code path makes an unexpected outbound
+request.
+
+### Tests added (Batch 4)
+
+- **`test/integration/drive_bound_actions_test.exs`** (new file) — 10
+  context-layer happy-path tests pinning `:ok`-branch activity logs
+  for: `create_template`, `create_template` (5xx error path),
+  `create_document`, `delete_document`, `delete_template`,
+  `restore_document`, `restore_template`, `export_pdf`,
+  `create_document_from_template`, `set_correct_location`. Each
+  asserts `actor_uuid` + safe metadata + that the success path does
+  NOT carry the `db_pending: true` flag (so a future regression that
+  takes the error branch instead of success can't pass silently).
+- **`test/phoenix_kit_document_creator/web/documents_live_test.exs`**
+  +3 LV-layer tests pinning `actor_opts(socket)` threading on the
+  `new_template`, `new_blank_document`, and `delete` handlers. Without
+  these, dropping `actor_opts(socket)` from `documents_live.ex:248`
+  silently regresses to `actor_uuid: nil` — the prior smoke test that
+  asserted "page renders" would still pass.
+
+### Files touched (Batch 4)
+
+| File | Change |
+|------|--------|
+| `lib/phoenix_kit_document_creator/google_docs_client.ex` | resolver `integrations_backend/0` + `req_options` config-read on the thumbnail Req.get |
+| `test/support/stub_integrations.ex` | new — ETS-backed Integrations stub |
+| `test/integration/drive_bound_actions_test.exs` | new — 10 context-layer happy-path tests |
+| `test/phoenix_kit_document_creator/web/documents_live_test.exs` | +3 LV-layer actor_uuid threading tests |
+
+### Verification (Batch 4)
+
+- `mix compile --warnings-as-errors` — clean
+- `mix test` — 247 → 260 tests (+13), 0 failures
+- 5/5 stable runs at 260
+- `mix format` + `mix credo --strict` + `mix dialyzer` — all clean
+
+### What's still uncovered (deliberate)
+
+- The OAuth-flow LV (`google_oauth_settings_live.ex`) — exercising the
+  `Integrations.list_connections/1` / `Integrations.connected?/1`
+  paths there would need a separate stub layer (the LV calls
+  Integrations directly, not via the resolver). Out of scope for this
+  pass — that LV is for OAuth setup and isn't in any test-covered
+  user-action path that mutates state.
+- The `sync_from_drive` flow + `DriveWalker` — both are Drive-bound
+  but the resolver-injected backend doesn't cover the
+  `discover_folders/0` → `ensure_folder_path/1` chain (which calls
+  `find_folder_by_name` → `authenticated_request`, but the cache-seed
+  helper `stub_folder_resolution!/0` short-circuits the whole branch
+  in tests, so the chain never executes). The walker has its own
+  unit-style tests in `test/google_docs_client_test.exs`. A fuller
+  sync-end-to-end test would exercise `Documents.sync_from_drive/0`
+  with a live `list_folder_files`/`list_subfolders` stub map — also
+  out of scope here.
 
 ## Open
 
-None — all real findings closed in Batches 2 + 3. Drive-bound
-happy-path coverage waits on the question above.
+None — all findings closed across Batches 2 + 3 + 4.

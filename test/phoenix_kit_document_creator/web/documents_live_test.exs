@@ -67,18 +67,130 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
     end
   end
 
-  # NOTE on the connected-branch toolbar: When Google IS connected, mount
-  # renders the action toolbar (Refresh / New Template / New Document /
-  # export_pdf / restore / delete / unfiled_action) — every async-triggering
-  # button there carries phx-disable-with from the C5 sweep. The
-  # connected-branch render is gated on `Documents.list_*_from_db`
-  # querying real Drive-mirror rows; exercising it from a test needs
-  # a Req.Test-style HTTP stub layer that doesn't exist yet (same
-  # blocker that prevents per-action pinning for `template.created`,
-  # `document.deleted`, etc.). The modal pin via `render_component`
-  # in `create_document_modal_test.exs` covers `modal_create_blank`
-  # and `modal_create_from_template` — the async-button paths that
-  # don't depend on the toolbar render. The toolbar's phx-disable-with
-  # attrs are read directly from `lib/.../web/documents_live.ex` —
-  # they're pinned by code-review, not by an LV smoke assertion.
+  describe "connected-state actions thread actor_uuid through to context" do
+    # Pinning tests for `actor_opts(socket)` threading on every
+    # async/destructive `phx-click` handler. Without these, dropping
+    # `actor_opts(socket)` from `handle_event("new_template", ...)` (or
+    # any sibling) silently regresses to `actor_uuid: nil` on the
+    # activity row — the LV smoke test that asserts `render() =~ "..."`
+    # would still pass.
+    #
+    # The Batch 4 retrofit on `GoogleDocsClient.integrations_backend/0`
+    # plus the `Test.StubIntegrations` module makes the connected-state
+    # mount + Drive-bound clicks reachable without external HTTP.
+
+    alias PhoenixKitDocumentCreator.Test.StubIntegrations
+
+    setup do
+      previous = Application.get_env(:phoenix_kit_document_creator, :integrations_backend)
+
+      Application.put_env(
+        :phoenix_kit_document_creator,
+        :integrations_backend,
+        StubIntegrations
+      )
+
+      StubIntegrations.reset!()
+      StubIntegrations.connected!("admin@example.com")
+
+      # Seed the folder cache so `get_folder_ids/0` doesn't kick off
+      # discover_folders/0's parallel API requests.
+      PhoenixKit.Settings.update_json_setting_with_module(
+        "document_creator_folders",
+        %{
+          "templates_folder_id" => "stub-templates",
+          "documents_folder_id" => "stub-documents",
+          "deleted_templates_folder_id" => "stub-deleted-templates",
+          "deleted_documents_folder_id" => "stub-deleted-documents"
+        },
+        "document_creator"
+      )
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:phoenix_kit_document_creator, :integrations_backend, previous),
+          else: Application.delete_env(:phoenix_kit_document_creator, :integrations_backend)
+      end)
+
+      :ok
+    end
+
+    test "new_template threads actor_uuid through to template.created activity row",
+         %{conn: conn} do
+      scope = fake_scope()
+      actor_uuid = scope.user.uuid
+
+      StubIntegrations.stub_request(
+        :post,
+        "/drive/v3/files",
+        {:ok, %{status: 200, body: %{"id" => "lv-tpl-1", "name" => "Untitled Template"}}}
+      )
+
+      conn = put_test_scope(conn, scope)
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
+
+      render_click(view, "new_template")
+
+      assert_activity_logged("template.created",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"google_doc_id" => "lv-tpl-1"}
+      )
+    end
+
+    test "new_blank_document threads actor_uuid through to document.created activity row",
+         %{conn: conn} do
+      scope = fake_scope()
+      actor_uuid = scope.user.uuid
+
+      StubIntegrations.stub_request(
+        :post,
+        "/drive/v3/files",
+        {:ok, %{status: 200, body: %{"id" => "lv-doc-1", "name" => "Untitled Document"}}}
+      )
+
+      conn = put_test_scope(conn, scope)
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      render_click(view, "new_blank_document")
+
+      assert_activity_logged("document.created",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"google_doc_id" => "lv-doc-1"}
+      )
+    end
+
+    test "perform_file_action :delete threads actor_uuid through", %{conn: conn} do
+      scope = fake_scope()
+      actor_uuid = scope.user.uuid
+      file_id = "lv-doc-del"
+
+      # GET parents → PATCH addParents+removeParents (the move_file flow).
+      StubIntegrations.stub_request(
+        :get,
+        ~r{/drive/v3/files/#{Regex.escape(file_id)}(\?|$)},
+        {:ok, %{status: 200, body: %{"id" => file_id, "parents" => ["src"]}}}
+      )
+
+      StubIntegrations.stub_request(
+        :patch,
+        "/drive/v3/files/#{file_id}",
+        {:ok, %{status: 200, body: %{"id" => file_id}}}
+      )
+
+      conn = put_test_scope(conn, scope)
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      # The toolbar grid only renders rows for files in `@documents`,
+      # but the `:perform_file_action` handler is the unified entry
+      # point — drive it directly so the test doesn't depend on the
+      # connected-mount fixture seeding rows in the right shape.
+      send(view.pid, {:perform_file_action, :delete, file_id})
+      _ = render(view)
+
+      assert_activity_logged("document.deleted",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"google_doc_id" => file_id}
+      )
+    end
+  end
 end

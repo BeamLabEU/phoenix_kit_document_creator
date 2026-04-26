@@ -26,7 +26,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   require Logger
 
-  alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
   alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
 
@@ -36,6 +35,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @docs_base "https://docs.googleapis.com/v1"
   @drive_base "https://www.googleapis.com/drive/v3"
+
+  # All access to `PhoenixKit.Integrations` flows through this resolver so
+  # tests can route the three call sites (get_credentials/1,
+  # get_integration/1, authenticated_request/4) through a stub module
+  # without external HTTP traffic. Production reads the default
+  # (`PhoenixKit.Integrations`) when the config is absent — net diff is
+  # one line per call site.
+  defp integrations_backend do
+    Application.get_env(
+      :phoenix_kit_document_creator,
+      :integrations_backend,
+      PhoenixKit.Integrations
+    )
+  end
 
   # ===========================================================================
   # Credentials (delegated to PhoenixKit.Integrations)
@@ -53,13 +66,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @doc "Get stored OAuth credentials via PhoenixKit.Integrations."
   @spec get_credentials() :: {:ok, map()} | {:error, atom()}
   def get_credentials do
-    Integrations.get_credentials(active_provider_key())
+    integrations_backend().get_credentials(active_provider_key())
   end
 
   @doc "Check if connected. Returns `{:ok, %{email: email}}` or `{:error, reason}`."
   @spec connection_status() :: {:ok, %{email: String.t()}} | {:error, atom()}
   def connection_status do
-    case Integrations.get_integration(active_provider_key()) do
+    case integrations_backend().get_integration(active_provider_key()) do
       {:ok, data} ->
         email =
           get_in(data, ["metadata", "connected_email"]) ||
@@ -645,7 +658,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def validate_thumbnail_url(_), do: {:error, :invalid_url}
 
   defp do_fetch_thumbnail_image(url) do
-    case Req.get(url) do
+    # `:req_options` is empty in production. Tests opt in via
+    # `Application.put_env(:phoenix_kit_document_creator, :req_options,
+    # plug: {Req.Test, Stub})` to route through `Req.Test` stubs without
+    # external HTTP traffic — same pattern as the AI module's coverage
+    # push (e4519a8 + 5bbf273).
+    opts = Application.get_env(:phoenix_kit_document_creator, :req_options, [])
+
+    case Req.get(url, opts) do
       {:ok, %{status: 200, body: body, headers: headers}} ->
         content_type = extract_content_type(headers)
 
@@ -683,7 +703,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @spec authenticated_request(atom(), String.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def authenticated_request(method, url, opts \\ []) do
-    Integrations.authenticated_request(active_provider_key(), method, url, opts)
+    integrations_backend().authenticated_request(active_provider_key(), method, url, opts)
   end
 
   defp escape_query_value(value) do
