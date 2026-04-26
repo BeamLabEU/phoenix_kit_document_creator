@@ -121,34 +121,31 @@ Phase 2 closed the C12 deltas the original sweep predates:
   `:warning`). Pins both the survival-after-stray-message behaviour and
   the actual log line.
 
-### Skipped (with rationale)
+### Dismissed (re-classified after second-pass review)
+
+These items were initially flagged by C12 agents but, after verifying
+against AGENTS.md:472 ("agents overstate; verify before acting") and
+the surrounding code, are not real findings:
 
 - **Atom-bombing hardening at `google_oauth_settings_live.ex:226`** —
-  the `String.to_existing_atom(field)` call is gated by
+  `String.to_existing_atom(field)` is gated by
   `if field in @valid_path_fields` on the line immediately above. The
-  agent flagged this as theoretical ("if a future refactor removes the
-  guard"), not a live vulnerability. AGENTS.md:472 calls out this kind
-  of hypothetical narrowing as an overstatement to verify before
-  acting.
+  whitelist already mitigates the threat; the agent's concern was
+  hypothetical ("if a future refactor removes the guard").
 - **Broad `rescue _e ->` in `documents_live.ex:120-123` and `203-214`** —
-  both are around external Drive/Docs API calls and have explicit
-  comments justifying why catching everything is correct (sync mid-fail
-  is safe, file-action crash would wedge `pending_files` on remount).
-  AGENTS.md:472 lists this as a typical false positive — defensive
-  rescues around external-API calls are acceptable when the comment
-  documents the intent, which both already do.
+  both wrap external Drive/Docs API calls and carry explicit comments
+  justifying why catching everything is correct (sync mid-fail is
+  safe, file-action crash would wedge `pending_files` on remount).
+  AGENTS.md:472 lists this exact pattern as typical false-positive
+  noise.
 - **Hardcoded `secret_key_base` in `config/test.exs:28`** — test-only
-  config, not loaded in prod / dev. Acceptable for the same reason as
-  every other phoenix_kit module's test config.
-- **Status badge helper functions / Unicode + long-string edge tests**
-  — Batch 3 fix-everything candidates. Surfaced for Max if a fix-
-  everything pass is authorised; otherwise punted.
-- **Req.Test stubs to enable Drive-bound LV mount tests** — feature
-  work (test infra), not a pinning gap. The error-path coverage above
-  already pins the `db_pending: true` audit-row behaviour. Happy-path
-  per-action LV tests (`assert_activity_logged("template.created", ...)`)
-  remain dependent on a `Req.Test`-via-app-config retrofit on
-  `GoogleDocsClient`. Surfaced as Batch 3 candidate.
+  config, not loaded in prod / dev. Same shape as every other
+  phoenix_kit module's test config.
+- **`status_label/1` helper refactor** — current LV uses
+  `gettext("lost")` / `gettext("unfiled")` on literal strings, status
+  values are pinned by schema `validate_inclusion`. New statuses
+  would require a migration anyway — this is a refactor without
+  functional improvement.
 
 ### Files touched (Batch 2)
 
@@ -168,8 +165,90 @@ Phase 2 closed the C12 deltas the original sweep predates:
 - Pre-existing log noise (`Folder discovery failed: {:error, :not_configured}`)
   unchanged — Drive isn't configured in test env, expected
 
+## Batch 3 — fix-everything 2026-04-26
+
+User pushed back on the initial Batch 2 "Skipped (with rationale)"
+section, citing `feedback_followup_is_after_action.md`
+("FOLLOW_UP.md is an after-action report, not a TODO parking lot —
+we fix everything we find") and `feedback_review_verdicts.md`
+("never silently classify as resolved"). Re-classified each item:
+genuine dismissals moved to "Dismissed (re-classified after second-
+pass review)" above; real findings closed in this batch.
+
+### Real bug surfaced by edge-case testing
+
+- ~~**`Document.creation_changeset/2` and both `sync_changeset/2` (Document + Template) missing `validate_length(:name, max: 255)`**~~
+  — the full `Document.changeset/2` has it, but the upsert / register
+  paths use `creation_changeset/2` and `sync_changeset/2` which
+  skipped the validation. A 256-byte name therefore raised
+  `Ecto.Adapters.SQL` exceptions instead of returning `{:error, %Ecto.Changeset{}}`.
+  This is the canonical AGENTS.md "Coverage push pattern #1" trap —
+  tightening the changeset contract converts raises to clean error
+  tuples (a real behaviour improvement). Pinned by 5 new schema tests
+  (`Document.sync_changeset/2` + `Document.creation_changeset/2` +
+  `Template.sync_changeset/2` × {255-char boundary, 256-char rejection,
+  Unicode round-trip}) plus the integration tests below.
+
+### Edge-case tests added
+
+- **`Variable` helpers** (`test/phoenix_kit_document_creator_test.exs`):
+  6 new tests — duplicate dedup, malformed-placeholder rejection,
+  Unicode (ASCII-only `\w` regex behaviour pinned), non-binary input,
+  5K-char input, Unicode round-trip in `humanize/1`, empty list
+  in `build_definitions/1`.
+- **`register_existing_document/2`** (`test/integration/documents_test.exs`):
+  6 new tests — Unicode name round-trip, 256-char name rejection (now
+  a clean changeset error after the schema fix), 255-char boundary
+  acceptance, SQL-metacharacter literal handling, empty-name
+  normalize-step rejection (`{:error, :missing_name}` atom — pinned
+  the actual return shape so a future refactor that pushes this into
+  the changeset doesn't silently change the public API).
+- **`CreateDocumentModal`** (`test/phoenix_kit_document_creator/web/components/create_document_modal_test.exs`):
+  5 new tests — Unicode variable name rendering, multiline vs text
+  type rendering, long template name surfaces in form value,
+  `creating: true` disables the submit button, Cancel button does NOT
+  carry `phx-disable-with` (UI-state-only — pinning the rule
+  explicitly).
+
+### Files touched (Batch 3)
+
+| File | Change |
+|------|--------|
+| `lib/phoenix_kit_document_creator/schemas/document.ex` | added `validate_length(:name, min: 1, max: 255)` to `sync_changeset/2` and `creation_changeset/2` |
+| `lib/phoenix_kit_document_creator/schemas/template.ex` | added `validate_length(:name, min: 1, max: 255)` to `sync_changeset/2` |
+| `test/phoenix_kit_document_creator_test.exs` | +6 Variable edge-case tests |
+| `test/integration/documents_test.exs` | +6 register edge-case tests |
+| `test/schemas/document_test.exs` | +5 changeset length/Unicode tests |
+| `test/schemas/template_test.exs` | +3 sync_changeset tests |
+| `test/phoenix_kit_document_creator/web/components/create_document_modal_test.exs` | +5 modal validation tests |
+
+### Verification (Batch 3)
+
+- `mix compile --warnings-as-errors` — clean
+- `mix test` — 223 → 247 tests (+24), 0 failures
+- 5/5 stable runs at 247
+- `mix format` + `mix credo --strict` + `mix dialyzer` — all clean
+
+## Surfaced as a question (not deferred)
+
+Per `feedback_followup_is_after_action.md` ("deferred items get
+surfaced as questions, not parked in FOLLOW_UP"):
+
+- **Req.Test stub retrofit + Drive-bound action LV mount tests** —
+  enables happy-path coverage of the 11 drive-bound actions
+  documented at `test/integration/activity_logging_test.exs:125-137`
+  (`template.created` / `document.created` / `*.deleted` / `*.restored`
+  / `*.exported_pdf` / `sync.completed` / etc.). Pattern is the AI
+  module's Batch 4 (`e4519a8` + `5bbf273`) — `Application.get_env(:phoenix_kit_document_creator, :req_options, [])`
+  threaded through `GoogleDocsClient.http_*` entry points so tests
+  route HTTP through `Req.Test` plug stubs without external traffic.
+  Production behaviour unchanged when the config is absent. Estimated
+  ~60–90 min based on AI module precedent (which produced +299 tests
+  and lifted coverage 36.96% → 90.93%). Open question for Max — this
+  is a separate batch in scope, comparable to the AI module's Batch 4
+  coverage push.
+
 ## Open
 
-None. Items marked "skipped" above are documented with rationale; if
-Max authorises a Batch 3 fix-everything pass, the candidates surface
-as Req.Test stubs + status badge helpers + edge-case test coverage.
+None — all real findings closed in Batches 2 + 3. Drive-bound
+happy-path coverage waits on the question above.

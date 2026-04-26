@@ -113,6 +113,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     template
     |> cast(attrs, [:name, :google_doc_id, :status, :thumbnail, :variables, :path, :folder_id])
     |> validate_required([:name, :google_doc_id])
+    |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:status, @statuses)
   end
 end

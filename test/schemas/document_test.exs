@@ -175,6 +175,27 @@ defmodule PhoenixKitDocumentCreator.Schemas.DocumentTest do
 
       refute cs.valid?
     end
+
+    test "rejects name longer than 255 chars (clean error vs Postgres exception)" do
+      cs =
+        Document.sync_changeset(%Document{}, %{
+          name: String.duplicate("X", 256),
+          google_doc_id: "abc123"
+        })
+
+      refute cs.valid?
+      assert %{name: ["should be at most 255 character(s)"]} = errors_on(cs)
+    end
+
+    test "accepts a 255-char name (boundary)" do
+      cs =
+        Document.sync_changeset(%Document{}, %{
+          name: String.duplicate("a", 255),
+          google_doc_id: "abc123"
+        })
+
+      assert cs.valid?
+    end
   end
 
   describe "creation_changeset/2" do
@@ -208,6 +229,28 @@ defmodule PhoenixKitDocumentCreator.Schemas.DocumentTest do
     test "requires google_doc_id" do
       cs = Document.creation_changeset(%Document{}, %{name: "Doc"})
       refute cs.valid?
+    end
+
+    test "rejects name longer than 255 chars (clean error vs Postgres exception)" do
+      cs =
+        Document.creation_changeset(%Document{}, %{
+          name: String.duplicate("X", 256),
+          google_doc_id: "abc123"
+        })
+
+      refute cs.valid?
+      assert %{name: ["should be at most 255 character(s)"]} = errors_on(cs)
+    end
+
+    test "accepts Unicode in name (round-trips through changeset)" do
+      cs =
+        Document.creation_changeset(%Document{}, %{
+          name: "Café 報告 العربية",
+          google_doc_id: "abc123"
+        })
+
+      assert cs.valid?
+      assert Ecto.Changeset.get_change(cs, :name) == "Café 報告 العربية"
     end
   end
 

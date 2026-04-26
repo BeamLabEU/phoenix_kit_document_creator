@@ -57,4 +57,93 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModalTest do
       refute html =~ "modal-open"
     end
   end
+
+  describe "variables step rendering edge cases" do
+    test "renders Unicode variable names without crashing" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => "Café Report"},
+          variables: [
+            %{name: "客户_名称", label: "Client Name", type: :text},
+            %{name: "総合金額", label: "Total Amount", type: :currency}
+          ],
+          creating: false
+        )
+
+      assert html =~ "客户_名称"
+      assert html =~ "総合金額"
+    end
+
+    test "renders multiline variable as textarea, others as input" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => "T"},
+          variables: [
+            %{name: "description", label: "Description", type: :multiline},
+            %{name: "company", label: "Company", type: :text}
+          ],
+          creating: false
+        )
+
+      assert html =~ ~r/<textarea[^>]*name="var\[description\]"/
+      assert html =~ ~r/<input[^>]*name="var\[company\]"/
+    end
+
+    test "renders very long template name without truncation in form value" do
+      long_name = String.duplicate("a", 250)
+
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => long_name},
+          variables: [],
+          creating: false
+        )
+
+      # The pre-filled doc_name field surfaces the full template name —
+      # truncation belongs in the LV after submit, not in the modal.
+      assert html =~ long_name
+    end
+
+    test "creating=true disables the submit button (server-side guard)" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => "T"},
+          variables: [],
+          creating: true
+        )
+
+      # `disabled={@creating}` and `phx-disable-with` together: the
+      # client transition uses phx-disable-with text and the server-set
+      # `disabled` attribute survives a re-render.
+      assert html =~ ~r/type="submit"[^>]*disabled/
+    end
+
+    test "Cancel button does not have phx-disable-with (UI-state-only)" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => "T"},
+          variables: [],
+          creating: false
+        )
+
+      # Only async/destructive buttons need phx-disable-with. Cancel is
+      # a pure UI-state toggle and doesn't.
+      refute html =~ ~r/phx-click="modal_close"[^>]*phx-disable-with/
+    end
+  end
 end
