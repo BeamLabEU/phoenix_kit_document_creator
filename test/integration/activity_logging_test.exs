@@ -115,13 +115,132 @@ defmodule PhoenixKitDocumentCreator.Integration.ActivityLoggingTest do
     end
   end
 
+  describe "error-path activity logging (Drive not configured)" do
+    # In test env, OAuth is not connected and the folder cache is empty,
+    # so every Drive-bound mutation hits its `{:error, :*_not_found}`
+    # or `{:error, :not_configured}` branch deterministically without an
+    # HTTP stub. These tests pin the user-attempt audit row that lands
+    # with `db_pending: true` even when the operation didn't complete —
+    # without this, a Drive outage would erase every admin click from
+    # the activity feed.
+
+    test "create_template logs db_pending row when templates folder not found" do
+      actor_uuid = Ecto.UUID.generate()
+
+      assert {:error, _} = Documents.create_template("Failed Tpl", actor_uuid: actor_uuid)
+
+      row =
+        assert_activity_logged("template.created",
+          actor_uuid: actor_uuid,
+          metadata_has: %{"db_pending" => true, "name" => "Failed Tpl"}
+        )
+
+      assert row.resource_type == "template"
+      refute Map.has_key?(row.metadata, "google_doc_id")
+    end
+
+    test "create_document logs db_pending row when documents folder not found" do
+      actor_uuid = Ecto.UUID.generate()
+
+      assert {:error, _} = Documents.create_document("Failed Doc", actor_uuid: actor_uuid)
+
+      row =
+        assert_activity_logged("document.created",
+          actor_uuid: actor_uuid,
+          metadata_has: %{"db_pending" => true, "name" => "Failed Doc"}
+        )
+
+      assert row.resource_type == "document"
+    end
+
+    test "delete_document logs db_pending row when deleted folder not found" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "doc-#{System.unique_integer([:positive])}"
+
+      assert {:error, _} = Documents.delete_document(file_id, actor_uuid: actor_uuid)
+
+      assert_activity_logged("document.deleted",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"db_pending" => true, "google_doc_id" => file_id}
+      )
+    end
+
+    test "delete_template logs db_pending row when deleted folder not found" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "tpl-#{System.unique_integer([:positive])}"
+
+      assert {:error, _} = Documents.delete_template(file_id, actor_uuid: actor_uuid)
+
+      assert_activity_logged("template.deleted",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"db_pending" => true, "google_doc_id" => file_id}
+      )
+    end
+
+    test "restore_document logs db_pending row when live folder not found" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "doc-#{System.unique_integer([:positive])}"
+
+      assert {:error, _} = Documents.restore_document(file_id, actor_uuid: actor_uuid)
+
+      assert_activity_logged("document.restored",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"db_pending" => true, "google_doc_id" => file_id}
+      )
+    end
+
+    test "restore_template logs db_pending row when live folder not found" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "tpl-#{System.unique_integer([:positive])}"
+
+      assert {:error, _} = Documents.restore_template(file_id, actor_uuid: actor_uuid)
+
+      assert_activity_logged("template.restored",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"db_pending" => true, "google_doc_id" => file_id}
+      )
+    end
+
+    test "export_pdf logs db_pending row when Drive not configured" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "doc-#{System.unique_integer([:positive])}"
+
+      assert {:error, _} =
+               Documents.export_pdf(file_id, actor_uuid: actor_uuid, name: "Failed.pdf")
+
+      row =
+        assert_activity_logged("document.exported_pdf",
+          actor_uuid: actor_uuid,
+          metadata_has: %{
+            "db_pending" => true,
+            "google_doc_id" => file_id,
+            "name" => "Failed.pdf"
+          }
+        )
+
+      # PII/size audit: error path never logs a phantom size_bytes.
+      refute Map.has_key?(row.metadata, "size_bytes")
+    end
+
+    test "set_correct_location logs db_pending row when Drive not configured" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "doc-#{System.unique_integer([:positive])}"
+
+      assert {:error, _} = Documents.set_correct_location(file_id, actor_uuid: actor_uuid)
+
+      assert_activity_logged("file.location_accepted",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"db_pending" => true, "google_doc_id" => file_id}
+      )
+    end
+  end
+
   describe "actions not pinned at the integration layer" do
     # Listing here so future sweep planners can find them. These actions
-    # all flow through a GoogleDocsClient call that needs a Req.Test
-    # stub to test deterministically. Wiring that in is feature work
-    # (test infra), not a pinning gap that would let a regression slip
-    # through silently — every action site is reachable from an LV
-    # smoke test or a manual browser run.
+    # all flow through a successful GoogleDocsClient call that needs a
+    # Req.Test stub to test deterministically. Error-path coverage is
+    # pinned above (deterministic without HTTP stubs because the
+    # GoogleDocsClient hits `{:error, :not_configured}` in test env).
     @drive_bound_actions [
       "template.created",
       "document.created",

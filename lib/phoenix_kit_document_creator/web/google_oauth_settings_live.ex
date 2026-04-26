@@ -8,6 +8,8 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   use Phoenix.LiveView
   use Gettext, backend: PhoenixKitWeb.Gettext
 
+  require Logger
+
   import PhoenixKitWeb.Components.Core.IntegrationPicker
 
   alias PhoenixKit.Integrations
@@ -269,8 +271,16 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   end
 
   # Catch-all so unexpected messages (Task supervisor signals, stray
-  # PubSub traffic, etc.) don't crash the LiveView.
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  # PubSub traffic, etc.) don't crash the LiveView. Logs at :debug so
+  # stray messages are still observable when debugging without polluting
+  # prod logs.
+  def handle_info(msg, socket) do
+    Logger.debug(
+      "DocumentCreator.GoogleOAuthSettingsLive: ignoring unexpected message: #{inspect(msg)}"
+    )
+
+    {:noreply, socket}
+  end
 
   # ── Render ─────────────────────────────────────────────────────────
 

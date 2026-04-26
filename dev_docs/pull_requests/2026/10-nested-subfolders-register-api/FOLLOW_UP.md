@@ -5,7 +5,7 @@ CLAUDE_REVIEW.md flagged six items across correctness and coverage. Audit:
 ## Fixed (pre-existing)
 
 - ~~**Group A #1 — `rescue _ -> nil` too broad in walker**~~ — narrowed to specific exception types in commit `becd95d` ("Harden test setup and narrow Documents.default_managed rescue").
-- ~~**Group A #2 — BFS queue O(n²) via list `++`**~~ — replaced with the `:queue` module in commit `56d5c66` ("Batch folder discovery in DriveWalker"). Verified: `GoogleDocsClient.DriveWalker.walk_tree/2` uses `:queue.in/2` / `:queue.out/1`.
+- ~~**Group A #2 — BFS queue O(n²) via list `++`**~~ — fixed in commit `56d5c66` ("Batch folder discovery in DriveWalker") by switching to level-based BFS with batched `'a' in parents or 'b' in parents …` queries, chunked at 40 IDs per request. Folder enumeration now costs `O(ceil(N / 40))` requests per level instead of `O(N)` sequential `list_folders` calls. (The original FOLLOW_UP text claimed an `:erlang :queue` module swap; that wording was incorrect — the actual fix uses level-batched chunking, which has the same O(N) effect without the queue ADT.) Verified during the 2026-04-26 re-validation against `lib/phoenix_kit_document_creator/google_docs_client/drive_walker.ex:117-144`.
 - ~~**Group A #3 — `test_helper.exs` missing `psql` guard**~~ — `try/rescue ErlangError` added around `System.cmd("psql", …)` in commit `becd95d`.
 - ~~**Group B #5 — Folder discovery batching**~~ — level-based BFS with batched `'a' in parents or 'b' in parents …` queries (chunked at 40 IDs per request). Verified in `DriveWalker.walk_tree/2` and `discover_subfolders/2`.
 

@@ -62,6 +62,22 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
+  # Log the user-initiated mutation even when it failed, so the audit
+  # feed shows the attempt. `db_pending: true` flags the row as not
+  # corresponding to a successful state change — without this, a Drive
+  # outage would leave admin-clicked deletes/exports/restores invisible
+  # in the activity log. Metadata stays minimal/PII-safe; the technical
+  # `reason` lives in the surrounding `Logger.error` already.
+  defp log_failed_mutation(action, resource_type, opts, base_metadata) do
+    log_activity(%{
+      action: action,
+      mode: "manual",
+      actor_uuid: opts[:actor_uuid],
+      resource_type: resource_type,
+      metadata: Map.put(base_metadata, "db_pending", true)
+    })
+  end
+
   # ===========================================================================
   # DB Listing (fast, no API calls)
   # ===========================================================================
@@ -451,10 +467,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
             {:ok, result}
 
           error ->
+            log_failed_mutation("template.created", "template", opts, %{"name" => name})
             error
         end
 
       _ ->
+        log_failed_mutation("template.created", "template", opts, %{"name" => name})
         {:error, :templates_folder_not_found}
     end
   end
@@ -488,10 +506,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
             {:ok, result}
 
           error ->
+            log_failed_mutation("document.created", "document", opts, %{"name" => name})
             error
         end
 
       _ ->
+        log_failed_mutation("document.created", "document", opts, %{"name" => name})
         {:error, :documents_folder_not_found}
     end
   end
@@ -960,9 +980,26 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
       :ok
     else
-      {:ok, %{trashed: true}} -> {:error, :file_trashed}
-      nil -> {:error, :not_found}
-      {:error, _} = err -> err
+      {:ok, %{trashed: true}} ->
+        log_failed_mutation("file.location_accepted", "file", opts, %{
+          "google_doc_id" => file_id
+        })
+
+        {:error, :file_trashed}
+
+      nil ->
+        log_failed_mutation("file.location_accepted", "file", opts, %{
+          "google_doc_id" => file_id
+        })
+
+        {:error, :not_found}
+
+      {:error, _} = err ->
+        log_failed_mutation("file.location_accepted", "file", opts, %{
+          "google_doc_id" => file_id
+        })
+
+        err
     end
   end
 
@@ -1073,6 +1110,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
 
       error ->
+        log_failed_mutation("document.deleted", "document", opts, %{"google_doc_id" => file_id})
         error
     end
   end
@@ -1099,6 +1137,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
 
       error ->
+        log_failed_mutation("template.deleted", "template", opts, %{"google_doc_id" => file_id})
         error
     end
   end
@@ -1149,6 +1188,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
 
       error ->
+        log_failed_mutation("document.restored", "document", opts, %{"google_doc_id" => file_id})
         error
     end
   end
@@ -1169,6 +1209,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
 
       error ->
+        log_failed_mutation("template.restored", "template", opts, %{"google_doc_id" => file_id})
         error
     end
   end
@@ -1258,6 +1299,11 @@ defmodule PhoenixKitDocumentCreator.Documents do
         result
 
       error ->
+        log_failed_mutation("document.exported_pdf", "document", opts, %{
+          "google_doc_id" => file_id,
+          "name" => opts[:name]
+        })
+
         error
     end
   end
