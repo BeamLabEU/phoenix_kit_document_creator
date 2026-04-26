@@ -109,6 +109,14 @@ Application.put_env(:phoenix_kit_document_creator, :test_repo_available, repo_av
 {:ok, _pid} = PhoenixKit.PubSub.Manager.start_link([])
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
 
+# `Documents.fetch_thumbnails_async/2` and other async paths spawn
+# children under `PhoenixKit.TaskSupervisor`. Without it started in
+# the test VM, those paths fail with `:noproc` exits during LV tests.
+case Task.Supervisor.start_link(name: PhoenixKit.TaskSupervisor) do
+  {:ok, _} -> :ok
+  {:error, {:already_started, _}} -> :ok
+end
+
 # Start the LiveView test endpoint (used by LV smoke tests). The
 # endpoint depends on PubSub, so spin that up first if it isn't already
 # running.

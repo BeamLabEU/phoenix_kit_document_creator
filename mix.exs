@@ -22,6 +22,20 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       # Dialyzer
       dialyzer: [plt_add_apps: [:phoenix_kit]],
 
+      # Coverage — exclude test-support modules (DataCase, TestRepo,
+      # Test.Endpoint, Test.Router, etc.) so the percentage reflects
+      # production-code coverage. The test-support modules ARE compiled
+      # under elixirc_paths(:test) but they exist to drive the suite,
+      # not to be tested themselves.
+      test_coverage: [
+        ignore_modules: [
+          ~r/^PhoenixKitDocumentCreator\.Test\./,
+          PhoenixKitDocumentCreator.DataCase,
+          PhoenixKitDocumentCreator.LiveCase,
+          PhoenixKitDocumentCreator.ActivityLogAssertions
+        ]
+      ],
+
       # Docs
       name: "PhoenixKitDocumentCreator",
       source_url: @source_url,
