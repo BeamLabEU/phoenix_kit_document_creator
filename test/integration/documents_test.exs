@@ -483,6 +483,86 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
 
         assert_receive {:files_changed, _}, 500
       end
+
+      # ── Edge cases on name field ────────────────────────────────────
+
+      test "accepts Unicode in name (round-trips through DB)" do
+        unique = System.unique_integer([:positive])
+        unicode_name = "Café 報告 العربية #{unique}"
+
+        assert {:ok, record} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d_unicode_#{unique}",
+                   name: unicode_name
+                 })
+
+        assert record.name == unicode_name
+      end
+
+      test "rejects name exceeding 255 chars with a changeset error" do
+        long_name = String.duplicate("X", 256)
+
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d_long_#{System.unique_integer([:positive])}",
+                   name: long_name
+                 })
+
+        assert cs.errors[:name]
+      end
+
+      test "accepts a 255-char name (boundary)" do
+        boundary_name = String.duplicate("a", 255)
+        unique = System.unique_integer([:positive])
+
+        assert {:ok, record} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d_max_#{unique}",
+                   name: boundary_name
+                 })
+
+        assert byte_size(record.name) == 255
+      end
+
+      test "treats SQL metacharacters in name as literal text (Ecto parameterises)" do
+        injection_attempt = "'; DROP TABLE phoenix_kit_doc_creator_documents; --"
+        unique = System.unique_integer([:positive])
+
+        assert {:ok, record} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d_sqlmeta_#{unique}",
+                   name: injection_attempt
+                 })
+
+        # The string round-trips literally; the table the injection
+        # tried to drop is still intact (the next register insert
+        # would fail otherwise).
+        assert record.name == injection_attempt
+
+        assert {:ok, _} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d_sqlmeta_after_#{unique}",
+                   name: "Survives"
+                 })
+      end
+
+      test "rejects empty name at the normalize step" do
+        # `normalize_register_attrs/1` rejects empty / nil names before
+        # the changeset is reached, returning a sentinel atom rather
+        # than a changeset. Pinning the actual return shape so a future
+        # refactor that pushes this into the changeset doesn't silently
+        # change the public API.
+        assert {:error, :missing_name} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d_empty_#{System.unique_integer([:positive])}",
+                   name: ""
+                 })
+
+        assert {:error, :missing_name} =
+                 Documents.register_existing_document(%{
+                   google_doc_id: "reg_d_nil_#{System.unique_integer([:positive])}"
+                 })
+      end
     end
 
     describe "register_existing_template/2" do

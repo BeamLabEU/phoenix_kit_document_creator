@@ -62,6 +62,22 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
+  # Log the user-initiated mutation even when it failed, so the audit
+  # feed shows the attempt. `db_pending: true` flags the row as not
+  # corresponding to a successful state change — without this, a Drive
+  # outage would leave admin-clicked deletes/exports/restores invisible
+  # in the activity log. Metadata stays minimal/PII-safe; the technical
+  # `reason` lives in the surrounding `Logger.error` already.
+  defp log_failed_mutation(action, resource_type, opts, base_metadata) do
+    log_activity(%{
+      action: action,
+      mode: "manual",
+      actor_uuid: opts[:actor_uuid],
+      resource_type: resource_type,
+      metadata: Map.put(base_metadata, "db_pending", true)
+    })
+  end
+
   # ===========================================================================
   # DB Listing (fast, no API calls)
   # ===========================================================================
@@ -226,7 +242,20 @@ defmodule PhoenixKitDocumentCreator.Documents do
       :ok
     else
       reason ->
-        Logger.error("Document Creator sync_from_drive failed: #{inspect(reason)}")
+        # Pull the folder IDs from `get_folder_ids/0` again so the log
+        # captures which folder was being walked when the failure
+        # surfaced. Without this, "sync_from_drive failed: {:error, _}"
+        # gives ops nothing to grep — it's the only signal we have when
+        # a sync fails (no per-file activity row is written on failure).
+        ids = get_folder_ids()
+
+        Logger.error(
+          "Document Creator sync_from_drive failed | " <>
+            "templates_folder_id=#{inspect(ids[:templates_folder_id])} | " <>
+            "documents_folder_id=#{inspect(ids[:documents_folder_id])} | " <>
+            "reason=#{inspect(reason)}"
+        )
+
         {:error, :sync_failed}
     end
   end
@@ -438,10 +467,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
             {:ok, result}
 
           error ->
+            log_failed_mutation("template.created", "template", opts, %{"name" => name})
             error
         end
 
       _ ->
+        log_failed_mutation("template.created", "template", opts, %{"name" => name})
         {:error, :templates_folder_not_found}
     end
   end
@@ -475,10 +506,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
             {:ok, result}
 
           error ->
+            log_failed_mutation("document.created", "document", opts, %{"name" => name})
             error
         end
 
       _ ->
+        log_failed_mutation("document.created", "document", opts, %{"name" => name})
         {:error, :documents_folder_not_found}
     end
   end
@@ -566,6 +599,16 @@ defmodule PhoenixKitDocumentCreator.Documents do
       })
       |> repo().insert()
 
+    base_metadata = %{
+      "name" => doc_name,
+      "google_doc_id" => new_doc_id,
+      "template_google_doc_id" => template_file_id,
+      "template_uuid" => template_uuid,
+      "variables_used" => Map.keys(variable_values),
+      "folder_id" => target.folder_id,
+      "path" => target.path
+    }
+
     case result do
       {:ok, _record} ->
         log_activity(%{
@@ -573,23 +616,35 @@ defmodule PhoenixKitDocumentCreator.Documents do
           mode: "manual",
           actor_uuid: opts[:actor_uuid],
           resource_type: "document",
-          metadata: %{
-            "name" => doc_name,
-            "google_doc_id" => new_doc_id,
-            "template_google_doc_id" => template_file_id,
-            "template_uuid" => template_uuid,
-            "variables_used" => Map.keys(variable_values),
-            "folder_id" => target.folder_id,
-            "path" => target.path
-          }
+          metadata: base_metadata
         })
 
       {:error, changeset} ->
-        Logger.error("Failed to persist document from template: #{inspect(changeset.errors)}")
+        # Drive succeeded; DB cache write failed. Log the activity row
+        # anyway with `db_pending: true` so the audit feed reflects the
+        # user-initiated action — without this, an admin could create
+        # 100 documents during a DB hiccup and have zero activity log
+        # entries (the next sync will upsert the records but with the
+        # auto-mode `sync.completed` event, not the manual one).
+        Logger.error(
+          "Document Creator: persist document from template failed | " <>
+            "google_doc_id=#{new_doc_id} | template_uuid=#{template_uuid} | " <>
+            "errors=#{inspect(changeset.errors)}"
+        )
+
+        log_activity(%{
+          action: "document.created_from_template",
+          mode: "manual",
+          actor_uuid: opts[:actor_uuid],
+          resource_type: "document",
+          metadata: Map.put(base_metadata, "db_pending", true)
+        })
     end
 
-    # Return success even if DB insert failed — the Drive doc exists
-    # and the next sync will pick it up
+    # Return success even if the DB cache write failed — the Drive doc
+    # exists and the next sync will reconcile it. The user-facing flow
+    # works either way (they get the URL and edit in Google Docs); the
+    # `db_pending` activity flag preserves auditability.
     {:ok, %{doc_id: new_doc_id, url: GoogleDocsClient.get_edit_url(new_doc_id)}}
   end
 
@@ -925,9 +980,26 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
       :ok
     else
-      {:ok, %{trashed: true}} -> {:error, :file_trashed}
-      nil -> {:error, :not_found}
-      {:error, _} = err -> err
+      {:ok, %{trashed: true}} ->
+        log_failed_mutation("file.location_accepted", "file", opts, %{
+          "google_doc_id" => file_id
+        })
+
+        {:error, :file_trashed}
+
+      nil ->
+        log_failed_mutation("file.location_accepted", "file", opts, %{
+          "google_doc_id" => file_id
+        })
+
+        {:error, :not_found}
+
+      {:error, _} = err ->
+        log_failed_mutation("file.location_accepted", "file", opts, %{
+          "google_doc_id" => file_id
+        })
+
+        err
     end
   end
 
@@ -1038,6 +1110,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
 
       error ->
+        log_failed_mutation("document.deleted", "document", opts, %{"google_doc_id" => file_id})
         error
     end
   end
@@ -1064,6 +1137,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
 
       error ->
+        log_failed_mutation("template.deleted", "template", opts, %{"google_doc_id" => file_id})
         error
     end
   end
@@ -1114,6 +1188,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
 
       error ->
+        log_failed_mutation("document.restored", "document", opts, %{"google_doc_id" => file_id})
         error
     end
   end
@@ -1134,6 +1209,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         :ok
 
       error ->
+        log_failed_mutation("template.restored", "template", opts, %{"google_doc_id" => file_id})
         error
     end
   end
@@ -1162,6 +1238,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # ===========================================================================
 
   @doc "Detect `{{ variables }}` in a Google Doc's text content."
+  # No activity log entry: this is a cache update (variables are derived
+  # from the Doc's text and re-detected every time the modal selects a
+  # template). Treating each detection as a user action would flood the
+  # activity feed with one row per template-pick. The mutating writes
+  # that *consume* the detected variables — `create_document_from_template`,
+  # `register_existing_*` — log activity at the right granularity.
   @spec detect_variables(String.t()) :: {:ok, [String.t()]} | {:error, term()}
   def detect_variables(file_id) when is_binary(file_id) do
     case GoogleDocsClient.get_document_text(file_id) do
@@ -1217,6 +1299,11 @@ defmodule PhoenixKitDocumentCreator.Documents do
         result
 
       error ->
+        log_failed_mutation("document.exported_pdf", "document", opts, %{
+          "google_doc_id" => file_id,
+          "name" => opts[:name]
+        })
+
         error
     end
   end
@@ -1228,14 +1315,36 @@ defmodule PhoenixKitDocumentCreator.Documents do
   @doc """
   Fetch thumbnails for a list of Drive files asynchronously.
 
-  Spawns a task per file that sends `{:thumbnail_result, file_id, data_uri}`
-  back to the caller. Also persists thumbnails to the DB.
+  Spawns a single supervised parent task under `PhoenixKit.TaskSupervisor`
+  that fans out via `Task.async_stream/3` with a bounded `max_concurrency`
+  so opening a folder with hundreds of files doesn't fire hundreds of
+  simultaneous Drive requests. Each completion sends `{:thumbnail_result,
+  file_id, data_uri}` back to `caller_pid` and persists the thumbnail to
+  the DB. The parent is `restart: :temporary` so it dies cleanly if the
+  caller LV closes mid-fetch — but in-flight persists still complete.
   """
+  @thumbnail_concurrency 8
+  @thumbnail_task_timeout :timer.seconds(30)
+
   @spec fetch_thumbnails_async([map()], pid()) :: :ok
   def fetch_thumbnails_async(files, caller_pid) when is_list(files) do
-    Enum.each(files, fn file ->
-      Task.start(fn -> fetch_and_notify_thumbnail(file["id"], caller_pid) end)
-    end)
+    Task.Supervisor.start_child(
+      PhoenixKit.TaskSupervisor,
+      fn ->
+        files
+        |> Task.async_stream(
+          fn file -> fetch_and_notify_thumbnail(file["id"], caller_pid) end,
+          max_concurrency: @thumbnail_concurrency,
+          ordered: false,
+          on_timeout: :kill_task,
+          timeout: @thumbnail_task_timeout
+        )
+        |> Stream.run()
+      end,
+      restart: :temporary
+    )
+
+    :ok
   end
 
   defp fetch_and_notify_thumbnail(file_id, caller_pid) do

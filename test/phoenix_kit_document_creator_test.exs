@@ -161,5 +161,53 @@ defmodule PhoenixKitDocumentCreatorTest do
       assert Variable.humanize("client_name") == "Client Name"
       assert Variable.humanize("amount") == "Amount"
     end
+
+    # ── Edge cases on Variable helpers ──────────────────────────────
+
+    test "extract_variables/1 deduplicates repeated names" do
+      vars = Variable.extract_variables("Hi {{ name }}, again {{ name }}, and {{ name }}.")
+      assert vars == ["name"]
+    end
+
+    test "extract_variables/1 ignores malformed placeholders" do
+      # Single brace, missing closing, hyphenated names (\w doesn't match `-`).
+      assert Variable.extract_variables("{ name }") == []
+      assert Variable.extract_variables("{{ name") == []
+      assert Variable.extract_variables("{{ first-name }}") == []
+    end
+
+    test "extract_variables/1 with non-ASCII content does not crash" do
+      # `\w` is ASCII-only in Erlang regex so Unicode identifiers like
+      # `{{ имя }}` or `{{ 名前 }}` aren't picked up. Pinning current
+      # behaviour so a future regex tightening doesn't silently regress
+      # ASCII parsing.
+      assert Variable.extract_variables("{{ имя }} and {{ name }} together") == ["name"]
+      assert Variable.extract_variables("{{ 名前 }}") == []
+    end
+
+    test "extract_variables/1 returns [] for non-binary input" do
+      assert Variable.extract_variables(:atom) == []
+      assert Variable.extract_variables(123) == []
+      assert Variable.extract_variables(%{}) == []
+    end
+
+    test "extract_variables/1 handles very long input" do
+      long_text = String.duplicate("filler ", 5_000) <> "{{ marker }}"
+      assert Variable.extract_variables(long_text) == ["marker"]
+    end
+
+    test "humanize/1 capitalises Unicode-leading words correctly" do
+      # `String.capitalize/1` is acceptable here because Variable names
+      # are programmatic identifiers (extracted from regex), not user-
+      # facing translated text. Pinning that the function doesn't crash
+      # on Unicode content even though the extractor wouldn't usually
+      # produce it.
+      assert Variable.humanize("café_total") == "Café Total"
+      assert Variable.humanize("") == ""
+    end
+
+    test "build_definitions/1 accepts empty list" do
+      assert Variable.build_definitions([]) == []
+    end
   end
 end

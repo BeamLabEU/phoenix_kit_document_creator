@@ -162,6 +162,34 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplateTest do
     end
   end
 
+  describe "sync_changeset/2" do
+    test "is valid with required fields" do
+      cs = Template.sync_changeset(%Template{}, %{name: "T", google_doc_id: "abc"})
+      assert cs.valid?
+    end
+
+    test "rejects name longer than 255 chars (clean error vs Postgres exception)" do
+      cs =
+        Template.sync_changeset(%Template{}, %{
+          name: String.duplicate("X", 256),
+          google_doc_id: "abc"
+        })
+
+      refute cs.valid?
+      assert %{name: ["should be at most 255 character(s)"]} = errors_on(cs)
+    end
+
+    test "accepts Unicode in name" do
+      cs =
+        Template.sync_changeset(%Template{}, %{
+          name: "Café 報告",
+          google_doc_id: "abc"
+        })
+
+      assert cs.valid?
+    end
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Regex.replace(~r"%{(\w+)}", msg, fn _, key ->

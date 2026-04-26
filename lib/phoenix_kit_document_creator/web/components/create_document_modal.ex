@@ -45,6 +45,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
       <button
         class="btn btn-outline btn-block justify-start gap-3"
         phx-click="modal_create_blank"
+        phx-disable-with={gettext("Creating…")}
       >
         <span class="hero-document-plus w-5 h-5" />
         {gettext("Blank Document")}
@@ -129,7 +130,12 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
 
       <div class="modal-action">
         <button class="btn btn-ghost btn-sm" type="button" phx-click="modal_close">{gettext("Cancel")}</button>
-        <button class="btn btn-primary btn-sm" type="submit" disabled={@creating}>
+        <button
+          class="btn btn-primary btn-sm"
+          type="submit"
+          disabled={@creating}
+          phx-disable-with={gettext("Creating…")}
+        >
           <span :if={@creating} class="loading loading-spinner loading-xs" />
           {if @creating, do: gettext("Creating..."), else: gettext("Create Document")}
         </button>

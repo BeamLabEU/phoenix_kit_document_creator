@@ -47,8 +47,13 @@ repo_available =
     try do
       {:ok, _} = TestRepo.start_link()
 
-      # Enable uuid-ossp extension
+      # Enable uuid-ossp + pgcrypto extensions. pgcrypto provides
+      # `gen_random_bytes()` which `uuid_generate_v7()` calls below;
+      # without it any insert into a table that defaults its uuid column
+      # to `uuid_generate_v7()` raises `function gen_random_bytes does
+      # not exist`.
       TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
+      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
       # Create uuid_generate_v7() function (normally created by PhoenixKit V40 migration)
       TestRepo.query!("""
@@ -95,9 +100,29 @@ repo_available =
 
 Application.put_env(:phoenix_kit_document_creator, :test_repo_available, repo_available)
 
+# Pin `PhoenixKit.Config.url_prefix/0` to "/" via :persistent_term so
+# tests that boot before any settings read get a stable value (the LV
+# routes use `Routes.path/1`, which reads this).
+:persistent_term.put(:phoenix_kit_url_prefix, "/")
+
 # Start minimal PhoenixKit services needed for tests
 {:ok, _pid} = PhoenixKit.PubSub.Manager.start_link([])
 {:ok, _pid} = PhoenixKit.ModuleRegistry.start_link([])
+
+# `Documents.fetch_thumbnails_async/2` and other async paths spawn
+# children under `PhoenixKit.TaskSupervisor`. Without it started in
+# the test VM, those paths fail with `:noproc` exits during LV tests.
+case Task.Supervisor.start_link(name: PhoenixKit.TaskSupervisor) do
+  {:ok, _} -> :ok
+  {:error, {:already_started, _}} -> :ok
+end
+
+# Start the LiveView test endpoint (used by LV smoke tests). The
+# endpoint depends on PubSub, so spin that up first if it isn't already
+# running.
+{:ok, _} = Application.ensure_all_started(:phoenix)
+{:ok, _} = Application.ensure_all_started(:phoenix_live_view)
+{:ok, _} = PhoenixKitDocumentCreator.Test.Endpoint.start_link()
 
 # `PhoenixKit.PubSubHelper.broadcast/2` derives its PubSub server from the
 # host app's config; tests run without a parent app, so start the fallback

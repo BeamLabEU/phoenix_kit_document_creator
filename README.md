@@ -209,6 +209,32 @@ Documents.documents_folder_url()
 Documents.broadcast_files_changed()
 ```
 
+### `PhoenixKitDocumentCreator.Errors` — error atom dispatcher
+
+Context and client functions return `{:error, :atom}` tuples — never raw
+strings. Translate at the UI / API boundary via `Errors.message/1`, which
+returns gettext-wrapped strings (translations live in core `phoenix_kit`):
+
+```elixir
+case Documents.create_template("Invoice", actor_uuid: uid) do
+  {:ok, template} -> ...
+  {:error, reason} ->
+    flash = PhoenixKitDocumentCreator.Errors.message(reason)
+    put_flash(socket, :error, flash)
+end
+```
+
+Atoms that flow out of the public API: `:templates_folder_not_found`,
+`:documents_folder_not_found`, `:invalid_parent_folder_id`,
+`:invalid_google_doc_id`, `:missing_google_doc_id`, `:missing_name`,
+`:not_found`, `:file_trashed`, `:invalid_file_id`, `:no_doc_id`,
+`:no_thumbnail`, `:create_document_failed`, `:create_folder_failed`,
+`:folder_search_failed`, `:move_failed`, `:copy_failed`,
+`:pdf_export_failed`, `:thumbnail_link_failed`, `:thumbnail_fetch_failed`,
+`:list_files_failed`, `:get_file_parents_failed`, `:sync_failed`,
+`:max_depth_exceeded`. Every atom has a literal `gettext("…")` clause in
+`Errors.message/1`; unknown atoms fall through to `inspect/1`.
+
 ### `PhoenixKitDocumentCreator.GoogleDocsClient` — direct Drive + Docs API
 
 OAuth credentials and token refresh live in `PhoenixKit.Integrations` under
