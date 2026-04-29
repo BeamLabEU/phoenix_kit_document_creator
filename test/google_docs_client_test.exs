@@ -131,6 +131,77 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
     end
   end
 
+  describe "validate_thumbnail_url/1 (SSRF guard)" do
+    # Pin the allowlist of host suffixes the SSRF guard accepts. The
+    # `thumbnailLink` URL comes from Drive but a poisoned response /
+    # MITM could substitute a metadata-service or internal-IP URL —
+    # without this guard, `fetch_thumbnail_image/1` would call out to
+    # whatever Drive returned, exposing internal services.
+
+    test "accepts standard Google thumbnail CDN URLs" do
+      assert :ok =
+               GoogleDocsClient.validate_thumbnail_url(
+                 "https://lh3.googleusercontent.com/abc/=s220"
+               )
+
+      assert :ok =
+               GoogleDocsClient.validate_thumbnail_url("https://lh4.googleusercontent.com/foo")
+
+      assert :ok =
+               GoogleDocsClient.validate_thumbnail_url("https://docs.google.com/uc?id=abc")
+    end
+
+    test "rejects cloud-metadata service" do
+      assert {:error, :host_not_allowed} =
+               GoogleDocsClient.validate_thumbnail_url("http://169.254.169.254/latest/meta-data/")
+    end
+
+    test "rejects localhost / loopback" do
+      assert {:error, :host_not_allowed} =
+               GoogleDocsClient.validate_thumbnail_url("http://localhost:8080/admin")
+
+      assert {:error, :host_not_allowed} =
+               GoogleDocsClient.validate_thumbnail_url("http://127.0.0.1/")
+    end
+
+    test "rejects private IP ranges" do
+      assert {:error, :host_not_allowed} =
+               GoogleDocsClient.validate_thumbnail_url("http://10.0.0.1/")
+
+      assert {:error, :host_not_allowed} =
+               GoogleDocsClient.validate_thumbnail_url("http://192.168.1.1/")
+
+      assert {:error, :host_not_allowed} =
+               GoogleDocsClient.validate_thumbnail_url("http://172.16.0.1/")
+    end
+
+    test "rejects look-alike hosts that don't end on the allowed suffix" do
+      # "googleusercontent.com.evil.com" must not pass — String.ends_with?
+      # on the FULL host comparing the suffix rules out this trick.
+      assert {:error, :host_not_allowed} =
+               GoogleDocsClient.validate_thumbnail_url(
+                 "https://googleusercontent.com.evil.com/abc"
+               )
+
+      assert {:error, :host_not_allowed} =
+               GoogleDocsClient.validate_thumbnail_url("https://my-googleusercontent.com/abc")
+    end
+
+    test "rejects non-HTTP schemes" do
+      assert {:error, :invalid_url} =
+               GoogleDocsClient.validate_thumbnail_url("file:///etc/passwd")
+
+      assert {:error, :invalid_url} =
+               GoogleDocsClient.validate_thumbnail_url("javascript:alert(1)")
+    end
+
+    test "rejects malformed URLs and non-strings" do
+      assert {:error, :invalid_url} = GoogleDocsClient.validate_thumbnail_url("")
+      assert {:error, :invalid_url} = GoogleDocsClient.validate_thumbnail_url(nil)
+      assert {:error, :invalid_url} = GoogleDocsClient.validate_thumbnail_url(:not_a_url)
+    end
+  end
+
   describe "replace_all_text/2" do
     test "returns {:ok, %{}} for empty variables map" do
       assert GoogleDocsClient.replace_all_text("any_doc_id", %{}) == {:ok, %{}}

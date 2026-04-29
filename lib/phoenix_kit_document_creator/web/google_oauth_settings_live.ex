@@ -8,6 +8,8 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   use Phoenix.LiveView
   use Gettext, backend: PhoenixKitWeb.Gettext
 
+  require Logger
+
   import PhoenixKitWeb.Components.Core.IntegrationPicker
 
   alias PhoenixKit.Integrations
@@ -242,7 +244,12 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   def handle_info({:load_drive_folders, folder_id}, socket) do
     pid = self()
 
-    Task.start(fn ->
+    # `Task.start_link/1` (not `Task.start/1`) so the spawned task is
+    # linked to the LV — closing the tab kills the in-flight Drive
+    # fetch instead of leaving an orphan that has nowhere to send
+    # :drive_folders_loaded. Pure render-only fetch; nothing writes
+    # to the DB.
+    Task.start_link(fn ->
       try do
         folders =
           case GoogleDocsClient.list_subfolders(folder_id) do
@@ -264,8 +271,16 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   end
 
   # Catch-all so unexpected messages (Task supervisor signals, stray
-  # PubSub traffic, etc.) don't crash the LiveView.
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  # PubSub traffic, etc.) don't crash the LiveView. Logs at :debug so
+  # stray messages are still observable when debugging without polluting
+  # prod logs.
+  def handle_info(msg, socket) do
+    Logger.debug(
+      "DocumentCreator.GoogleOAuthSettingsLive: ignoring unexpected message: #{inspect(msg)}"
+    )
+
+    {:noreply, socket}
+  end
 
   # ── Render ─────────────────────────────────────────────────────────
 
@@ -397,7 +412,11 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
               {gettext("Click the path button to browse your Google Drive. Deleted items go to subfolders inside the deleted folder. Folders are created automatically if they don't exist.")}
             </p>
 
-            <button type="submit" class="btn btn-primary btn-sm">
+            <button
+              type="submit"
+              class="btn btn-primary btn-sm"
+              phx-disable-with={gettext("Saving…")}
+            >
               {gettext("Save Folder Settings")}
             </button>
           </form>

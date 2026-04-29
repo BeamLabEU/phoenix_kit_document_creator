@@ -22,37 +22,24 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    google_connected =
-      case GoogleDocsClient.connection_status() do
-        {:ok, _} -> true
-        _ -> false
-      end
-
-    # Load from DB immediately (fast, no API call)
-    {templates, documents, trashed_templates, trashed_documents} =
-      if google_connected do
-        {Documents.list_templates_from_db(), Documents.list_documents_from_db(),
-         Documents.list_trashed_templates_from_db(), Documents.list_trashed_documents_from_db()}
-      else
-        {[], [], [], []}
-      end
-
-    # Pre-load cached thumbnails from DB
-    all_ids =
-      Enum.map(templates ++ documents ++ trashed_templates ++ trashed_documents, & &1["id"])
-
-    cached_thumbnails =
-      if all_ids != [], do: Documents.load_cached_thumbnails(all_ids), else: %{}
-
-    db_empty = templates == [] and documents == []
-
+    # Subscribe BEFORE the initial DB read so a `:files_changed` broadcast
+    # arriving between the read and the subscribe doesn't get dropped on
+    # the floor — without this, an admin who creates a file at the same
+    # moment another admin is mounting would have their broadcast vanish
+    # and the second admin's list would stay stale until the next 2-minute
+    # poll fires. The cost of subscribing first is at most one extra sync
+    # in the rare race where a broadcast does land between subscribe and
+    # read — `within_cooldown?/1` already gates the resulting sync.
     if connected?(socket) do
       PhoenixKit.PubSubHelper.subscribe(@pubsub_topic)
+    end
 
-      if google_connected do
-        send(self(), :sync_from_drive)
-        :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
-      end
+    google_connected = google_connected?()
+    initial = load_initial_state(google_connected)
+
+    if connected?(socket) and google_connected do
+      send(self(), :sync_from_drive)
+      :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
     end
 
     {:ok,
@@ -60,14 +47,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        page_title: gettext("Document Creator"),
        view_mode: "cards",
        google_connected: google_connected,
-       templates: templates,
-       documents: documents,
-       trashed_templates: trashed_templates,
-       trashed_documents: trashed_documents,
+       templates: initial.templates,
+       documents: initial.documents,
+       trashed_templates: initial.trashed_templates,
+       trashed_documents: initial.trashed_documents,
        status_mode: "active",
        pending_files: MapSet.new(),
-       thumbnails: cached_thumbnails,
-       loading: google_connected and db_empty,
+       thumbnails: initial.cached_thumbnails,
+       loading: google_connected and initial.db_empty,
        last_loaded_at: nil,
        error: nil,
        # Modal state
@@ -82,13 +69,50 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
      )}
   end
 
+  defp google_connected? do
+    case GoogleDocsClient.connection_status() do
+      {:ok, _} -> true
+      _ -> false
+    end
+  end
+
+  defp load_initial_state(google_connected) do
+    {templates, documents, trashed_templates, trashed_documents} =
+      if google_connected do
+        {Documents.list_templates_from_db(), Documents.list_documents_from_db(),
+         Documents.list_trashed_templates_from_db(), Documents.list_trashed_documents_from_db()}
+      else
+        {[], [], [], []}
+      end
+
+    all_ids =
+      Enum.map(templates ++ documents ++ trashed_templates ++ trashed_documents, & &1["id"])
+
+    cached_thumbnails =
+      if all_ids != [], do: Documents.load_cached_thumbnails(all_ids), else: %{}
+
+    %{
+      templates: templates,
+      documents: documents,
+      trashed_templates: trashed_templates,
+      trashed_documents: trashed_documents,
+      cached_thumbnails: cached_thumbnails,
+      db_empty: templates == [] and documents == []
+    }
+  end
+
   # ── Sync from Drive ──────────────────────────────────────────────
 
   @impl true
   def handle_info(:sync_from_drive, socket) do
     pid = self()
 
-    Task.start(fn ->
+    # `Task.start_link/1` (not `Task.start/1`) so the spawned task is
+    # linked to the LV process — it dies cleanly when the admin closes
+    # the tab. Without this, an unsupervised orphan keeps running with
+    # nowhere to send :sync_complete. The sync_from_drive write path is
+    # idempotent, so dying mid-sync is safe; next sync restarts.
+    Task.start_link(fn ->
       try do
         Documents.sync_from_drive()
         send(pid, :sync_complete)
@@ -163,16 +187,29 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     spec = action_spec(action, is_template)
 
     socket =
-      case spec.backend.(file_id, actor_opts(socket)) do
-        :ok ->
-          broadcast_files_changed()
+      try do
+        case spec.backend.(file_id, actor_opts(socket)) do
+          :ok ->
+            broadcast_files_changed()
 
-          socket
-          |> apply_optimistic_move(file_id, spec)
-          |> put_flash(:info, spec.success)
+            socket
+            |> apply_optimistic_move(file_id, spec)
+            |> put_flash(:info, spec.success)
 
-        {:error, reason} ->
-          Logger.error("#{action} failed for #{file_id}: #{inspect(reason)}")
+          {:error, reason} ->
+            Logger.error("#{action} failed for #{file_id}: #{inspect(reason)}")
+            assign(socket, error: spec.failure)
+        end
+      rescue
+        # External Drive/Docs API call can raise — keep the LV alive and
+        # show the user a translated failure flash. Without this, the LV
+        # crashes and `pending_files` is wedged on remount.
+        e ->
+          Logger.error(
+            "#{action} crashed for #{file_id}: #{Exception.message(e)} | " <>
+              Exception.format(:error, e, __STACKTRACE__)
+          )
+
           assign(socket, error: spec.failure)
       end
 
@@ -180,8 +217,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
      assign(socket, pending_files: MapSet.delete(socket.assigns.pending_files, file_id))}
   end
 
-  # Catch-all to avoid crashing on unexpected messages
-  def handle_info(_msg, socket), do: {:noreply, socket}
+  # Catch-all to avoid crashing on unexpected messages. Logs at :debug so
+  # the noise stays out of prod logs but stray messages are still
+  # observable when debugging — silently dropping them was the prior
+  # behaviour and made unexpected PubSub or test fixtures hard to trace.
+  def handle_info(msg, socket) do
+    Logger.debug("DocumentCreator.DocumentsLive: ignoring unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
 
   defp load_thumbnails_async(files) do
     Documents.fetch_thumbnails_async(files, self())
@@ -589,7 +632,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             {if @live_action == :templates, do: gettext("Templates"), else: gettext("Documents")}
           </h1>
           <div class="flex gap-2">
-            <button class="btn btn-ghost btn-sm" phx-click="refresh" disabled={@loading}>
+            <button
+              class="btn btn-ghost btn-sm"
+              phx-click="refresh"
+              disabled={@loading}
+              phx-disable-with={gettext("Refreshing…")}
+            >
               <span :if={@loading} class="loading loading-spinner loading-xs" />
               <span :if={not @loading} class="hero-arrow-path w-4 h-4" />
             </button>
@@ -796,6 +844,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           phx-click="unfiled_action"
           phx-value-action="current"
           disabled={@unfiled_working}
+          phx-disable-with={gettext("Working…")}
         >
           {gettext("Set This As Correct Location")}
         </button>
@@ -805,6 +854,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           phx-click="unfiled_action"
           phx-value-action="documents"
           disabled={@unfiled_working}
+          phx-disable-with={gettext("Working…")}
         >
           {gettext("Move To Documents")}
         </button>
@@ -814,6 +864,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           phx-click="unfiled_action"
           phx-value-action="templates"
           disabled={@unfiled_working}
+          phx-disable-with={gettext("Working…")}
         >
           {gettext("Move To Templates")}
         </button>
@@ -973,6 +1024,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               phx-click="export_pdf"
               phx-value-id={file["id"]}
               phx-value-name={file["name"]}
+              phx-disable-with={gettext("Exporting…")}
             >
               <span class="hero-arrow-down-tray w-3 h-3" /> {gettext("PDF")}
             </button>
@@ -982,6 +1034,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 phx-click="restore"
                 phx-value-id={file["id"]}
                 title={gettext("Restore")}
+                phx-disable-with={gettext("Restoring…")}
               >
                 <span class="hero-arrow-uturn-left w-3 h-3" />
               </button>
@@ -990,6 +1043,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 class="btn btn-ghost btn-xs py-2 text-error"
                 phx-click="delete"
                 phx-value-id={file["id"]}
+                phx-disable-with={gettext("Deleting…")}
               >
                 <span class="hero-trash w-3 h-3" />
               </button>
@@ -1073,6 +1127,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                     phx-value-id={file["id"]}
                     phx-value-name={file["name"]}
                     title={gettext("Export PDF")}
+                    phx-disable-with={gettext("Exporting…")}
                   >
                     <span class="hero-arrow-down-tray w-3.5 h-3.5" />
                   </button>
@@ -1082,6 +1137,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                       phx-click="restore"
                       phx-value-id={file["id"]}
                       title={gettext("Restore")}
+                      phx-disable-with={gettext("Restoring…")}
                     >
                       <span class="hero-arrow-uturn-left w-3.5 h-3.5" />
                       <span class="text-xs">{gettext("Restore")}</span>
@@ -1092,6 +1148,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                       phx-click="delete"
                       phx-value-id={file["id"]}
                       title={gettext("Delete")}
+                      phx-disable-with={gettext("Deleting…")}
                     >
                       <span class="hero-trash w-3.5 h-3.5" />
                     </button>

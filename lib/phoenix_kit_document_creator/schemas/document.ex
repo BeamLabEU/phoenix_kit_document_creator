@@ -91,6 +91,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     document
     |> cast(attrs, [:name, :google_doc_id, :status, :thumbnail, :path, :folder_id])
     |> validate_required([:name, :google_doc_id])
+    |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:status, @statuses)
   end
 
@@ -108,6 +109,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
       :folder_id
     ])
     |> validate_required([:name, :google_doc_id])
+    |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:template_uuid)
   end

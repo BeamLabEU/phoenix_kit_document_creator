@@ -24,6 +24,7 @@ defmodule PhoenixKitDocumentCreator.Variable do
 
   Returns a sorted list of unique variable names (strings).
   """
+  @spec extract_variables(term()) :: [String.t()]
   def extract_variables(text) when is_binary(text) do
     ~r/\{\{\s*(\w+)\s*\}\}/
     |> Regex.scan(text)
@@ -34,13 +35,10 @@ defmodule PhoenixKitDocumentCreator.Variable do
 
   def extract_variables(_), do: []
 
-  @doc false
-  @deprecated "Use extract_variables/1 instead"
-  def extract_from_html(text), do: extract_variables(text)
-
   @doc """
   Builds Variable structs from a list of variable names, guessing types from names.
   """
+  @spec build_definitions([String.t()]) :: [t()]
   def build_definitions(names) when is_list(names) do
     Enum.map(names, fn name ->
       %__MODULE__{
@@ -54,6 +52,7 @@ defmodule PhoenixKitDocumentCreator.Variable do
   end
 
   @doc "Converts an underscore_name to a human-readable label."
+  @spec humanize(String.t()) :: String.t()
   def humanize(name) do
     name
     |> String.replace("_", " ")
@@ -62,6 +61,7 @@ defmodule PhoenixKitDocumentCreator.Variable do
   end
 
   @doc "Guesses the variable type from its name."
+  @spec guess_type(String.t()) :: variable_type()
   def guess_type(name) do
     cond do
       String.contains?(name, "date") -> :date

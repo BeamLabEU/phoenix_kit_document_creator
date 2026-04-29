@@ -24,6 +24,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker do
   folder's `parents` field.
   """
 
+  require Logger
+
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
   @drive_base "https://www.googleapis.com/drive/v3"
@@ -251,11 +253,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker do
         {:ok, acc}
 
       {:ok, %{body: body}} ->
-        {:error, "List files failed: #{inspect(body)}"}
+        Logger.warning(
+          "[DocumentCreator.DriveWalker] list files failed | body=#{truncate(inspect(body))}"
+        )
+
+        {:error, :list_files_failed}
 
       {:error, _} = err ->
         err
     end
+  end
+
+  @log_body_limit 500
+  defp truncate(s) when is_binary(s) do
+    if String.length(s) > @log_body_limit,
+      do: String.slice(s, 0, @log_body_limit) <> "…(truncated)",
+      else: s
   end
 
   defp handle_page(_q, _fields, _opts, acc, nil), do: {:ok, acc}

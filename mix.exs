@@ -22,6 +22,20 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       # Dialyzer
       dialyzer: [plt_add_apps: [:phoenix_kit]],
 
+      # Coverage — exclude test-support modules (DataCase, TestRepo,
+      # Test.Endpoint, Test.Router, etc.) so the percentage reflects
+      # production-code coverage. The test-support modules ARE compiled
+      # under elixirc_paths(:test) but they exist to drive the suite,
+      # not to be tested themselves.
+      test_coverage: [
+        ignore_modules: [
+          ~r/^PhoenixKitDocumentCreator\.Test\./,
+          PhoenixKitDocumentCreator.DataCase,
+          PhoenixKitDocumentCreator.LiveCase,
+          PhoenixKitDocumentCreator.ActivityLogAssertions
+        ]
+      ],
+
       # Docs
       name: "PhoenixKitDocumentCreator",
       source_url: @source_url,
@@ -60,7 +74,11 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       # Code quality
       {:ex_doc, "~> 0.39", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+
+      # Test-only — `Phoenix.LiveViewTest` 1.1+ uses LazyHTML for parsing
+      # rendered HTML; without this the LV smoke tests crash on import.
+      {:lazy_html, "~> 0.1", only: :test}
     ]
   end
 
