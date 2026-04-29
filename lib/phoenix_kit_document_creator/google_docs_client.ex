@@ -244,17 +244,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       Task.async(fn -> ensure_folder_path("#{deleted_path}/#{config.documents_name}") end)
     ]
 
+    # `Task.await_many/2` signals timeouts via `exit/1` (sent through
+    # the link), not a raised exception — so this must be `catch :exit`,
+    # not `rescue`. Pre-fix the timeout/crash path was dead code: the
+    # LV process exited, the supervisor restarted it, and the nil
+    # fallback below never ran.
     results =
       try do
         Task.await_many(tasks, 30_000)
-      rescue
-        e ->
-          Logger.error("Document Creator folder discovery timed out: #{Exception.message(e)}")
-
-          Enum.map(tasks, fn task ->
-            Task.shutdown(task, :brutal_kill)
-            nil
-          end)
+      catch
+        :exit, reason ->
+          Logger.error("Document Creator folder discovery failed: #{inspect(reason)}")
+          Enum.each(tasks, &Task.shutdown(&1, :brutal_kill))
+          [nil, nil, nil, nil]
       end
 
     [templates_id, documents_id, deleted_templates_id, deleted_documents_id] =
@@ -663,7 +665,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     # plug: {Req.Test, Stub})` to route through `Req.Test` stubs without
     # external HTTP traffic — same pattern as the AI module's coverage
     # push (e4519a8 + 5bbf273).
-    opts = Application.get_env(:phoenix_kit_document_creator, :req_options, [])
+    #
+    # `redirect: false` is prepended so it wins via Keyword.get/2's
+    # first-match semantics — `:req_options` cannot disable it. Req
+    # follows redirects by default (~> 0.5), and
+    # `validate_thumbnail_url/1` only checks the input URL. Without
+    # this, a 302 from a Google CDN host to 169.254.169.254 would be
+    # followed silently and bypass the SSRF allowlist. The thumbnail
+    # endpoint never legitimately redirects, so closing it off is safe.
+    opts =
+      [redirect: false] ++ Application.get_env(:phoenix_kit_document_creator, :req_options, [])
 
     case Req.get(url, opts) do
       {:ok, %{status: 200, body: body, headers: headers}} ->
