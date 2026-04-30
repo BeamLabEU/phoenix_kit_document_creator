@@ -27,7 +27,10 @@ defmodule PhoenixKitDocumentCreator do
 
   use PhoenixKit.Module
 
+  require Logger
+
   alias PhoenixKit.Dashboard.Tab
+  alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
 
   # ===========================================================================
@@ -164,5 +167,278 @@ defmodule PhoenixKitDocumentCreator do
         live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :templates}
       }
     ]
+  end
+
+  # ===========================================================================
+  # Legacy migration
+  # ===========================================================================
+
+  @legacy_oauth_settings_key "document_creator_google_oauth"
+  @new_integration_provider "google"
+  @new_integration_name "default"
+
+  @impl PhoenixKit.Module
+  def migrate_legacy do
+    {credentials_result, references_result} =
+      with creds_result <- migrate_legacy_oauth_credentials(),
+           refs_result <- migrate_legacy_connection_references() do
+        {creds_result, refs_result}
+      end
+
+    {:ok,
+     %{
+       credentials_migration: credentials_result,
+       reference_migration: references_result
+     }}
+  rescue
+    e ->
+      Logger.warning(
+        "[DocumentCreator] migrate_legacy/0 raised: #{Exception.message(e)}"
+      )
+
+      {:error, e}
+  end
+
+  # Migration (1): pre-Integrations OAuth tokens stored under
+  # `document_creator_google_oauth` → new `integration:google:default`
+  # row managed by PhoenixKit.Integrations. Was previously in core's
+  # `Integrations.run_legacy_migrations/0` (with hardcoded `@legacy_keys`);
+  # moved here because the data shape is doc_creator-specific.
+  defp migrate_legacy_oauth_credentials do
+    legacy_data = Settings.get_json_setting(@legacy_oauth_settings_key, nil)
+
+    cond do
+      not is_map(legacy_data) or map_size(legacy_data) == 0 ->
+        :no_legacy_data
+
+      already_migrated?() ->
+        :already_migrated
+
+      true ->
+        do_migrate_oauth_credentials(legacy_data)
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[DocumentCreator] OAuth credentials migration raised: #{Exception.message(e)}"
+      )
+
+      {:error, e}
+  end
+
+  defp already_migrated? do
+    case Integrations.get_integration(
+           "#{@new_integration_provider}:#{@new_integration_name}"
+         ) do
+      {:ok, _} -> true
+      _ -> false
+    end
+  end
+
+  defp do_migrate_oauth_credentials(legacy_data) do
+    integration_data = build_integration_data(legacy_data)
+    integration_key = "#{@new_integration_provider}:#{@new_integration_name}"
+
+    case Integrations.save_setup(integration_key, integration_data) do
+      {:ok, _saved} ->
+        migrate_legacy_folders(legacy_data)
+        log_migration_activity(:credentials_migrated, %{
+          legacy_key: @legacy_oauth_settings_key,
+          new_key: "integration:#{integration_key}"
+        })
+
+        Logger.info(
+          "[DocumentCreator] Migrated legacy '#{@legacy_oauth_settings_key}' → 'integration:#{integration_key}'"
+        )
+
+        :migrated
+
+      {:error, reason} ->
+        Logger.warning(
+          "[DocumentCreator] OAuth credentials migration save failed: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  defp build_integration_data(legacy_data) do
+    base = %{
+      "provider" => @new_integration_provider,
+      "auth_type" => "oauth2",
+      "client_id" => legacy_data["client_id"],
+      "client_secret" => legacy_data["client_secret"],
+      "access_token" => legacy_data["access_token"],
+      "refresh_token" => legacy_data["refresh_token"],
+      "token_type" => legacy_data["token_type"] || "Bearer",
+      "token_obtained_at" => legacy_data["token_obtained_at"],
+      "status" => derive_status(legacy_data),
+      "external_account_id" => legacy_data["connected_email"],
+      "metadata" => %{
+        "connected_email" => legacy_data["connected_email"]
+      }
+    }
+
+    base
+    |> maybe_put_expires_at(legacy_data)
+    |> maybe_put_connected_at(legacy_data)
+  end
+
+  defp derive_status(%{"access_token" => token}) when is_binary(token) and token != "",
+    do: "connected"
+
+  defp derive_status(_), do: "disconnected"
+
+  defp maybe_put_expires_at(data, legacy_data) do
+    with expires_in when is_integer(expires_in) <- legacy_data["expires_in"],
+         obtained_at when is_binary(obtained_at) <- legacy_data["token_obtained_at"],
+         {:ok, dt, _} <- DateTime.from_iso8601(obtained_at) do
+      Map.put(
+        data,
+        "expires_at",
+        dt |> DateTime.add(expires_in, :second) |> DateTime.to_iso8601()
+      )
+    else
+      _ -> data
+    end
+  end
+
+  defp maybe_put_connected_at(%{"status" => "connected"} = data, legacy_data) do
+    Map.put(
+      data,
+      "connected_at",
+      legacy_data["token_obtained_at"] || DateTime.utc_now() |> DateTime.to_iso8601()
+    )
+  end
+
+  defp maybe_put_connected_at(data, _legacy_data), do: data
+
+  defp migrate_legacy_folders(legacy_data) do
+    folder_fields = ~w(
+      folder_path_templates folder_name_templates
+      folder_path_documents folder_name_documents
+      folder_path_deleted folder_name_deleted
+      templates_folder_id documents_folder_id
+      deleted_templates_folder_id deleted_documents_folder_id
+    )
+
+    folder_data = Map.take(legacy_data, folder_fields)
+
+    if map_size(folder_data) > 0 do
+      Settings.update_json_setting_with_module(
+        "document_creator_folders",
+        folder_data,
+        module_key()
+      )
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[DocumentCreator] Failed to move legacy folder config: #{Exception.message(e)}"
+      )
+  end
+
+  # Migration (2): boot-time sweep that resolves any name-string
+  # `document_creator_settings.google_connection` value to its
+  # matching integration row's uuid. The same logic runs lazily on
+  # first read via `GoogleDocsClient.active_integration_uuid/0` —
+  # this boot pass just rewrites it eagerly so admins don't see a
+  # delay on first page load.
+  defp migrate_legacy_connection_references do
+    case Settings.get_json_setting("document_creator_settings", %{}) do
+      %{"google_connection" => value} when is_binary(value) and value != "" ->
+        if uuid_shape?(value) do
+          :already_uuid
+        else
+          resolve_and_persist(value)
+        end
+
+      _ ->
+        :no_reference_set
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[DocumentCreator] Reference migration raised: #{Exception.message(e)}"
+      )
+
+      {:error, e}
+  end
+
+  defp uuid_shape?(string) do
+    Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, string)
+  end
+
+  defp resolve_and_persist(name_string) do
+    case resolve_via_list_connections(name_string) do
+      {:ok, uuid} ->
+        rewrite_google_connection(uuid)
+
+        log_migration_activity(:reference_migrated, %{
+          old_value: name_string,
+          new_uuid: uuid
+        })
+
+        :migrated
+
+      {:error, reason} ->
+        Logger.warning(
+          "[DocumentCreator] Reference migration: cannot resolve '#{name_string}': #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
+  end
+
+  # `find_uuid_by_provider_name/1` is the cleaner core API but only
+  # exists in newer phoenix_kit versions. Use `list_connections/1`
+  # (long-stable) so this works against any phoenix_kit dep this
+  # module's mix.exs allows.
+  defp resolve_via_list_connections(name_string) do
+    {provider, name} =
+      case String.split(name_string, ":", parts: 2) do
+        [p, n] when n != "" -> {p, n}
+        [p] -> {p, "default"}
+      end
+
+    Integrations.list_connections(provider)
+    |> Enum.find(fn conn -> conn.name == name end)
+    |> case do
+      %{uuid: uuid} -> {:ok, uuid}
+      _ -> {:error, :not_found}
+    end
+  rescue
+    _ -> {:error, :resolver_failed}
+  end
+
+  defp rewrite_google_connection(uuid) do
+    current = Settings.get_json_setting("document_creator_settings", %{})
+    updated = Map.put(current, "google_connection", uuid)
+
+    Settings.update_json_setting_with_module(
+      "document_creator_settings",
+      updated,
+      module_key()
+    )
+  end
+
+  defp log_migration_activity(action_atom, metadata) do
+    if Code.ensure_loaded?(PhoenixKit.Activity) do
+      PhoenixKit.Activity.log(%{
+        action: "integration.legacy_migrated",
+        module: module_key(),
+        mode: "auto",
+        resource_type: "integration",
+        metadata:
+          Map.merge(metadata, %{
+            "migration_kind" => Atom.to_string(action_atom),
+            "actor_role" => "system"
+          })
+      })
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 end

@@ -176,4 +176,99 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
                GoogleDocsClient.authenticated_request(:get, "https://www.googleapis.com/drive/v3/files")
     end
   end
+
+  describe "migrate_legacy/0 — combined entry point" do
+    test "returns {:ok, summary} with both migration kinds reported" do
+      clear_connection_setting()
+      Settings.update_json_setting_with_module("document_creator_google_oauth", %{}, "document_creator")
+
+      {:ok, summary} = PhoenixKitDocumentCreator.migrate_legacy()
+
+      assert is_map(summary)
+      assert Map.has_key?(summary, :credentials_migration)
+      assert Map.has_key?(summary, :reference_migration)
+    end
+
+    test "credentials migration: legacy oauth setting gets converted to integration row" do
+      # Stage legacy oauth tokens under the OLD settings key.
+      legacy_oauth = %{
+        "client_id" => "old-client-id",
+        "client_secret" => "old-client-secret",
+        "access_token" => "old-access-token",
+        "refresh_token" => "old-refresh-token",
+        "connected_email" => "user@example.com"
+      }
+
+      Settings.update_json_setting_with_module(
+        "document_creator_google_oauth",
+        legacy_oauth,
+        "document_creator"
+      )
+
+      # No `integration:google:default` row yet — migration should create it.
+      {:ok, _summary} = PhoenixKitDocumentCreator.migrate_legacy()
+
+      # New integration row exists with the migrated tokens.
+      assert {:ok, %{"client_id" => "old-client-id"} = data} =
+               PhoenixKit.Integrations.get_integration("google:default")
+
+      assert data["access_token"] == "old-access-token"
+      assert data["status"] == "connected"
+      assert data["external_account_id"] == "user@example.com"
+    end
+
+    test "credentials migration: short-circuits when integration row already exists" do
+      # Stage both: legacy oauth + a manually-created integration row.
+      Settings.update_json_setting_with_module(
+        "document_creator_google_oauth",
+        %{"client_id" => "should-not-be-migrated"},
+        "document_creator"
+      )
+
+      :ok = PhoenixKit.Integrations.add_connection("google", "default") |> elem(0)
+      {:ok, _} = PhoenixKit.Integrations.save_setup("google:default", %{"client_id" => "manual-cid"})
+
+      {:ok, _summary} = PhoenixKitDocumentCreator.migrate_legacy()
+
+      # The pre-existing manual data is intact — legacy didn't overwrite it.
+      assert {:ok, %{"client_id" => "manual-cid"}} =
+               PhoenixKit.Integrations.get_integration("google:default")
+    end
+
+    test "reference migration: rewrites string-shape google_connection to uuid" do
+      # Pre-stage an integration row + a settings value pointing at
+      # it via name string.
+      :ok = PhoenixKit.Integrations.add_connection("google", "personal") |> elem(0)
+      {:ok, _} = PhoenixKit.Integrations.save_setup("google:personal", %{"client_id" => "cid"})
+
+      [%{uuid: integration_uuid}] =
+        PhoenixKit.Integrations.list_connections("google")
+        |> Enum.filter(&(&1.name == "personal"))
+
+      set_connection_setting("google:personal")
+
+      {:ok, _summary} = PhoenixKitDocumentCreator.migrate_legacy()
+
+      # Setting was rewritten in place to the uuid form.
+      assert %{"google_connection" => ^integration_uuid} =
+               Settings.get_json_setting("document_creator_settings", %{})
+    end
+
+    test "is idempotent — calling twice yields the same end state" do
+      :ok = PhoenixKit.Integrations.add_connection("google", "default") |> elem(0)
+      {:ok, _} = PhoenixKit.Integrations.save_setup("google:default", %{"client_id" => "cid"})
+
+      [%{uuid: uuid}] = PhoenixKit.Integrations.list_connections("google")
+      set_connection_setting("google:default")
+
+      {:ok, _} = PhoenixKitDocumentCreator.migrate_legacy()
+      first_state = Settings.get_json_setting("document_creator_settings", %{})
+
+      {:ok, _} = PhoenixKitDocumentCreator.migrate_legacy()
+      second_state = Settings.get_json_setting("document_creator_settings", %{})
+
+      assert first_state == second_state
+      assert first_state["google_connection"] == uuid
+    end
+  end
 end
