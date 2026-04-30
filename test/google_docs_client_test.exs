@@ -1,5 +1,9 @@
 defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
-  use ExUnit.Case, async: true
+  # `async: false` because the SSRF redirect-block describe below sets
+  # `Application.put_env(..., :req_options, ...)`. Application env is
+  # global state and would race against other test modules running
+  # concurrently. The unit assertions here are fast either way.
+  use ExUnit.Case, async: false
 
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
@@ -199,6 +203,54 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
       assert {:error, :invalid_url} = GoogleDocsClient.validate_thumbnail_url("")
       assert {:error, :invalid_url} = GoogleDocsClient.validate_thumbnail_url(nil)
       assert {:error, :invalid_url} = GoogleDocsClient.validate_thumbnail_url(:not_a_url)
+    end
+  end
+
+  describe "fetch_thumbnail_image/1 (SSRF redirect block)" do
+    # Pin the second-pass guard: even when the input URL passes the
+    # allowlist, Req must NOT follow a 302 to an internal host (e.g.
+    # 169.254.169.254). Req `~> 0.5` follows redirects by default; the
+    # `redirect: false` opt is what closes this off.
+    setup do
+      stub_name = String.to_atom("ThumbStub-#{System.unique_integer([:positive])}")
+
+      on_exit(fn ->
+        Application.delete_env(:phoenix_kit_document_creator, :req_options)
+      end)
+
+      Application.put_env(:phoenix_kit_document_creator, :req_options,
+        plug: {Req.Test, stub_name}
+      )
+
+      {:ok, stub: stub_name}
+    end
+
+    test "does not follow a 302 to an internal host", %{stub: stub_name} do
+      test_pid = self()
+
+      Req.Test.stub(stub_name, fn conn ->
+        send(test_pid, {:plug_called, conn.host})
+
+        conn
+        |> Plug.Conn.put_resp_header("location", "http://169.254.169.254/latest/meta-data/")
+        |> Plug.Conn.send_resp(302, "")
+      end)
+
+      # Allowed input URL — passes the host allowlist. The 302 response
+      # would steer Req to the metadata service if redirect-following
+      # were enabled.
+      assert {:error, :thumbnail_fetch_failed} =
+               GoogleDocsClient.fetch_thumbnail_image("https://lh3.googleusercontent.com/abc")
+
+      # Plug is hit exactly once — Req did not chase the redirect.
+      assert_receive {:plug_called, "lh3.googleusercontent.com"}
+      refute_receive {:plug_called, "169.254.169.254"}, 50
+    end
+
+    test "rejects an input URL outside the allowlist before issuing any request" do
+      # Sanity check: the URL guard fires first, no Req call attempted.
+      assert {:error, :thumbnail_fetch_failed} =
+               GoogleDocsClient.fetch_thumbnail_image("http://169.254.169.254/foo")
     end
   end
 

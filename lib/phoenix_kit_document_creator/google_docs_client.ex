@@ -625,7 +625,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # public thumbnail CDN before we pass the URL to `Req.get/1`.
   @thumbnail_host_suffixes [".googleusercontent.com", ".google.com"]
 
-  defp fetch_thumbnail_image(url) when is_binary(url) do
+  @doc false
+  # Public-but-not-API: exposed so tests can pin the SSRF guard
+  # (allowlist + redirect block) without driving a full Drive auth
+  # flow. Same shape as `validate_thumbnail_url/1` above.
+  @spec fetch_thumbnail_image(String.t()) ::
+          {:ok, String.t()} | {:error, :thumbnail_fetch_failed}
+  def fetch_thumbnail_image(url) when is_binary(url) do
     case validate_thumbnail_url(url) do
       :ok ->
         do_fetch_thumbnail_image(url)
@@ -744,7 +750,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         _ -> "image/png"
       end
 
-    if type in @allowed_thumbnail_types, do: type, else: "image/png"
+    if type in @allowed_thumbnail_types do
+      type
+    else
+      Logger.debug(
+        "[DocumentCreator] thumbnail content-type downgraded | original=#{inspect(v)} → image/png"
+      )
+
+      "image/png"
+    end
   end
 
   defp extract_content_type(_), do: "image/png"

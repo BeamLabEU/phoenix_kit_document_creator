@@ -246,22 +246,12 @@ must be `async: false`" plus a runtime check.
 
 ### Correctness — Minor
 
-#### L1. `register_existing_document/2` doesn't validate `google_doc_id`.
+#### ~~L1. `register_existing_document/2` doesn't validate `google_doc_id`.~~ — INVALID
 
-**File**: `lib/phoenix_kit_document_creator/documents.ex:706,723`
-
-PR #10's review claimed `validate_file_id` is run before the upsert,
-but the current code path
-(`register_existing_document/2 → register_existing/3 →
-normalize_register_attrs/1 → do_register_upsert/4`) does not call
-`GoogleDocsClient.validate_file_id/1`. The schema's `unique_constraint`
-on `google_doc_id` and the `~r/\A[\w-]+\z/`-style validator at
-`Document.changeset/2` may catch most malformed IDs, but the
-"register a Drive file" path is exactly where a path-injection-style ID
-should be rejected up-front. Out of scope for PR #11 — flagging for the
-next sweep.
-
-**Severity**: Low (cross-PR consistency; not a regression of #11).
+Initial reading missed that `normalize_register_attrs/1` at
+`documents.ex:804` already calls `GoogleDocsClient.validate_file_id/1`
+and returns `{:error, :invalid_google_doc_id}` on failure. The
+register API is correctly guarded. No fix needed.
 
 #### L2. `extract_content_type` allowlist silently downgrades on mismatch.
 
@@ -274,7 +264,7 @@ caller debugging a "thumbnail looks wrong" issue won't see anything in
 logs. Adding `Logger.debug("[DocumentCreator] thumbnail content-type
 downgraded | original=#{v} → image/png")` would make this observable.
 
-**Severity**: Low (debuggability).
+**Severity**: Low (debuggability). Fixed in round 3 (commit follows).
 
 ### Style / minor
 
