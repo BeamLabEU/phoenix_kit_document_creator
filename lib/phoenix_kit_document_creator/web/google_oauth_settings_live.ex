@@ -21,14 +21,14 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   @impl true
   def mount(_params, _session, socket) do
     fc = GoogleDocsClient.get_folder_config()
-    active_key = GoogleDocsClient.active_provider_key()
-    connected = Integrations.connected?(active_key)
+    active_uuid = GoogleDocsClient.active_integration_uuid()
+    connected = active_uuid && Integrations.connected?(active_uuid)
 
     # Load all available Google connections for the selector
     google_connections = Integrations.list_connections("google")
 
     connection_info =
-      case Integrations.get_integration(active_key) do
+      case active_uuid && Integrations.get_integration(active_uuid) do
         {:ok, data} ->
           %{
             email:
@@ -45,7 +45,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
        page_title: gettext("Document Creator — Folders"),
        connected: connected,
        connected_email: connection_info.email,
-       active_connection: active_key,
+       active_connection: active_uuid,
        google_connections: google_connections,
        # Folder config: path + name for each
        templates_path: fc.templates_path,

@@ -29,9 +29,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   alias PhoenixKit.Settings
   alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
 
-  @default_provider "google"
   @folder_settings_key "document_creator_folders"
   @settings_key "document_creator_settings"
+
+  # Matches a UUIDv7-shaped string (the storage row identifier used by
+  # PhoenixKit.Integrations). Anything else stored under
+  # `google_connection` is legacy (`"google"` or `"google:name"`) and
+  # gets auto-migrated on first read.
+  @uuid_pattern ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
   @docs_base "https://docs.googleapis.com/v1"
   @drive_base "https://www.googleapis.com/drive/v3"
@@ -54,35 +59,114 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # Credentials (delegated to PhoenixKit.Integrations)
   # ===========================================================================
 
-  @doc "Returns the active provider key, including connection slug if configured."
-  @spec active_provider_key() :: String.t()
-  def active_provider_key do
+  @doc """
+  Returns the uuid of the active Google integration, or `nil` if none
+  has been chosen.
+
+  The settings value at `document_creator_settings.google_connection` is
+  expected to be a UUIDv7 (the integration row's storage uuid). Older
+  installs may have a legacy `"google"` or `"google:name"` string here;
+  this function detects that, resolves it to the matching integration's
+  uuid, rewrites the setting, and returns the uuid. Subsequent calls
+  read the migrated value directly.
+  """
+  @spec active_integration_uuid() :: String.t() | nil
+  def active_integration_uuid do
     case Settings.get_json_setting(@settings_key, %{}) do
-      %{"google_connection" => key} when is_binary(key) and key != "" -> key
-      _ -> @default_provider
+      %{"google_connection" => uuid} when is_binary(uuid) ->
+        if uuid?(uuid), do: uuid, else: migrate_legacy_connection(uuid)
+
+      _ ->
+        nil
     end
+  end
+
+  defp uuid?(str), do: is_binary(str) and Regex.match?(@uuid_pattern, str)
+
+  # Legacy `"google"` / `"google:name"` values predate the move to uuid-
+  # based references. Look up the matching integration row, rewrite the
+  # setting to its uuid, and return the uuid. If nothing matches (the
+  # integration was deleted or never existed), null the setting and
+  # return nil so callers see a clean "not configured" state.
+  defp migrate_legacy_connection(legacy_key) do
+    {provider_key, name} =
+      case String.split(legacy_key, ":", parts: 2) do
+        [p, n] when n != "" -> {p, n}
+        [p] -> {p, "default"}
+      end
+
+    candidate =
+      integrations_backend().get_integration("#{provider_key}:#{name}")
+
+    case candidate do
+      {:ok, %{"name" => _} = data} ->
+        # Matched directly. Find this row's uuid by scanning the
+        # provider's connections and persist it.
+        case find_uuid_for_data(provider_key, data) do
+          nil -> rewrite_setting(nil)
+          uuid -> rewrite_setting(uuid)
+        end
+
+      _ ->
+        # No exact match. Fall back to "any connected row for this
+        # provider" — same shape as the legacy resolver chain — then
+        # persist its uuid so the migration is one-shot.
+        case integrations_backend().list_connections(provider_key) do
+          [%{uuid: uuid} | _] -> rewrite_setting(uuid)
+          _ -> rewrite_setting(nil)
+        end
+    end
+  end
+
+  defp find_uuid_for_data(provider_key, data) do
+    integrations_backend().list_connections(provider_key)
+    |> Enum.find_value(fn %{uuid: uuid, name: name} ->
+      if name == data["name"], do: uuid
+    end)
+  end
+
+  defp rewrite_setting(uuid) do
+    dc_settings = Settings.get_json_setting(@settings_key, %{})
+
+    updated =
+      case uuid do
+        nil -> Map.delete(dc_settings, "google_connection")
+        _ -> Map.put(dc_settings, "google_connection", uuid)
+      end
+
+    Settings.update_json_setting_with_module(@settings_key, updated, "document_creator")
+    uuid
   end
 
   @doc "Get stored OAuth credentials via PhoenixKit.Integrations."
   @spec get_credentials() :: {:ok, map()} | {:error, atom()}
   def get_credentials do
-    integrations_backend().get_credentials(active_provider_key())
+    case active_integration_uuid() do
+      nil -> {:error, :not_configured}
+      uuid -> integrations_backend().get_credentials(uuid)
+    end
   end
 
   @doc "Check if connected. Returns `{:ok, %{email: email}}` or `{:error, reason}`."
   @spec connection_status() :: {:ok, %{email: String.t()}} | {:error, atom()}
   def connection_status do
-    case integrations_backend().get_integration(active_provider_key()) do
-      {:ok, data} ->
-        email =
-          get_in(data, ["metadata", "connected_email"]) ||
-            data["external_account_id"] ||
-            "Unknown"
+    case active_integration_uuid() do
+      nil ->
+        {:error, :not_configured}
 
-        {:ok, %{email: email}}
+      uuid ->
+        case integrations_backend().get_integration(uuid) do
+          {:ok, data} ->
+            email =
+              get_in(data, ["metadata", "connected_email"]) ||
+                data["external_account_id"] ||
+                "Unknown"
 
-      {:error, _} = err ->
-        err
+            {:ok, %{email: email}}
+
+          {:error, _} = err ->
+            err
+        end
     end
   end
 
@@ -720,7 +804,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @spec authenticated_request(atom(), String.t(), keyword()) ::
           {:ok, term()} | {:error, term()}
   def authenticated_request(method, url, opts \\ []) do
-    integrations_backend().authenticated_request(active_provider_key(), method, url, opts)
+    case active_integration_uuid() do
+      nil ->
+        {:error, :not_configured}
+
+      uuid ->
+        integrations_backend().authenticated_request(uuid, method, url, opts)
+    end
   end
 
   defp escape_query_value(value) do
