@@ -1,3 +1,35 @@
+## 0.2.8 - 2026-04-30
+
+### Added
+- `PhoenixKitDocumentCreator.Errors` — atom dispatcher with one literal `gettext/1` clause per atom (28 atoms). Centralises error translation for the public API; consumers call `Errors.message(reason)` at the UI/API boundary. Same shape as `PhoenixKitSync.Errors` and `PhoenixKitLocations.Errors`. Documented in README.
+- SSRF guard on `GoogleDocsClient.fetch_thumbnail_image/1` — `validate_thumbnail_url/1` allowlists `*.googleusercontent.com` / `*.google.com` host suffixes; rejects metadata service (169.254.169.254), loopback, RFC1918, look-alike hosts, non-`http(s)` schemes. Pinned with 8 unit tests.
+- Redirect block on the thumbnail fetch — `Req.get/2` is called with `redirect: false` so a 302 from a Google CDN host to an internal IP can't bypass the SSRF allowlist. Pinned with a `Req.Test`-stubbed end-to-end test.
+- LiveView test infrastructure: `Test.Endpoint`, `Test.Router`, `Test.Layouts` (with stable flash IDs), `LiveCase`, on-mount hooks, `ActivityLogAssertions` helper, `Test.StubIntegrations` ETS-backed integrations stub.
+- `phx-disable-with` on every async + destructive button (refresh, create, modal create, file actions, export PDF, restore, delete, save folder settings, unfiled actions).
+- AGENTS.md "What This Module Does NOT Have (by design)" section anchoring deliberate non-features.
+
+### Changed
+- **(potentially breaking)** `GoogleDocsClient` and `DriveWalker` now return tagged atoms (`:folder_search_failed`, `:create_folder_failed`, `:create_document_failed`, `:move_failed`, `:get_file_parents_failed`, `:copy_failed`, `:pdf_export_failed`, `:thumbnail_link_failed`, `:thumbnail_fetch_failed`, `:list_files_failed`) on the error branch instead of raw `{:error, "Foo failed: #{inspect(body)}"}` strings. Consumers matching on the string form must switch to atoms (or call `Errors.message/1` to translate).
+- `Document.creation_changeset/2`, `Document.sync_changeset/2`, and `Template.sync_changeset/2` now `validate_length(:name, max: 255)`. Over-long names return a clean `{:error, %Ecto.Changeset{}}` instead of raising `Ecto.Adapters.SQL` exceptions.
+- `Documents.fetch_thumbnails_async/2` runs under a single supervised parent task in `PhoenixKit.TaskSupervisor` with `Task.async_stream/3` `max_concurrency: 8`. Pre-fix opening a 500-file folder fired 500 unsupervised `Task.start/1` calls.
+- `DocumentsLive.mount/3` subscribes to `"document_creator:files"` BEFORE the initial DB read, closing a race window where a `:files_changed` broadcast could be dropped between read and subscribe.
+- Activity logging now lands a `db_pending: true` audit row on the error branch of every user-driven mutation (`create_template`, `create_document`, `delete_*`, `restore_*`, `export_pdf`, `set_correct_location`, `create_document_from_template`). Pre-fix a Drive outage erased admin clicks from the audit feed.
+- `Task.start/1` → `Task.start_link/1` in `:sync_from_drive` and `:load_drive_folders` LV handlers — orphan tasks now die with the LV instead of running unsupervised after the tab closes.
+- `try/rescue` around the `:perform_file_action` backend call so a Drive API raise (econnrefused, HTTP timeout) doesn't crash the LV and wedge `pending_files` on remount.
+- Drive API error responses are now logged at 500-char truncation via `log_drive_error/2` instead of being serialised in full into the error tuple.
+- `discover_folders/0` timeout cleanup now uses `catch :exit, _` instead of `rescue` — `Task.await_many/2` signals timeouts via `exit/1`, so the previous `rescue` clause never fired and the LV crashed instead of hitting the nil fallback.
+- `extract_content_type/1` logs at `:debug` when a Drive thumbnail's content-type falls outside the `~w(image/png image/jpeg image/webp image/gif)` allowlist and is downgraded to `image/png`.
+- `handle_info` catch-all in both LiveViews promoted from silent drop to `Logger.debug` so stray PubSub / fixture messages stay observable when debugging.
+
+### Fixed
+- Removed deprecated `Variable.extract_from_html/1` (was `@doc false` + `@deprecated` since the Google Docs pivot).
+- `enabled?/0` now adds `catch :exit, _ -> false` for sandbox-shutdown resilience.
+- README: new `PhoenixKitDocumentCreator.Errors` section listing the error atoms emitted by the public API and showing the canonical translate-at-the-boundary pattern.
+
+### Tests
+- 161 → 376 tests, 0 failures, 10/10 stable runs.
+- Production coverage: ~52% → **77.92%** via built-in `mix test --cover` (no Mox / no excoveralls). `mix.exs` adds `test_coverage: [ignore_modules: [...]]` so the percentage reports production-only code.
+
 ## 0.2.7 - 2026-04-22
 
 ### Added
