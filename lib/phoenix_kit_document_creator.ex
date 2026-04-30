@@ -67,8 +67,13 @@ defmodule PhoenixKitDocumentCreator do
   # Optional callbacks
   # ===========================================================================
 
+  # Derive at compile time from mix.exs so the runtime function can't
+  # drift from the declared package version. The `version_test` callback
+  # check pins this in `test/integration/module_callbacks_test.exs`.
+  @version Mix.Project.config()[:version]
+
   @impl PhoenixKit.Module
-  def version, do: "0.2.7"
+  def version, do: @version
 
   # No `migration_module/0` override — migrations are handled by
   # PhoenixKit core (V86 + V94 create the doc tables; this module owns

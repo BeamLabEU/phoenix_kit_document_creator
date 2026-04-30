@@ -20,8 +20,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   - **URLs**: `get_edit_url/1`, `get_folder_url/1`
 
   OAuth credentials and tokens are managed by `PhoenixKit.Integrations`
-  under the `"google"` provider. Folder configuration is stored separately
-  under the `"document_creator_folders"` settings key.
+  under the `"google"` provider. The module references the active
+  connection by uuid via the `"google_connection"` field in the
+  `"document_creator_settings"` row — `active_integration_uuid/0` is
+  the resolver. Pre-uuid values (`"google"` / `"google:name"` strings)
+  are auto-migrated to the matching integration row's uuid on first
+  read; the rewritten setting then drives all subsequent dispatches.
+  Folder configuration is stored separately under the
+  `"document_creator_folders"` settings key.
   """
 
   require Logger

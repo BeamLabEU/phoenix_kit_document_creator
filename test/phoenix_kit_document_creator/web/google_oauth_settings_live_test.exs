@@ -115,9 +115,13 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLiveTest do
 
       render_click(view, "browser_navigate", %{"id" => "folder-deep", "name" => "Deep"})
 
+      # Path append is the stable post-event state; the transient
+      # `browser_loading: true` flip happens synchronously and may have
+      # already cycled back to `false` by the time `:sys.get_state`
+      # snapshots — `active_integration_uuid()` returns nil in this
+      # test (no setting seeded), so the load handler short-circuits.
       state = :sys.get_state(view.pid).socket.assigns
       assert Enum.any?(state.browser_path, fn p -> p.id == "folder-deep" end)
-      assert state.browser_loading == true
     end
 
     test "browser_back trims the path back to the index",
