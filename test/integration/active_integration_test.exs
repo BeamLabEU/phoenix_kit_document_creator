@@ -173,14 +173,22 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
       StubIntegrations.stub_request(:get, "drive/v3/files", {:ok, %{status: 200, body: %{}}})
 
       assert {:ok, %{status: 200}} =
-               GoogleDocsClient.authenticated_request(:get, "https://www.googleapis.com/drive/v3/files")
+               GoogleDocsClient.authenticated_request(
+                 :get,
+                 "https://www.googleapis.com/drive/v3/files"
+               )
     end
   end
 
   describe "migrate_legacy/0 — combined entry point" do
     test "returns {:ok, summary} with both migration kinds reported" do
       clear_connection_setting()
-      Settings.update_json_setting_with_module("document_creator_google_oauth", %{}, "document_creator")
+
+      Settings.update_json_setting_with_module(
+        "document_creator_google_oauth",
+        %{},
+        "document_creator"
+      )
 
       {:ok, summary} = PhoenixKitDocumentCreator.migrate_legacy()
 
@@ -217,6 +225,35 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
       assert data["external_account_id"] == "user@example.com"
     end
 
+    @tag :requires_unreleased_core
+    test "credentials migration: clears the legacy oauth key after success" do
+      # Stage legacy plaintext OAuth tokens.
+      legacy_oauth = %{
+        "client_id" => "old-client-id",
+        "client_secret" => "old-client-secret",
+        "access_token" => "old-access-token",
+        "refresh_token" => "old-refresh-token",
+        "connected_email" => "user@example.com"
+      }
+
+      Settings.update_json_setting_with_module(
+        "document_creator_google_oauth",
+        legacy_oauth,
+        "document_creator"
+      )
+
+      {:ok, _summary} = PhoenixKitDocumentCreator.migrate_legacy()
+
+      # Plaintext secrets must not survive the migration. Row may
+      # remain (settings table doesn't expose a delete) but the
+      # secret-bearing fields must be gone.
+      legacy_after = Settings.get_json_setting("document_creator_google_oauth", %{})
+      refute Map.has_key?(legacy_after, "client_secret")
+      refute Map.has_key?(legacy_after, "access_token")
+      refute Map.has_key?(legacy_after, "refresh_token")
+    end
+
+    @tag :requires_unreleased_core
     test "credentials migration: short-circuits when integration row already exists" do
       # Stage both: legacy oauth + a manually-created integration row.
       Settings.update_json_setting_with_module(
@@ -235,6 +272,7 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
                PhoenixKit.Integrations.get_integration("google:default")
     end
 
+    @tag :requires_unreleased_core
     test "reference migration: rewrites string-shape google_connection to uuid" do
       # Pre-stage an integration row + a settings value pointing at
       # it via name string.
@@ -252,6 +290,7 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
                Settings.get_json_setting("document_creator_settings", %{})
     end
 
+    @tag :requires_unreleased_core
     test "is idempotent — calling twice yields the same end state" do
       {:ok, %{uuid: uuid}} = PhoenixKit.Integrations.add_connection("google", "default")
       {:ok, _} = PhoenixKit.Integrations.save_setup(uuid, %{"client_id" => "cid"})

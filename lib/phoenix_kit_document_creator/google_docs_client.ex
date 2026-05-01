@@ -38,9 +38,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @folder_settings_key "document_creator_folders"
   @settings_key "document_creator_settings"
 
-  # Matches a UUIDv7-shaped string (the storage row identifier used by
-  # PhoenixKit.Integrations). Anything else stored under
-  # `google_connection` is legacy (`"google"` or `"google:name"`) and
+  # Matches an RFC 4122-shaped UUID string (the storage row identifier
+  # used by PhoenixKit.Integrations — currently UUIDv7, but this guard
+  # only needs to discriminate "promoted to uuid" from legacy
+  # `"google"` / `"google:name"` references; we don't enforce the
+  # version digit). Anything that doesn't match here is legacy and
   # gets auto-migrated on first read.
   @uuid_pattern ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -79,15 +81,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @spec active_integration_uuid() :: String.t() | nil
   def active_integration_uuid do
     case Settings.get_json_setting(@settings_key, %{}) do
-      %{"google_connection" => uuid} when is_binary(uuid) ->
-        if uuid?(uuid), do: uuid, else: migrate_legacy_connection(uuid)
+      %{"google_connection" => stored} when is_binary(stored) ->
+        if uuid?(stored), do: stored, else: migrate_legacy_connection(stored)
 
       _ ->
         nil
     end
   end
 
-  defp uuid?(str), do: is_binary(str) and Regex.match?(@uuid_pattern, str)
+  @doc false
+  # Public-but-not-API: shared across the lazy on-read path and the
+  # boot-time sweep in `PhoenixKitDocumentCreator.migrate_legacy/0` so
+  # the @uuid_pattern regex only lives here.
+  @spec uuid?(term()) :: boolean()
+  def uuid?(str), do: is_binary(str) and Regex.match?(@uuid_pattern, str)
 
   # Legacy `"google"` / `"google:name"` values predate the move to uuid-
   # based references. Look up the matching integration row, rewrite the

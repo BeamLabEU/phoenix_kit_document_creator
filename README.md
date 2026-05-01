@@ -247,7 +247,10 @@ callback) handles two kinds of pre-uuid data on upgrade:
 
 1. The legacy `document_creator_google_oauth` settings key with locally-
    stored OAuth tokens, migrated into a real `PhoenixKit.Integrations`
-   row under `"google:default"`.
+   row under `"google:default"`. After a successful migration the
+   plaintext secrets in the legacy key are wiped (the row is reset to
+   `%{}`) so they don't survive the move to encrypted Integrations
+   storage.
 2. Name-string `google_connection` references (`"google"` /
    `"google:my-name"`) from before the uuid switch, rewritten in place
    to the matching row's uuid.

@@ -126,7 +126,16 @@ case Supervisor.start_link(
   {:error, reason} -> raise "PubSub test supervisor failed to start: #{inspect(reason)}"
 end
 
-# Exclude integration tests when DB is not available
-exclude = if repo_available, do: [], else: [:integration]
+# Exclude integration tests when DB is not available.
+#
+# `:requires_unreleased_core` is also excluded by default — those tests
+# exercise `PhoenixKit.Integrations.add_connection/3`'s strict-UUID
+# return shape (`{:ok, %{uuid: _}}`) which only exists in unpublished
+# core. The canonical test channel for those is via `phoenix_kit_parent`
+# (path-dep override). Standalone Hex `~> 1.7` runs would emit shape
+# mismatches; opt-in via `mix test --include requires_unreleased_core`
+# once the matching core version is published.
+exclude = [:requires_unreleased_core]
+exclude = if repo_available, do: exclude, else: [:integration | exclude]
 
 ExUnit.start(exclude: exclude)

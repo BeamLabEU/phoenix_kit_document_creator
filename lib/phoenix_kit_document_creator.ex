@@ -32,6 +32,7 @@ defmodule PhoenixKitDocumentCreator do
   alias PhoenixKit.Dashboard.Tab
   alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
+  alias PhoenixKitDocumentCreator.GoogleDocsClient
 
   # ===========================================================================
   # Required callbacks
@@ -179,22 +180,17 @@ defmodule PhoenixKitDocumentCreator do
 
   @impl PhoenixKit.Module
   def migrate_legacy do
-    {credentials_result, references_result} =
-      with creds_result <- migrate_legacy_oauth_credentials(),
-           refs_result <- migrate_legacy_connection_references() do
-        {creds_result, refs_result}
-      end
+    creds_result = migrate_legacy_oauth_credentials()
+    refs_result = migrate_legacy_connection_references()
 
     {:ok,
      %{
-       credentials_migration: credentials_result,
-       reference_migration: references_result
+       credentials_migration: creds_result,
+       reference_migration: refs_result
      }}
   rescue
     e ->
-      Logger.warning(
-        "[DocumentCreator] migrate_legacy/0 raised: #{Exception.message(e)}"
-      )
+      Logger.warning("[DocumentCreator] migrate_legacy/0 raised: #{Exception.message(e)}")
 
       {:error, e}
   end
@@ -227,9 +223,7 @@ defmodule PhoenixKitDocumentCreator do
   end
 
   defp already_migrated? do
-    case Integrations.get_integration(
-           "#{@new_integration_provider}:#{@new_integration_name}"
-         ) do
+    case Integrations.get_integration("#{@new_integration_provider}:#{@new_integration_name}") do
       {:ok, _} -> true
       _ -> false
     end
@@ -247,6 +241,7 @@ defmodule PhoenixKitDocumentCreator do
            ensure_connection(@new_integration_provider, @new_integration_name),
          {:ok, _saved} <- Integrations.save_setup(uuid, integration_data) do
       migrate_legacy_folders(legacy_data)
+      clear_legacy_oauth_key()
 
       log_migration_activity(:credentials_migrated, %{
         legacy_key: @legacy_oauth_settings_key,
@@ -336,6 +331,34 @@ defmodule PhoenixKitDocumentCreator do
 
   defp maybe_put_connected_at(data, _legacy_data), do: data
 
+  # After the credentials are migrated into a `PhoenixKit.Integrations`
+  # row (which encrypts secrets at rest), the original
+  # `document_creator_google_oauth` settings row still holds plaintext
+  # `client_secret` / `access_token` / `refresh_token`. `already_migrated?/0`
+  # stops re-migration on subsequent boots, so without this cleanup the
+  # plaintext copies would persist in `phoenix_kit_settings` indefinitely.
+  # Overwrite with `%{}` to keep the row but drop the secrets. Failure
+  # here doesn't roll back the migration — it's a best-effort secrets
+  # wipe; ops can always remove the row by hand.
+  defp clear_legacy_oauth_key do
+    Settings.update_json_setting_with_module(
+      @legacy_oauth_settings_key,
+      %{},
+      module_key()
+    )
+
+    :ok
+  rescue
+    e ->
+      Logger.warning(
+        "[DocumentCreator] Failed to clear legacy OAuth key after migration — " <>
+          "plaintext secrets may remain in '#{@legacy_oauth_settings_key}'. " <>
+          "exception=#{inspect(e.__struct__)}"
+      )
+
+      :ok
+  end
+
   defp migrate_legacy_folders(legacy_data) do
     folder_fields = ~w(
       folder_path_templates folder_name_templates
@@ -370,7 +393,7 @@ defmodule PhoenixKitDocumentCreator do
   defp migrate_legacy_connection_references do
     case Settings.get_json_setting("document_creator_settings", %{}) do
       %{"google_connection" => value} when is_binary(value) and value != "" ->
-        if uuid_shape?(value) do
+        if GoogleDocsClient.uuid?(value) do
           :already_uuid
         else
           resolve_and_persist(value)
@@ -381,15 +404,9 @@ defmodule PhoenixKitDocumentCreator do
     end
   rescue
     e ->
-      Logger.warning(
-        "[DocumentCreator] Reference migration raised: #{Exception.message(e)}"
-      )
+      Logger.warning("[DocumentCreator] Reference migration raised: #{Exception.message(e)}")
 
       {:error, e}
-  end
-
-  defp uuid_shape?(string) do
-    Regex.match?(~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, string)
   end
 
   defp resolve_and_persist(name_string) do
