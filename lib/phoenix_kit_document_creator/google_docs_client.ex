@@ -129,6 +129,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     |> Enum.find_value(fn %{uuid: uuid, name: name} ->
       if name == data["name"], do: uuid
     end)
+  rescue
+    # `find_uuid_for_data/2` runs from the lazy-read path
+    # (`active_integration_uuid/0`), which fires on every request when
+    # legacy data is still in `document_creator_settings`. A
+    # transient backend failure (DB hiccup, integrations table
+    # missing, sandbox owner exit) MUST NOT crash the request — the
+    # downstream caller treats `nil` as "not found" and falls through
+    # to the bare-provider list_connections scan or surfaces
+    # `:not_configured` cleanly.
+    e ->
+      Logger.warning(fn ->
+        "[GoogleDocsClient] find_uuid_for_data/2 failed: " <>
+          "exception=#{inspect(e.__struct__)}"
+      end)
+
+      nil
   end
 
   defp rewrite_setting(uuid) do
@@ -142,6 +158,23 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
     Settings.update_json_setting_with_module(@settings_key, updated, "document_creator")
     uuid
+  rescue
+    # Same crash-vector concern as `find_uuid_for_data/2` — the
+    # rewrite is the persistence half of the lazy-read promotion. If
+    # Settings can't write (DB down, table missing, write-permission
+    # error), a request that just wanted to read credentials gets a
+    # 500 instead. Swallow the failure and return the resolved uuid
+    # anyway — the in-memory request still works; the next request
+    # will retry the rewrite. Returning the original uuid keeps the
+    # lazy promotion idempotent across attempts.
+    e ->
+      Logger.warning(fn ->
+        "[GoogleDocsClient] rewrite_setting/1 failed: " <>
+          "exception=#{inspect(e.__struct__)}, " <>
+          "uuid=#{inspect(uuid)}"
+      end)
+
+      uuid
   end
 
   @doc "Get stored OAuth credentials via PhoenixKit.Integrations."

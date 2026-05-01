@@ -343,6 +343,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
+                  phx-disable-with={gettext("Loading…")}
                   phx-value-field="templates_path"
                   title={if @templates_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @templates_path)}
                 >
@@ -367,6 +368,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
+                  phx-disable-with={gettext("Loading…")}
                   phx-value-field="documents_path"
                   title={if @documents_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @documents_path)}
                 >
@@ -391,6 +393,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
+                  phx-disable-with={gettext("Loading…")}
                   phx-value-field="deleted_path"
                   title={if @deleted_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @deleted_path)}
                 >

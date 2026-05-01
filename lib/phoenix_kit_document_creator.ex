@@ -431,7 +431,21 @@ defmodule PhoenixKitDocumentCreator do
       _ -> {:error, :not_found}
     end
   rescue
-    _ -> {:error, :resolver_failed}
+    e ->
+      # The lookup is the fallback path of the legacy reference sweep —
+      # it runs at boot during `migrate_legacy/0` against whatever
+      # state Settings is in. A raise here doesn't crash the boot
+      # (the orchestrator catches it) but losing the exception type
+      # makes ops debugging guesswork. Log with grep-able context
+      # before swallowing. `Exception.message/1` is deliberately
+      # excluded — some Ecto exception structs embed query bindings
+      # that could leak provider strings into logs.
+      Logger.warning(fn ->
+        "[DocumentCreator] resolve_via_list_connections failed: " <>
+          "exception=#{inspect(e.__struct__)}"
+      end)
+
+      {:error, :resolver_failed}
   end
 
   defp rewrite_google_connection(uuid) do
@@ -462,6 +476,20 @@ defmodule PhoenixKitDocumentCreator do
 
     :ok
   rescue
-    _ -> :ok
+    e ->
+      # Activity logging failures must NEVER crash the migration
+      # path — the orchestrator already caught any earlier exception
+      # by the time we get here, and we don't want a missing
+      # activities table (host hasn't run core's migration yet) to
+      # turn a successful credentials migration into a boot failure.
+      # But silently returning :ok means an ops team can't tell why
+      # their audit feed is empty. Log the exception type before
+      # swallowing.
+      Logger.warning(fn ->
+        "[DocumentCreator] activity log failed during legacy migration: " <>
+          "kind=#{action_atom}, exception=#{inspect(e.__struct__)}"
+      end)
+
+      :ok
   end
 end
