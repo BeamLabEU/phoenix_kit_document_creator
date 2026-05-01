@@ -178,7 +178,12 @@ defmodule PhoenixKitDocumentCreator do
   @new_integration_provider "google"
   @new_integration_name "default"
 
-  @impl PhoenixKit.Module
+  # Implements the optional `migrate_legacy/0` callback added in core
+  # V107+. Hex `~> 1.7` doesn't declare it on the `PhoenixKit.Module`
+  # behaviour, so `@impl PhoenixKit.Module` would warn — keep this as
+  # a plain function until the floor version is bumped. The orchestrator
+  # in `PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0`
+  # dispatches by `function_exported?/3` regardless of the annotation.
   def migrate_legacy do
     creds_result = migrate_legacy_oauth_credentials()
     refs_result = migrate_legacy_connection_references()
@@ -270,13 +275,33 @@ defmodule PhoenixKitDocumentCreator do
         {:ok, result}
 
       {:error, :already_exists} ->
-        case Integrations.find_uuid_by_provider_name({provider, name}) do
-          {:ok, uuid} -> {:ok, %{uuid: uuid}}
-          error -> error
-        end
+        resolve_existing_connection_uuid(provider, name)
 
       error ->
         error
+    end
+  end
+
+  # Cross-version compat for the `:already_exists` resolve step.
+  #
+  # `find_uuid_by_provider_name/1` is the cleaner V107 primitive but
+  # doesn't exist in Hex `~> 1.7`. Without the `function_exported?/3`
+  # gate, dialyzer / `mix precommit` flags it as a missing call.
+  # When the floor version is bumped past V107 the gate can be
+  # removed and the call inlined.
+  defp resolve_existing_connection_uuid(provider, name) do
+    if function_exported?(Integrations, :find_uuid_by_provider_name, 1) do
+      # credo:disable-for-next-line Credo.Check.Refactor.Apply
+      case apply(Integrations, :find_uuid_by_provider_name, [{provider, name}]) do
+        {:ok, uuid} -> {:ok, %{uuid: uuid}}
+        error -> error
+      end
+    else
+      # Pre-V107 fallback — scan provider's connections by name.
+      case Integrations.list_connections(provider) |> Enum.find(&(&1.name == name)) do
+        %{uuid: uuid} -> {:ok, %{uuid: uuid}}
+        _ -> {:error, :not_found}
+      end
     end
   end
 
