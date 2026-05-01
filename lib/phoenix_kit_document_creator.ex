@@ -239,26 +239,49 @@ defmodule PhoenixKitDocumentCreator do
     integration_data = build_integration_data(legacy_data)
     integration_key = "#{@new_integration_provider}:#{@new_integration_name}"
 
-    case Integrations.save_setup(integration_key, integration_data) do
-      {:ok, _saved} ->
-        migrate_legacy_folders(legacy_data)
-        log_migration_activity(:credentials_migrated, %{
-          legacy_key: @legacy_oauth_settings_key,
-          new_key: "integration:#{integration_key}"
-        })
+    # Two-step write under core's strict-UUID Integrations API: create
+    # the row via `add_connection/3` (the only legitimate place to
+    # construct a new `integration:{provider}:{name}` storage key),
+    # then save the migrated credentials against the returned uuid.
+    with {:ok, %{uuid: uuid}} <-
+           ensure_connection(@new_integration_provider, @new_integration_name),
+         {:ok, _saved} <- Integrations.save_setup(uuid, integration_data) do
+      migrate_legacy_folders(legacy_data)
 
-        Logger.info(
-          "[DocumentCreator] Migrated legacy '#{@legacy_oauth_settings_key}' → 'integration:#{integration_key}'"
-        )
+      log_migration_activity(:credentials_migrated, %{
+        legacy_key: @legacy_oauth_settings_key,
+        new_key: "integration:#{integration_key}",
+        integration_uuid: uuid
+      })
 
-        :migrated
+      Logger.info(
+        "[DocumentCreator] Migrated legacy '#{@legacy_oauth_settings_key}' → 'integration:#{integration_key}'"
+      )
 
+      :migrated
+    else
       {:error, reason} ->
         Logger.warning(
           "[DocumentCreator] OAuth credentials migration save failed: #{inspect(reason)}"
         )
 
         {:error, reason}
+    end
+  end
+
+  defp ensure_connection(provider, name) do
+    case Integrations.add_connection(provider, name) do
+      {:ok, %{uuid: _} = result} ->
+        {:ok, result}
+
+      {:error, :already_exists} ->
+        case Integrations.find_uuid_by_provider_name({provider, name}) do
+          {:ok, uuid} -> {:ok, %{uuid: uuid}}
+          error -> error
+        end
+
+      error ->
+        error
     end
   end
 

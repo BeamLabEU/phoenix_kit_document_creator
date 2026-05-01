@@ -225,8 +225,8 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
         "document_creator"
       )
 
-      :ok = PhoenixKit.Integrations.add_connection("google", "default") |> elem(0)
-      {:ok, _} = PhoenixKit.Integrations.save_setup("google:default", %{"client_id" => "manual-cid"})
+      {:ok, %{uuid: uuid}} = PhoenixKit.Integrations.add_connection("google", "default")
+      {:ok, _} = PhoenixKit.Integrations.save_setup(uuid, %{"client_id" => "manual-cid"})
 
       {:ok, _summary} = PhoenixKitDocumentCreator.migrate_legacy()
 
@@ -238,12 +238,10 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
     test "reference migration: rewrites string-shape google_connection to uuid" do
       # Pre-stage an integration row + a settings value pointing at
       # it via name string.
-      :ok = PhoenixKit.Integrations.add_connection("google", "personal") |> elem(0)
-      {:ok, _} = PhoenixKit.Integrations.save_setup("google:personal", %{"client_id" => "cid"})
+      {:ok, %{uuid: integration_uuid}} =
+        PhoenixKit.Integrations.add_connection("google", "personal")
 
-      [%{uuid: integration_uuid}] =
-        PhoenixKit.Integrations.list_connections("google")
-        |> Enum.filter(&(&1.name == "personal"))
+      {:ok, _} = PhoenixKit.Integrations.save_setup(integration_uuid, %{"client_id" => "cid"})
 
       set_connection_setting("google:personal")
 
@@ -255,10 +253,9 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
     end
 
     test "is idempotent — calling twice yields the same end state" do
-      :ok = PhoenixKit.Integrations.add_connection("google", "default") |> elem(0)
-      {:ok, _} = PhoenixKit.Integrations.save_setup("google:default", %{"client_id" => "cid"})
+      {:ok, %{uuid: uuid}} = PhoenixKit.Integrations.add_connection("google", "default")
+      {:ok, _} = PhoenixKit.Integrations.save_setup(uuid, %{"client_id" => "cid"})
 
-      [%{uuid: uuid}] = PhoenixKit.Integrations.list_connections("google")
       set_connection_setting("google:default")
 
       {:ok, _} = PhoenixKitDocumentCreator.migrate_legacy()
