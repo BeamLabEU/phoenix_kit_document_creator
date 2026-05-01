@@ -423,6 +423,189 @@ The remaining ~22% gap is a mix of:
 - Production coverage 47.67% → **77.92%** (test-support modules
   excluded via `test_coverage[:ignore_modules]`)
 
+## Batch 6 — post-merge deep-dive 2026-04-29
+
+User triggered an independent deep-dive review of merged PR #11
+(separate from the C12 batches above, which closed before merge).
+The deep-dive surfaced two H-severity items that the original
+sweep + Batch 2-5 work hadn't reached. Both are surgical fixes on
+top of the landed code.
+
+- ~~**H1 — SSRF guard does not block redirects**~~ — fixed in
+  `lib/phoenix_kit_document_creator/google_docs_client.ex`
+  `do_fetch_thumbnail_image/1`. `Req.get(url, opts)` in Req `~> 0.5`
+  follows redirects by default. The SSRF allowlist
+  `validate_thumbnail_url/1` checked the *input* URL once, but a
+  successful 302 from `lh4.googleusercontent.com` to
+  `http://169.254.169.254/...` was followed silently — the
+  metadata-service fetch then went out from the application server
+  with no second-pass guard. The C12.5 deep-dive that introduced
+  the host allowlist explicitly cited metadata-service redirection
+  as in-scope. **Fix:**
+  ```elixir
+  opts = [redirect: false] ++ Application.get_env(:phoenix_kit_document_creator, :req_options, [])
+  ```
+  `redirect: false` is prepended so it wins via Keyword first-match
+  semantics — `:req_options` cannot override it. The thumbnail
+  endpoint never legitimately redirects, so closing it off is safe.
+- ~~**H2 — Dead `rescue` clause in `discover_folders/0`**~~ — fixed
+  in the same file. `Task.await_many/2` on timeout sends `exit/1`
+  through the link, not a raised exception. `rescue` only handles
+  `raise`d exceptions, so the existing
+  ```elixir
+  try do
+    Task.await_many(tasks, 30_000)
+  rescue
+    e -> ...
+  end
+  ```
+  was dead code: on a 30-second Drive folder hang, the LV process
+  exited and the supervisor restarted it — the `Logger.error`, the
+  `Task.shutdown(.., :brutal_kill)` cleanup, and the nil fallback
+  all never ran. Replaced with `catch :exit, reason -> ...` matching
+  the actual signal type. `Enum.each` for the cleanup (the previous
+  code mixed `Task.shutdown` return values with `nil` per-element
+  via `Enum.map`); returns a 4-element nil list to match the
+  destructure on the next line.
+
+### Tests added (Batch 6 — 2026-04-29)
+
+None in this batch — the H1 end-to-end redirect-block test landed
+in Batch 7 (it required wiring `Req.Test` plumbing the original PR
+explicitly punted on, with the `:req_options` config knob as the
+hook). The H2 timeout path also has no test — pinning would require
+either an injectable timeout or a stubbed `authenticated_request`
+that hangs, both reasonable but out of scope.
+
+### Files touched (Batch 6)
+
+| File | Change |
+|------|--------|
+| `lib/phoenix_kit_document_creator/google_docs_client.ex` | `redirect: false` prepended to `do_fetch_thumbnail_image/1`'s Req opts; `discover_folders/0` rescue → `catch :exit, reason` |
+
+### Verification (Batch 6)
+
+- `mix compile --warnings-as-errors` — clean
+- `mix test test/google_docs_client_test.exs` — 36 tests, 0 failures
+- Production diff: ~+12 lines, -8 lines, all in
+  `lib/phoenix_kit_document_creator/google_docs_client.ex`
+
+### Pre-existing items surfaced (not closed in Batch 6)
+
+The deep-dive review (`CLAUDE_REVIEW.md`) documents several
+pre-existing items that PR #11 didn't introduce and Batch 6 didn't
+touch — kept here for traceability:
+
+- **M1** — DB queries in `mount/3` of both top-level LiveViews
+  (mount runs twice on connected sessions).
+- **M2** — `Test.StubIntegrations` ETS table forces `async: false`
+  if used concurrently from multiple tests.
+- **L1** — `register_existing_document/2` doesn't validate
+  `google_doc_id` before upsert. *Retracted in Batch 7 — the
+  function does call `validate_file_id/1` via
+  `normalize_register_attrs/1`; the original review missed it.*
+- **L2** — `extract_content_type` silent downgrade on type
+  mismatch. *Closed in Batch 7.*
+- **S2** — `discover_folders/0` parallel tasks are unsupervised.
+- **S3** — `verify_known_file/2` is O(N) per event.
+- **S5** — `actor_opts/1` duplicated across two LVs.
+
+## Batch 7 — test pin + content-type log 2026-04-30
+
+User asked "anything we need to fix/improve here?" after the
+Batch 6 commit landed. Batch 6 fixed the H1 SSRF redirect bypass
+and the H2 dead `rescue` clause but landed without an end-to-end
+test for H1, and left the L2 content-type silent downgrade
+unfixed. This batch closes both, plus retracts the L1 finding from
+the original deep-dive review (initial reading missed that
+`normalize_register_attrs/1` already calls `validate_file_id/1`).
+
+- ~~**End-to-end test for the SSRF redirect block (H1 from
+  Batch 6)**~~ — added a `describe "fetch_thumbnail_image/1
+  (SSRF redirect block)"` block in
+  `test/google_docs_client_test.exs` with two tests:
+  - **Does not follow a 302 to an internal host.** Stubs Req via
+    `Req.Test.stub/2` to return `302 Location:
+    http://169.254.169.254/...` for an *allowed* input URL
+    (`https://lh3.googleusercontent.com/abc`). Asserts
+    `{:error, :thumbnail_fetch_failed}` and uses
+    `assert_receive`/`refute_receive` on a `send(self(),
+    {:plug_called, conn.host})` to pin that the plug was hit
+    exactly once — Req did not chase the redirect.
+  - **Rejects an input URL outside the allowlist before issuing
+    any request.** Sanity check that the URL guard fires first.
+
+  The test uses `Application.put_env(..., :req_options, plug:
+  {Req.Test, StubName})` with a unique stub atom per test (via
+  `System.unique_integer/1`) and `on_exit` cleanup. The test
+  module switched from `async: true` to `async: false` because
+  Application env is global state — matches the existing pattern
+  in `test/integration/drive_walker_test.exs` and friends.
+- ~~**Expose `fetch_thumbnail_image/1` as `@doc false`-public**~~ —
+  same shape as `validate_thumbnail_url/1` directly above it. The
+  function is the SSRF perimeter: tests pin it without driving a
+  full Drive auth flow. Comment explains the public-but-not-API
+  status.
+- ~~**L2 — Log content-type downgrade**~~ — fixed in
+  `extract_content_type/1`. Pre-fix, a Drive thumbnail with
+  `Content-Type: image/svg+xml` (or anything outside the
+  `~w(image/png image/jpeg image/webp image/gif)` allowlist)
+  silently fell back to `image/png` in the data URI — no log,
+  hard to debug. Now `Logger.debug` records the original value.
+- ~~**CLAUDE_REVIEW.md L1 retraction**~~ —
+  `register_existing_document/2` IS guarded.
+  `normalize_register_attrs/1` at
+  `lib/phoenix_kit_document_creator/documents.ex:804` calls
+  `GoogleDocsClient.validate_file_id(a[:google_doc_id])` and
+  returns `{:error, :invalid_google_doc_id}` on a regex mismatch.
+  L1 entry struck through with the correction noted in
+  `CLAUDE_REVIEW.md`.
+
+### Tests added (Batch 7 — 2026-04-30)
+
+- `test/google_docs_client_test.exs` — `describe
+  "fetch_thumbnail_image/1 (SSRF redirect block)"` with 2 tests
+  (redirect-not-followed + URL-guard-fires-first). Suite count
+  36 → 38.
+
+### Files touched (Batch 7)
+
+| File | Change |
+|------|--------|
+| `lib/phoenix_kit_document_creator/google_docs_client.ex` | `fetch_thumbnail_image/1` exposed as `@doc false`-public for the SSRF perimeter test; `extract_content_type/1` adds `Logger.debug` on the silent-downgrade path |
+| `test/google_docs_client_test.exs` | +2 redirect-block tests; module flipped to `async: false` for the Application env access |
+| `dev_docs/pull_requests/2026/11-quality-sweep/CLAUDE_REVIEW.md` | L1 finding struck through with correction |
+
+### Verification (Batch 7)
+
+- `mix compile --warnings-as-errors` — clean
+- `mix test test/google_docs_client_test.exs` — **38 tests, 0
+  failures** (was 36; +2 redirect-block tests)
+- Test output confirms both behaviour pins:
+  - `[DocumentCreator] thumbnail fetch returned non-200 |
+    status=302` — Req returned the 302 directly because
+    `redirect: false`.
+  - `[DocumentCreator] thumbnail URL rejected |
+    reason=host_not_allowed | url="http://169.254.169.254/foo"`
+    — URL guard fired before any request.
+
+### Remaining items (still not fixed)
+
+Per CLAUDE_REVIEW.md, these remain pre-existing and unaddressed
+even after Batch 7:
+
+- **M1** — DB queries in `mount/3` (changes SSR behaviour;
+  warrants its own PR).
+- **M2** — `Test.StubIntegrations` ETS table forces `async: false`
+  if used concurrently from multiple tests.
+- **S2** — `discover_folders/0` parallel tasks unsupervised.
+- **S3** — `verify_known_file/2` is O(N) per event.
+- **S5** — `actor_opts/1` duplicated across two LVs.
+
+None block production; documented for future sweeps.
+
 ## Open
 
-None — all findings closed across Batches 2 + 3 + 4 + 5.
+None — all findings closed across Batches 2 + 3 + 4 + 5 + 6 + 7.
+The five M/S-tier pre-existing items above the line are retained
+as visibility-for-future-sweeps items, not as open work on PR #11.

@@ -124,10 +124,12 @@ defmodule PhoenixKitDocumentCreatorTest do
   end
 
   describe "version/0" do
-    test "returns a version string" do
+    test "returns the mix.exs declared version" do
+      # Derived from `Mix.Project.config()[:version]` at compile time —
+      # the runtime value can't drift from `@version` in mix.exs.
       version = PhoenixKitDocumentCreator.version()
       assert is_binary(version)
-      assert version == "0.2.7"
+      assert version == Mix.Project.config()[:version]
     end
   end
 

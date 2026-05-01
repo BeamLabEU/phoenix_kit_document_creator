@@ -32,7 +32,30 @@ defmodule PhoenixKitDocumentCreator.Test.StubIntegrations do
   def connected!(email \\ "test@example.com") do
     ensure_table()
     :ets.insert(@ets_table, {:connected_email, email})
+    seed_active_integration_setting()
     :ok
+  end
+
+  # Mirror the stub's "connected" state into the document_creator
+  # settings row that `GoogleDocsClient.active_integration_uuid/0`
+  # reads. Pre-Phase 3b the active provider key fell back to the
+  # literal `"google"` when nothing was stored; post-Phase 3b
+  # `active_integration_uuid/0` returns `nil` and short-circuits the
+  # downstream calls. Seed a sentinel uuid here so existing tests
+  # that only call `connected!/1` get the same dispatch behavior
+  # they had before.
+  defp seed_active_integration_setting do
+    fake_uuid = "019d0000-0000-7000-8000-0000000000ff"
+
+    PhoenixKit.Settings.update_json_setting_with_module(
+      "document_creator_settings",
+      %{"google_connection" => fake_uuid},
+      "document_creator"
+    )
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   @doc "Mark the stub as disconnected (default state)."
@@ -91,6 +114,39 @@ defmodule PhoenixKitDocumentCreator.Test.StubIntegrations do
       nil -> {:error, :not_configured}
       _ -> {:ok, %{access_token: "stub-token", refresh_token: "stub-refresh"}}
     end
+  end
+
+  @doc """
+  Stub for `PhoenixKit.Integrations.list_connections/1`. Returns an
+  empty list by default; tests opt in via `seed_connection!/2`.
+  """
+  @spec list_connections(String.t()) :: [%{uuid: String.t(), name: String.t(), data: map()}]
+  def list_connections(provider_key) do
+    ensure_table()
+
+    case :ets.lookup(@ets_table, {:connections, provider_key}) do
+      [{_key, list}] -> list
+      [] -> []
+    end
+  end
+
+  @doc """
+  Adds a fake connection to the stub's `list_connections/1` response
+  for `provider_key`. Use to test multi-account flows or the
+  `migrate_legacy_connection/1` helper that scans for a target row.
+  """
+  @spec seed_connection!(String.t(), %{uuid: String.t(), name: String.t(), data: map()}) :: :ok
+  def seed_connection!(provider_key, conn) do
+    ensure_table()
+
+    existing =
+      case :ets.lookup(@ets_table, {:connections, provider_key}) do
+        [{_, list}] -> list
+        [] -> []
+      end
+
+    :ets.insert(@ets_table, {{:connections, provider_key}, existing ++ [conn]})
+    :ok
   end
 
   @spec authenticated_request(String.t(), atom(), String.t(), keyword()) ::

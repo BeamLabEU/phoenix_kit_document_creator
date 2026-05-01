@@ -47,33 +47,21 @@ repo_available =
     try do
       {:ok, _} = TestRepo.start_link()
 
-      # Enable uuid-ossp + pgcrypto extensions. pgcrypto provides
-      # `gen_random_bytes()` which `uuid_generate_v7()` calls below;
-      # without it any insert into a table that defaults its uuid column
-      # to `uuid_generate_v7()` raises `function gen_random_bytes does
-      # not exist`.
-      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-      TestRepo.query!("CREATE EXTENSION IF NOT EXISTS pgcrypto")
-
-      # Create uuid_generate_v7() function (normally created by PhoenixKit V40 migration)
-      TestRepo.query!("""
-      CREATE OR REPLACE FUNCTION uuid_generate_v7()
-      RETURNS uuid AS $$
-      DECLARE
-        unix_ts_ms bytea;
-        uuid_bytes bytea;
-      BEGIN
-        unix_ts_ms := substring(int8send(floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint) FROM 3);
-        uuid_bytes := unix_ts_ms || gen_random_bytes(10);
-        uuid_bytes := set_byte(uuid_bytes, 6, (get_byte(uuid_bytes, 6) & 15) | 112);
-        uuid_bytes := set_byte(uuid_bytes, 8, (get_byte(uuid_bytes, 8) & 63) | 128);
-        RETURN encode(uuid_bytes, 'hex')::uuid;
-      END;
-      $$ LANGUAGE plpgsql VOLATILE;
-      """)
-
-      # Run test migration to create tables (production uses PhoenixKit V86)
-      Ecto.Migrator.up(TestRepo, 0, PhoenixKitDocumentCreator.Test.Migration, log: false)
+      # Build the schema directly from core's versioned migrations —
+      # same call the host app makes in production. Core's V40 creates
+      # the `uuid-ossp` / `pgcrypto` extensions + `uuid_generate_v7()`
+      # function; V03/V04 create `phoenix_kit_settings`; V86/V94 create
+      # this module's `phoenix_kit_doc_*` tables; V90 creates
+      # `phoenix_kit_activities`. No module-owned DDL.
+      #
+      # Standalone runs against Hex `phoenix_kit ~> 1.7` may fail at
+      # boot if the published Hex version pre-dates a column this
+      # module's schemas reference — that's expected. The canonical
+      # test channel for this module is via `phoenix_kit_parent`
+      # (path-dep `override: true` resolves `phoenix_kit` to the local
+      # checkout, which has the latest schema). See ~/.claude memory
+      # `feedback_run_tests_via_parent.md`.
+      Ecto.Migrator.run(TestRepo, [{0, PhoenixKit.Migration}], :up, all: true, log: false)
 
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true

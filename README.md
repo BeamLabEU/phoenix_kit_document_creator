@@ -240,6 +240,26 @@ Atoms that flow out of the public API: `:templates_folder_not_found`,
 OAuth credentials and token refresh live in `PhoenixKit.Integrations` under
 the `"google"` provider; this module delegates authentication there.
 
+The active connection is stored as the integration row's **uuid** in
+`document_creator_settings.google_connection`. `active_integration_uuid/0`
+is the read accessor; `migrate_legacy/0` (the `PhoenixKit.Module` boot
+callback) handles two kinds of pre-uuid data on upgrade:
+
+1. The legacy `document_creator_google_oauth` settings key with locally-
+   stored OAuth tokens, migrated into a real `PhoenixKit.Integrations`
+   row under `"google:default"`.
+2. Name-string `google_connection` references (`"google"` /
+   `"google:my-name"`) from before the uuid switch, rewritten in place
+   to the matching row's uuid.
+
+Lazy on-read promotion in `active_integration_uuid/0` covers any
+record the boot pass missed — first request after upgrade rewrites the
+setting transparently. Host apps trigger boot migration via
+`PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0` from
+`Application.start/2`; if you never call it, the lazy path keeps things
+working at the cost of one extra Settings round-trip per affected
+request.
+
 ```elixir
 GoogleDocsClient.connection_status()             # {:ok, %{email: ...}} | {:error, reason}
 GoogleDocsClient.get_credentials()               # {:ok, creds} | {:error, :not_configured}

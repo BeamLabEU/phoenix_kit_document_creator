@@ -21,14 +21,14 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   @impl true
   def mount(_params, _session, socket) do
     fc = GoogleDocsClient.get_folder_config()
-    active_key = GoogleDocsClient.active_provider_key()
-    connected = Integrations.connected?(active_key)
+    active_uuid = GoogleDocsClient.active_integration_uuid()
+    connected = active_uuid && Integrations.connected?(active_uuid)
 
     # Load all available Google connections for the selector
     google_connections = Integrations.list_connections("google")
 
     connection_info =
-      case Integrations.get_integration(active_key) do
+      case active_uuid && Integrations.get_integration(active_uuid) do
         {:ok, data} ->
           %{
             email:
@@ -45,7 +45,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
        page_title: gettext("Document Creator — Folders"),
        connected: connected,
        connected_email: connection_info.email,
-       active_connection: active_key,
+       active_connection: active_uuid,
        google_connections: google_connections,
        # Folder config: path + name for each
        templates_path: fc.templates_path,
@@ -343,6 +343,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
+                  phx-disable-with={gettext("Loading…")}
                   phx-value-field="templates_path"
                   title={if @templates_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @templates_path)}
                 >
@@ -367,6 +368,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
+                  phx-disable-with={gettext("Loading…")}
                   phx-value-field="documents_path"
                   title={if @documents_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @documents_path)}
                 >
@@ -391,6 +393,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="button"
                   class="btn btn-ghost btn-sm font-mono text-sm border border-base-300 rounded-r-none px-2 h-12 max-w-[60%] overflow-hidden"
                   phx-click="browse_folder"
+                  phx-disable-with={gettext("Loading…")}
                   phx-value-field="deleted_path"
                   title={if @deleted_path == "", do: gettext("Browse Google Drive — root"), else: gettext("Browse Google Drive — %{path}", path: @deleted_path)}
                 >
