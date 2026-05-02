@@ -1,7 +1,7 @@
 defmodule PhoenixKitDocumentCreator.MixProject do
   use Mix.Project
 
-  @version "0.2.8"
+  @version "0.2.9"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_document_creator"
 
   def project do
