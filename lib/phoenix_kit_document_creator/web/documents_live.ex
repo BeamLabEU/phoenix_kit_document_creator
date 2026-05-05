@@ -15,6 +15,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
+  alias PhoenixKitDocumentCreator.Web.Helpers
 
   @pubsub_topic PhoenixKitDocumentCreator.Documents.pubsub_topic()
   @refresh_cooldown_ms :timer.seconds(5)
@@ -22,40 +23,34 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    # Subscribe BEFORE the initial DB read so a `:files_changed` broadcast
-    # arriving between the read and the subscribe doesn't get dropped on
-    # the floor — without this, an admin who creates a file at the same
-    # moment another admin is mounting would have their broadcast vanish
-    # and the second admin's list would stay stale until the next 2-minute
-    # poll fires. The cost of subscribing first is at most one extra sync
-    # in the rare race where a broadcast does land between subscribe and
-    # read — `within_cooldown?/1` already gates the resulting sync.
+    # Disconnected mount returns an empty shell — no DB / Settings /
+    # Integrations calls. The connected mount subscribes to PubSub
+    # (BEFORE the DB read, so a `:files_changed` broadcast arriving
+    # between the read and the subscribe doesn't get dropped on the
+    # floor) then triggers `:load_initial` to do the file-list reads
+    # and the initial Drive sync. Without this gate, `mount/3` runs
+    # twice per page load and every DB read in it ran twice too.
     if connected?(socket) do
       PhoenixKit.PubSubHelper.subscribe(@pubsub_topic)
-    end
-
-    google_connected = google_connected?()
-    initial = load_initial_state(google_connected)
-
-    if connected?(socket) and google_connected do
-      send(self(), :sync_from_drive)
-      :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
+      send(self(), :load_initial)
     end
 
     {:ok,
      assign(socket,
        page_title: gettext("Document Creator"),
        view_mode: "cards",
-       google_connected: google_connected,
-       templates: initial.templates,
-       documents: initial.documents,
-       trashed_templates: initial.trashed_templates,
-       trashed_documents: initial.trashed_documents,
+       loaded: false,
+       google_connected: false,
+       templates: [],
+       documents: [],
+       trashed_templates: [],
+       trashed_documents: [],
+       known_file_ids: MapSet.new(),
        status_mode: "active",
        pending_files: MapSet.new(),
-       thumbnails: initial.cached_thumbnails,
-       enabled_languages: Documents.list_enabled_languages(),
-       loading: google_connected and initial.db_empty,
+       thumbnails: %{},
+       enabled_languages: [],
+       loading: true,
        last_loaded_at: nil,
        error: nil,
        # Modal state
@@ -105,6 +100,36 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── Sync from Drive ──────────────────────────────────────────────
 
   @impl true
+  def handle_info(:load_initial, socket) do
+    google_connected = google_connected?()
+    initial = load_initial_state(google_connected)
+
+    if google_connected do
+      send(self(), :sync_from_drive)
+      :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
+    end
+
+    {:noreply,
+     assign(socket,
+       loaded: true,
+       google_connected: google_connected,
+       templates: initial.templates,
+       documents: initial.documents,
+       trashed_templates: initial.trashed_templates,
+       trashed_documents: initial.trashed_documents,
+       known_file_ids:
+         build_known_file_ids(
+           initial.templates,
+           initial.documents,
+           initial.trashed_templates,
+           initial.trashed_documents
+         ),
+       thumbnails: initial.cached_thumbnails,
+       enabled_languages: Documents.list_enabled_languages(),
+       loading: google_connected and initial.db_empty
+     )}
+  end
+
   def handle_info(:sync_from_drive, socket) do
     pid = self()
 
@@ -152,6 +177,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        documents: documents,
        trashed_templates: trashed_templates,
        trashed_documents: trashed_documents,
+       known_file_ids:
+         build_known_file_ids(templates, documents, trashed_templates, trashed_documents),
        thumbnails: Map.merge(socket.assigns.thumbnails, cached_thumbnails),
        loading: false,
        last_loaded_at: now_ms()
@@ -1321,21 +1348,23 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     |> Kernel.<>(".pdf")
   end
 
-  defp actor_opts(socket) do
-    case socket.assigns[:phoenix_kit_current_scope] do
-      %{user: %{uuid: uuid}} -> [actor_uuid: uuid]
-      _ -> []
-    end
+  defp actor_opts(socket), do: Helpers.actor_opts(socket)
+
+  # `known_file_ids` is a `MapSet` of every file ID this LV has loaded
+  # across the four lists. Maintained by `assign_file_lists/2` whenever
+  # any of those lists change. Lookup is O(1) — replaces the previous
+  # 4× `Enum.any?/2` shape that was O(N) per event and noticeable on
+  # folders with thousands of files.
+  defp verify_known_file(socket, file_id) do
+    if MapSet.member?(socket.assigns.known_file_ids, file_id),
+      do: :ok,
+      else: :unknown
   end
 
-  defp verify_known_file(socket, file_id) do
-    known? =
-      Enum.any?(socket.assigns.templates, &(&1["id"] == file_id)) or
-        Enum.any?(socket.assigns.documents, &(&1["id"] == file_id)) or
-        Enum.any?(socket.assigns.trashed_templates, &(&1["id"] == file_id)) or
-        Enum.any?(socket.assigns.trashed_documents, &(&1["id"] == file_id))
-
-    if known?, do: :ok, else: :unknown
+  defp build_known_file_ids(templates, documents, trashed_templates, trashed_documents) do
+    [templates, documents, trashed_templates, trashed_documents]
+    |> Enum.flat_map(fn list -> Enum.map(list, & &1["id"]) end)
+    |> MapSet.new()
   end
 
   defp broadcast_files_changed do
