@@ -119,4 +119,19 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:status, @statuses)
   end
+
+  @doc """
+  Focused changeset for setting/clearing the locale tag on a template.
+
+  Used by both the create-time language stamp (`Documents.create_template/2`)
+  and the post-create updater (`Documents.update_template_language/3`) so
+  both write paths honour `validate_length(:language, max: 10)` — the prior
+  `update_all` write skipped this and would surface oversized codes as a
+  Postgrex `value too long` exception instead of a clean changeset error.
+  """
+  def language_changeset(template, attrs) do
+    template
+    |> cast(attrs, [:language])
+    |> validate_length(:language, max: 10)
+  end
 end

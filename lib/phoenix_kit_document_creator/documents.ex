@@ -553,32 +553,47 @@ defmodule PhoenixKitDocumentCreator.Documents do
       catch
         :exit, _ -> nil
       end
+    else
+      nil
     end
   end
 
   defp apply_template_language(_doc_id, nil), do: :ok
 
+  # Routes through `Template.language_changeset/2` so the V110 `max: 10`
+  # validation runs on the create path the same way it runs on
+  # `update_template_language/3`. The Drive doc is already created at
+  # this point — invalid language is logged and swallowed; the user
+  # can still recover via the post-create picker.
   defp apply_template_language(doc_id, language) when is_binary(language) do
-    {count, _} =
-      Template
-      |> where([t], t.google_doc_id == ^doc_id)
-      |> repo().update_all(set: [language: language])
+    case repo().get_by(Template, google_doc_id: doc_id) do
+      nil ->
+        # The template row vanished between `upsert_template_from_drive/2`
+        # and this stamp — shouldn't happen via the admin UI but might
+        # via an OTP message or a future async path. Logging preserves
+        # audit visibility without escalating to caller-facing failure.
+        Logger.warning(
+          "[DocumentCreator] apply_template_language no-op | google_doc_id=#{inspect(doc_id)} | language=#{inspect(language)}"
+        )
 
-    # `update_all` returns the row count it touched. Zero means the
-    # template row vanished between `upsert_template_from_drive/2` and
-    # this stamp — the only realistic cause is a concurrent race that
-    # shouldn't happen via the admin UI but might via an OTP message
-    # or a future async path. Logging it preserves audit visibility
-    # without escalating to caller-facing failure (the Drive doc was
-    # already created successfully; missing language is recoverable
-    # via `update_template_language/3`).
-    if count == 0 do
-      Logger.warning(
-        "[DocumentCreator] apply_template_language no-op | google_doc_id=#{inspect(doc_id)} | language=#{inspect(language)}"
-      )
+        :ok
+
+      template ->
+        template
+        |> Template.language_changeset(%{language: language})
+        |> repo().update()
+        |> case do
+          {:ok, _} ->
+            :ok
+
+          {:error, cs} ->
+            Logger.warning(
+              "[DocumentCreator] apply_template_language invalid | google_doc_id=#{inspect(doc_id)} | language=#{inspect(language)} | errors=#{inspect(cs.errors)}"
+            )
+
+            :ok
+        end
     end
-
-    :ok
   end
 
   @doc """
@@ -860,7 +875,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
       %Template{language: previous} = template ->
         template
-        |> Template.changeset(%{language: normalized})
+        |> Template.language_changeset(%{language: normalized})
         |> repo().update()
         |> case do
           {:ok, updated} ->
@@ -881,13 +896,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
             broadcast_files_changed()
             {:ok, updated}
 
-          {:error, changeset} = err ->
+          {:error, _changeset} = err ->
             log_failed_mutation("template.language_updated", "template", opts, %{
               "google_doc_id" => google_doc_id,
               "language_to" => normalized
             })
 
-            _ = changeset
             err
         end
     end

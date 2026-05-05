@@ -240,6 +240,43 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplateTest do
     end
   end
 
+  describe "language_changeset/2" do
+    # Focused changeset used by both the create-time language stamp
+    # (`Documents.create_template/2`) and the post-create updater
+    # (`Documents.update_template_language/3`). Pre-fix, the create
+    # path used `update_all` and skipped this validation entirely —
+    # a stray oversized code surfaced as a Postgrex exception instead
+    # of a clean changeset error.
+    test "casts language and validates length" do
+      cs = Template.language_changeset(%Template{}, %{language: "en-US"})
+      assert cs.valid?
+      assert cs.changes.language == "en-US"
+    end
+
+    test "rejects language longer than 10 chars (matches V110 column size)" do
+      cs = Template.language_changeset(%Template{}, %{language: String.duplicate("x", 11)})
+      refute cs.valid?
+      assert %{language: ["should be at most 10 character(s)"]} = errors_on(cs)
+    end
+
+    test "accepts nil (clearing the language)" do
+      cs = Template.language_changeset(%Template{language: "ja"}, %{language: nil})
+      assert cs.valid?
+    end
+
+    test "ignores fields outside the cast allowlist" do
+      cs =
+        Template.language_changeset(
+          %Template{name: "Original", language: nil},
+          %{language: "et-EE", name: "Should Be Ignored"}
+        )
+
+      assert cs.valid?
+      assert cs.changes.language == "et-EE"
+      refute Map.has_key?(cs.changes, :name)
+    end
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Regex.replace(~r"%{(\w+)}", msg, fn _, key ->

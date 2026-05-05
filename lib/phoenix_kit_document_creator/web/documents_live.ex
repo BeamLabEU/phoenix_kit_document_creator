@@ -294,8 +294,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     case verify_known_file(socket, file_id) do
       :ok ->
         case Documents.update_template_language(file_id, language, actor_opts(socket)) do
-          {:ok, _template} ->
-            templates = Documents.list_templates_from_db()
+          {:ok, updated} ->
+            # In-place patch on the existing assign — the self-broadcast is
+            # filtered out, so without this patch the badge would lag until
+            # the next sync. Beats re-reading the whole templates table.
+            templates =
+              patch_template_language(socket.assigns.templates, file_id, updated.language)
+
             {:noreply, assign(socket, templates: templates)}
 
           {:error, reason} ->
@@ -1359,6 +1364,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     if MapSet.member?(socket.assigns.known_file_ids, file_id),
       do: :ok,
       else: :unknown
+  end
+
+  defp patch_template_language(templates, file_id, new_language) do
+    Enum.map(templates, fn t ->
+      if t["id"] == file_id, do: Map.put(t, "language", new_language), else: t
+    end)
   end
 
   defp build_known_file_ids(templates, documents, trashed_templates, trashed_documents) do
