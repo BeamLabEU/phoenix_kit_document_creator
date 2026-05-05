@@ -54,7 +54,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        status_mode: "active",
        pending_files: MapSet.new(),
        thumbnails: initial.cached_thumbnails,
-       enabled_languages: load_enabled_languages(),
+       enabled_languages: Documents.list_enabled_languages(),
        loading: google_connected and initial.db_empty,
        last_loaded_at: nil,
        error: nil,
@@ -68,25 +68,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        unfiled_file: nil,
        unfiled_working: false
      )}
-  end
-
-  # Load the project's enabled languages for the per-template picker.
-  # Returns `[%{code: "en-US", name: "English (United States)"}]` (sorted
-  # by Languages module's configured position) or `[]` when the Languages
-  # module isn't loaded / enabled — in which case the picker is hidden.
-  defp load_enabled_languages do
-    if Code.ensure_loaded?(PhoenixKit.Modules.Languages) do
-      try do
-        PhoenixKit.Modules.Languages.get_enabled_languages()
-        |> Enum.map(fn lang -> %{code: lang.code, name: lang.name} end)
-      rescue
-        _ -> []
-      catch
-        :exit, _ -> []
-      end
-    else
-      []
-    end
   end
 
   defp google_connected? do

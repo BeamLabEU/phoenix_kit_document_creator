@@ -23,6 +23,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   require Logger
 
+  alias PhoenixKit.Modules.Languages
   alias PhoenixKitDocumentCreator.GoogleDocsClient
   alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
   alias PhoenixKitDocumentCreator.Schemas.Document
@@ -508,20 +509,47 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
-  # Look up the project's primary language code via core's Languages
-  # module. Wrapped in `try` because Languages may be disabled or its
-  # settings table may not be accessible from every call site (boot,
-  # tests). Failing here must not crash template creation — falling
-  # back to nil is safe; the form will still render correctly.
-  defp default_language_code do
-    if Code.ensure_loaded?(PhoenixKit.Modules.Languages) do
+  @doc """
+  Lookup the project's enabled languages, sorted by configured position.
+
+  Returns `[%{code: "en-US", name: "English (United States)"}, ...]` or
+  `[]` when core's `PhoenixKit.Modules.Languages` is disabled or the
+  settings table isn't reachable. Safe to call from LiveView mount —
+  failure is swallowed, never crashes the caller.
+  """
+  @spec list_enabled_languages() :: [%{code: String.t(), name: String.t()}]
+  def list_enabled_languages do
+    if Code.ensure_loaded?(Languages) do
       try do
-        case PhoenixKit.Modules.Languages.get_default_language() do
+        Languages.get_enabled_languages()
+        |> Enum.map(fn lang -> %{code: lang.code, name: lang.name} end)
+      rescue
+        _ in [ArgumentError, KeyError, MatchError, BadMapError] -> []
+        _ in [DBConnection.ConnectionError, Postgrex.Error] -> []
+      catch
+        :exit, _ -> []
+      end
+    else
+      []
+    end
+  end
+
+  # Look up the project's primary language code via core's Languages
+  # module. Same rescue/catch shape as `default_managed/2` — narrow
+  # exception classes (Settings shape errors + DB unavailability).
+  # Failing here must not crash template creation; nil is the safe
+  # fallback — the form pre-select just renders empty, the user can
+  # still pick from the dropdown.
+  defp default_language_code do
+    if Code.ensure_loaded?(Languages) do
+      try do
+        case Languages.get_default_language() do
           %{code: code} when is_binary(code) -> code
           _ -> nil
         end
       rescue
-        _ -> nil
+        _ in [ArgumentError, KeyError, MatchError, BadMapError] -> nil
+        _ in [DBConnection.ConnectionError, Postgrex.Error] -> nil
       catch
         :exit, _ -> nil
       end
@@ -531,9 +559,24 @@ defmodule PhoenixKitDocumentCreator.Documents do
   defp apply_template_language(_doc_id, nil), do: :ok
 
   defp apply_template_language(doc_id, language) when is_binary(language) do
-    Template
-    |> where([t], t.google_doc_id == ^doc_id)
-    |> repo().update_all(set: [language: language])
+    {count, _} =
+      Template
+      |> where([t], t.google_doc_id == ^doc_id)
+      |> repo().update_all(set: [language: language])
+
+    # `update_all` returns the row count it touched. Zero means the
+    # template row vanished between `upsert_template_from_drive/2` and
+    # this stamp — the only realistic cause is a concurrent race that
+    # shouldn't happen via the admin UI but might via an OTP message
+    # or a future async path. Logging it preserves audit visibility
+    # without escalating to caller-facing failure (the Drive doc was
+    # already created successfully; missing language is recoverable
+    # via `update_template_language/3`).
+    if count == 0 do
+      Logger.warning(
+        "[DocumentCreator] apply_template_language no-op | google_doc_id=#{inspect(doc_id)} | language=#{inspect(language)}"
+      )
+    end
 
     :ok
   end
