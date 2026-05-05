@@ -127,8 +127,9 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   defp schema_to_file_map(record) do
-    %{
+    base = %{
       "id" => record.google_doc_id,
+      "uuid" => record.uuid,
       "name" => record.name,
       "modifiedTime" =>
         if(record.updated_at, do: DateTime.to_iso8601(record.updated_at), else: nil),
@@ -136,6 +137,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
       "path" => record.path,
       "folder_id" => record.folder_id
     }
+
+    # Templates have a `language` column (V110); documents inherit
+    # language from their template at fill time and don't store one.
+    if Map.has_key?(record, :language) do
+      Map.put(base, "language", record.language)
+    else
+      base
+    end
   end
 
   # ===========================================================================
@@ -444,6 +453,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
   ## Options
 
   - `:actor_uuid` — UUID of the user performing the action (for activity logging)
+  - `:language` — locale code to tag the template with. Defaults to the
+    project's primary language from `PhoenixKit.Modules.Languages`.
+    Pass `nil` to leave it unset; pass an explicit code (e.g. `"et-EE"`)
+    to override.
   """
   @spec create_template(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def create_template(name \\ "Untitled Template", opts \\ []) do
@@ -456,12 +469,19 @@ defmodule PhoenixKitDocumentCreator.Documents do
               managed_location_attrs(:template)
             )
 
+            language = resolve_create_language(opts)
+            apply_template_language(doc_id, language)
+
             log_activity(%{
               action: "template.created",
               mode: "manual",
               actor_uuid: opts[:actor_uuid],
               resource_type: "template",
-              metadata: %{"name" => name, "google_doc_id" => doc_id}
+              metadata: %{
+                "name" => name,
+                "google_doc_id" => doc_id,
+                "language" => language
+              }
             })
 
             {:ok, result}
@@ -475,6 +495,47 @@ defmodule PhoenixKitDocumentCreator.Documents do
         log_failed_mutation("template.created", "template", opts, %{"name" => name})
         {:error, :templates_folder_not_found}
     end
+  end
+
+  # Resolve the language for a newly-created template:
+  #   * caller passed `language: ...` (incl. nil) → use that exact value
+  #   * caller omitted → fall back to project's primary language
+  defp resolve_create_language(opts) do
+    if Keyword.has_key?(opts, :language) do
+      Keyword.get(opts, :language)
+    else
+      default_language_code()
+    end
+  end
+
+  # Look up the project's primary language code via core's Languages
+  # module. Wrapped in `try` because Languages may be disabled or its
+  # settings table may not be accessible from every call site (boot,
+  # tests). Failing here must not crash template creation — falling
+  # back to nil is safe; the form will still render correctly.
+  defp default_language_code do
+    if Code.ensure_loaded?(PhoenixKit.Modules.Languages) do
+      try do
+        case PhoenixKit.Modules.Languages.get_default_language() do
+          %{code: code} when is_binary(code) -> code
+          _ -> nil
+        end
+      rescue
+        _ -> nil
+      catch
+        :exit, _ -> nil
+      end
+    end
+  end
+
+  defp apply_template_language(_doc_id, nil), do: :ok
+
+  defp apply_template_language(doc_id, language) when is_binary(language) do
+    Template
+    |> where([t], t.google_doc_id == ^doc_id)
+    |> repo().update_all(set: [language: language])
+
+    :ok
   end
 
   @doc """
@@ -718,6 +779,75 @@ defmodule PhoenixKitDocumentCreator.Documents do
           {:ok, Template.t()} | {:error, Ecto.Changeset.t() | term()}
   def register_existing_template(attrs, opts \\ []) when is_map(attrs) do
     register_existing(:template, attrs, opts)
+  end
+
+  @doc """
+  Set the locale on a template, looked up by `google_doc_id`.
+
+  Pass `nil` (or an empty string) to clear the language. Otherwise the
+  full locale code (e.g. `"en-US"`, `"et-EE"`) — typically sourced from
+  `PhoenixKit.Modules.Languages.get_enabled_languages/0`.
+
+  Logs `template.language_updated` with the from/to pair on success and
+  broadcasts `:files_changed` so connected admin LiveViews resync.
+
+  ## Options
+
+  - `:actor_uuid` — UUID of the user performing the action (activity log)
+  """
+  @spec update_template_language(String.t(), String.t() | nil, keyword()) ::
+          {:ok, Template.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def update_template_language(google_doc_id, language, opts \\ [])
+      when is_binary(google_doc_id) do
+    normalized =
+      case language do
+        nil -> nil
+        "" -> nil
+        code when is_binary(code) -> code
+      end
+
+    case repo().get_by(Template, google_doc_id: google_doc_id) do
+      nil ->
+        log_failed_mutation("template.language_updated", "template", opts, %{
+          "google_doc_id" => google_doc_id,
+          "language_to" => normalized
+        })
+
+        {:error, :not_found}
+
+      %Template{language: previous} = template ->
+        template
+        |> Template.changeset(%{language: normalized})
+        |> repo().update()
+        |> case do
+          {:ok, updated} ->
+            log_activity(%{
+              action: "template.language_updated",
+              mode: "manual",
+              actor_uuid: opts[:actor_uuid],
+              resource_type: "template",
+              resource_uuid: updated.uuid,
+              metadata: %{
+                "name" => updated.name,
+                "google_doc_id" => updated.google_doc_id,
+                "language_from" => previous,
+                "language_to" => updated.language
+              }
+            })
+
+            broadcast_files_changed()
+            {:ok, updated}
+
+          {:error, changeset} = err ->
+            log_failed_mutation("template.language_updated", "template", opts, %{
+              "google_doc_id" => google_doc_id,
+              "language_to" => normalized
+            })
+
+            _ = changeset
+            err
+        end
+    end
   end
 
   defp register_existing(kind, attrs, opts) do

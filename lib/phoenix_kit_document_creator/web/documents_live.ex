@@ -54,6 +54,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        status_mode: "active",
        pending_files: MapSet.new(),
        thumbnails: initial.cached_thumbnails,
+       enabled_languages: load_enabled_languages(),
        loading: google_connected and initial.db_empty,
        last_loaded_at: nil,
        error: nil,
@@ -67,6 +68,25 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        unfiled_file: nil,
        unfiled_working: false
      )}
+  end
+
+  # Load the project's enabled languages for the per-template picker.
+  # Returns `[%{code: "en-US", name: "English (United States)"}]` (sorted
+  # by Languages module's configured position) or `[]` when the Languages
+  # module isn't loaded / enabled — in which case the picker is hidden.
+  defp load_enabled_languages do
+    if Code.ensure_loaded?(PhoenixKit.Modules.Languages) do
+      try do
+        PhoenixKit.Modules.Languages.get_enabled_languages()
+        |> Enum.map(fn lang -> %{code: lang.code, name: lang.name} end)
+      rescue
+        _ -> []
+      catch
+        :exit, _ -> []
+      end
+    else
+      []
+    end
   end
 
   defp google_connected? do
@@ -253,6 +273,31 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       {:error, reason} ->
         Logger.error("Failed to create template: #{inspect(reason)}")
         {:noreply, assign(socket, error: gettext("Failed to create template. Please try again."))}
+    end
+  end
+
+  def handle_event("set_template_language", %{"id" => file_id} = params, socket) do
+    language =
+      case Map.get(params, "language", "") do
+        "" -> nil
+        code -> code
+      end
+
+    case verify_known_file(socket, file_id) do
+      :ok ->
+        case Documents.update_template_language(file_id, language, actor_opts(socket)) do
+          {:ok, _template} ->
+            templates = Documents.list_templates_from_db()
+            {:noreply, assign(socket, templates: templates)}
+
+          {:error, reason} ->
+            Logger.error("Failed to set template language for #{file_id}: #{inspect(reason)}")
+
+            {:noreply, assign(socket, error: gettext("Failed to update template language."))}
+        end
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -918,7 +963,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       view_mode: assigns.view_mode,
       status_mode: assigns.status_mode,
       pending_files: assigns.pending_files,
-      thumbnails: assigns.thumbnails
+      thumbnails: assigns.thumbnails,
+      is_template: assigns.live_action == :templates,
+      enabled_languages: assigns.enabled_languages
     }
   end
 
@@ -995,6 +1042,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 {gettext("unfiled")}
               </button>
             </div>
+            {render_language_picker(%{
+              file: file,
+              is_template: @is_template,
+              enabled_languages: @enabled_languages,
+              status_mode: @status_mode
+            })}
             <p :if={file["modifiedTime"]} class="text-xs text-base-content/40 mt-auto pt-2">
               {format_time(file["modifiedTime"])}
             </p>
@@ -1070,13 +1123,21 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 </td>
               <% else %>
               <td>
-                <a
-                  href={GoogleDocsClient.get_edit_url(file["id"])}
-                  target="_blank"
-                  class="font-medium link link-hover"
-                >
-                  {file["name"]}
-                </a>
+                <div class="flex items-center gap-2">
+                  <a
+                    href={GoogleDocsClient.get_edit_url(file["id"])}
+                    target="_blank"
+                    class="font-medium link link-hover"
+                  >
+                    {file["name"]}
+                  </a>
+                  {render_language_picker(%{
+                    file: file,
+                    is_template: @is_template,
+                    enabled_languages: @enabled_languages,
+                    status_mode: @status_mode
+                  })}
+                </div>
               </td>
               <td>
                 <span :if={file["status"] == "lost"} class="badge badge-warning badge-xs">
@@ -1172,6 +1233,75 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   defp unfiled_success_message("documents"), do: gettext("Moved to documents")
   defp unfiled_success_message("current"), do: gettext("Saved current location")
   defp unfiled_success_message(_), do: gettext("Updated")
+
+  # Per-template language picker. Hidden on the documents tab (documents
+  # inherit language from their source template), in the trash view, and
+  # when the host app's Languages module isn't enabled (`enabled_languages`
+  # arrives as `[]`). Shows the current locale code or "Set language" on
+  # the trigger; clicking opens a native HTML `popover` listing every
+  # enabled language plus a "Clear" entry. Popovers escape the card's
+  # `overflow: hidden` clipping container automatically.
+  defp render_language_picker(assigns) do
+    ~H"""
+    <div
+      :if={@is_template and @status_mode != "trashed" and @enabled_languages != []}
+      class="relative inline-flex"
+    >
+      <button
+        type="button"
+        popovertarget={"lang-pop-" <> @file["id"]}
+        style={"anchor-name: --lang-trigger-#{@file["id"]}"}
+        class={"badge badge-xs cursor-pointer #{if @file["language"], do: "badge-ghost", else: "badge-outline border-dashed"}"}
+        title={gettext("Template language")}
+      >
+        <span :if={@file["language"]} class="font-mono uppercase">
+          {@file["language"]}
+        </span>
+        <span :if={!@file["language"]}>
+          {gettext("Set language")}
+        </span>
+        <span class="hero-chevron-down w-2.5 h-2.5" />
+      </button>
+      <div
+        id={"lang-pop-" <> @file["id"]}
+        popover="auto"
+        style={
+          "position-anchor: --lang-trigger-#{@file["id"]}; " <>
+          "position-area: bottom span-right; " <>
+          "margin: 4px 0 0 0; inset: auto;"
+        }
+        class="bg-base-100 rounded-box w-60 p-1 shadow-lg max-h-72 overflow-y-auto border border-base-300 [&:not(:popover-open)]:hidden"
+      >
+        <%= for lang <- @enabled_languages do %>
+          <button
+            type="button"
+            popovertarget={"lang-pop-" <> @file["id"]}
+            popovertargetaction="hide"
+            phx-click="set_template_language"
+            phx-value-id={@file["id"]}
+            phx-value-language={lang.code}
+            class={"w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm hover:bg-base-200 #{if @file["language"] == lang.code, do: "bg-primary/10 text-primary", else: ""}"}
+          >
+            <span class="font-mono uppercase text-xs opacity-60 w-12 shrink-0">{lang.code}</span>
+            <span class="truncate flex-1">{lang.name}</span>
+          </button>
+        <% end %>
+        <button
+          :if={@file["language"]}
+          type="button"
+          popovertarget={"lang-pop-" <> @file["id"]}
+          popovertargetaction="hide"
+          phx-click="set_template_language"
+          phx-value-id={@file["id"]}
+          phx-value-language=""
+          class="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm text-base-content/50 hover:bg-base-200 mt-1 border-t border-base-200 pt-2"
+        >
+          <span class="hero-x-mark w-3.5 h-3.5" /> {gettext("Clear language")}
+        </button>
+      </div>
+    </div>
+    """
+  end
 
   defp render_thumbnail(assigns) do
     ~H"""
