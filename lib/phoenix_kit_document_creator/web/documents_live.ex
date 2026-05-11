@@ -146,8 +146,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     )
   end
 
-  defp apply_image_selection(socket, _var_name, _mode, []), do: socket
-
   defp google_connected? do
     case GoogleDocsClient.connection_status() do
       {:ok, _} -> true
