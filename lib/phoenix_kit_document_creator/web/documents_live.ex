@@ -16,6 +16,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
   alias PhoenixKitDocumentCreator.Web.Helpers
+  alias PhoenixKitWeb.Helpers.MediaSelectorHelper
 
   @pubsub_topic PhoenixKitDocumentCreator.Documents.pubsub_topic()
   @refresh_cooldown_ms :timer.seconds(5)
@@ -61,6 +62,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        modal_step: "choose",
        modal_selected_template: nil,
        modal_variables: [],
+       modal_image_values: %{},
        modal_creating: false,
        unfiled_modal_open: false,
        unfiled_file: nil,
@@ -69,15 +71,53 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, uri, socket) do
     title =
       case socket.assigns.live_action do
         :templates -> gettext("Templates")
         _ -> gettext("Documents")
       end
 
-    {:noreply, assign(socket, page_title: title)}
+    url_path = URI.parse(uri).path || "/"
+    socket = assign(socket, page_title: title, url_path: url_path)
+    {:noreply, apply_media_selection(params, socket)}
   end
+
+  defp apply_media_selection(params, socket) do
+    case MediaSelectorHelper.parse_selected_media(params) do
+      {:ok, uuids} ->
+        var_name = Map.get(params, "picking_var")
+        mode = Map.get(params, "picking_mode", "single")
+        apply_image_selection(socket, var_name, mode, uuids)
+
+      :none ->
+        socket
+    end
+  end
+
+  defp apply_image_selection(socket, nil, _mode, _uuids), do: socket
+
+  defp apply_image_selection(socket, var_name, "multiple", uuids) do
+    image_values = Map.put(socket.assigns.modal_image_values, var_name, %{"media_ids" => uuids})
+
+    assign(socket,
+      modal_open: true,
+      modal_step: "variables",
+      modal_image_values: image_values
+    )
+  end
+
+  defp apply_image_selection(socket, var_name, _single, [uuid | _]) do
+    image_values = Map.put(socket.assigns.modal_image_values, var_name, %{"media_id" => uuid})
+
+    assign(socket,
+      modal_open: true,
+      modal_step: "variables",
+      modal_image_values: image_values
+    )
+  end
+
+  defp apply_image_selection(socket, _var_name, _mode, []), do: socket
 
   defp google_connected? do
     case GoogleDocsClient.connection_status() do
@@ -349,6 +389,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        modal_step: "choose",
        modal_selected_template: nil,
        modal_variables: [],
+       modal_image_values: %{},
        modal_creating: false
      )}
   end
@@ -359,7 +400,28 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   def handle_event("modal_back", _params, socket) do
     {:noreply,
-     assign(socket, modal_step: "choose", modal_selected_template: nil, modal_variables: [])}
+     assign(socket,
+       modal_step: "choose",
+       modal_selected_template: nil,
+       modal_variables: [],
+       modal_image_values: %{}
+     )}
+  end
+
+  def handle_event("open_media_picker", %{"name" => var_name, "mode" => mode}, socket) do
+    current_path = socket.assigns[:url_path] || "/admin/document-creator"
+
+    return_to =
+      current_path <>
+        "?picking_var=#{URI.encode_www_form(var_name)}&picking_mode=#{URI.encode_www_form(mode)}"
+
+    selector_url =
+      MediaSelectorHelper.media_selector_url(return_to,
+        mode: String.to_existing_atom(mode),
+        filter: :image
+      )
+
+    {:noreply, push_navigate(socket, to: selector_url)}
   end
 
   def handle_event("modal_create_blank", _params, socket) do
@@ -394,7 +456,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     template = socket.assigns.modal_selected_template
     file_id = template["id"]
     doc_name = Map.get(params, "doc_name", template["name"])
-    variable_values = Map.get(params, "var", %{})
+    text_values = Map.get(params, "var", %{})
+    variable_values = Map.merge(text_values, socket.assigns.modal_image_values)
 
     socket = assign(socket, modal_creating: true)
 
@@ -883,6 +946,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       step={@modal_step}
       selected_template={@modal_selected_template}
       variables={@modal_variables}
+      image_values={@modal_image_values}
       creating={@modal_creating}
       thumbnails={@thumbnails}
     />

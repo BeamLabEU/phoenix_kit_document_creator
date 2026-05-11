@@ -9,13 +9,12 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
   use Phoenix.Component
   use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
-  alias PhoenixKitDocumentCreator.Web.Components.VariableConfigForm
-
   attr(:open, :boolean, required: true)
   attr(:templates, :list, default: [])
   attr(:step, :string, default: "choose")
   attr(:selected_template, :any, default: nil)
   attr(:variables, :list, default: [])
+  attr(:image_values, :map, default: %{})
   attr(:creating, :boolean, default: false)
   attr(:thumbnails, :map, default: %{})
 
@@ -121,8 +120,10 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
               rows="3"
               placeholder={var[:name] || var["name"]}
             />
-          <% type when type in [:image, :image_list] -> %>
-            <VariableConfigForm.config_form variable={var} />
+          <% :image -> %>
+            {render_image_picker(assign(assigns, :var, var))}
+          <% :image_list -> %>
+            {render_image_list_picker(assign(assigns, :var, var))}
           <% _ -> %>
             <input
               type="text"
@@ -146,6 +147,57 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
         </button>
       </div>
     </form>
+    """
+  end
+
+  defp render_image_picker(assigns) do
+    var_name = assigns.var[:name] || assigns.var["name"]
+
+    selected =
+      get_in(assigns.image_values, [var_name]) || get_in(assigns.image_values, ["#{var_name}"])
+
+    assigns = assign(assigns, var_name: var_name, selected: selected)
+
+    ~H"""
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        class="btn btn-outline btn-sm"
+        phx-click="open_media_picker"
+        phx-value-name={@var_name}
+        phx-value-mode="single"
+      >
+        <span class="hero-photo w-4 h-4" />
+        {gettext("Choose image")}
+      </button>
+      <span :if={@selected} class="badge badge-success badge-sm">{gettext("selected")}</span>
+    </div>
+    """
+  end
+
+  defp render_image_list_picker(assigns) do
+    var_name = assigns.var[:name] || assigns.var["name"]
+
+    selected =
+      get_in(assigns.image_values, [var_name]) || get_in(assigns.image_values, ["#{var_name}"])
+
+    count = length((selected || %{})["media_ids"] || [])
+    assigns = assign(assigns, var_name: var_name, count: count)
+
+    ~H"""
+    <div class="flex items-center gap-2">
+      <button
+        type="button"
+        class="btn btn-outline btn-sm"
+        phx-click="open_media_picker"
+        phx-value-name={@var_name}
+        phx-value-mode="multiple"
+      >
+        <span class="hero-photo w-4 h-4" />
+        {gettext("Choose images")}
+      </button>
+      <span :if={@count > 0} class="badge badge-success badge-sm">{@count}</span>
+    </div>
     """
   end
 end
