@@ -68,5 +68,9 @@ defmodule PhoenixKitDocumentCreator.MediaTest do
     test "returns :image_url_not_public for URL longer than 2048 bytes" do
       assert {:error, :image_url_not_public} = Media.get_url_and_dimensions("long-url-uuid")
     end
+
+    test "returns :image_not_found for non-binary argument" do
+      assert {:error, :image_not_found} = Media.get_url_and_dimensions(:not_a_binary)
+    end
   end
 end

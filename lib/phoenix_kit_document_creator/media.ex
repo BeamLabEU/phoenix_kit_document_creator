@@ -35,6 +35,8 @@ defmodule PhoenixKitDocumentCreator.Media do
     end
   end
 
+  def get_url_and_dimensions(_), do: {:error, :image_not_found}
+
   defp build_url_result(uri, file) when is_binary(uri) and byte_size(uri) <= 2048 do
     if String.starts_with?(uri, "https://") do
       {:ok, %{uri: uri, width_px: file.width, height_px: file.height}}
