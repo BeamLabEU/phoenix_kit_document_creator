@@ -29,15 +29,21 @@ defmodule PhoenixKitDocumentCreator.Media do
         {:error, :image_not_found}
 
       file ->
-        case mod.get_public_url(file) do
-          nil ->
-            {:error, :image_url_not_public}
-
-          uri ->
-            {:ok, %{uri: uri, width_px: file.width, height_px: file.height}}
-        end
+        file
+        |> mod.get_public_url()
+        |> build_url_result(file)
     end
   end
+
+  defp build_url_result(uri, file) when is_binary(uri) and byte_size(uri) <= 2048 do
+    if String.starts_with?(uri, "https://") do
+      {:ok, %{uri: uri, width_px: file.width, height_px: file.height}}
+    else
+      {:error, :image_url_not_public}
+    end
+  end
+
+  defp build_url_result(_, _), do: {:error, :image_url_not_public}
 
   defp media_module do
     Application.get_env(
