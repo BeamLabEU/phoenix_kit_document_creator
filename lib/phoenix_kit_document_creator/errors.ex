@@ -10,17 +10,17 @@ defmodule PhoenixKitDocumentCreator.Errors do
   consistent (every place that surfaces `:templates_folder_not_found`
   renders the exact same gettext string).
 
-  Translation files live in core `phoenix_kit`; this module only calls
-  `gettext/1` with literal strings so `mix gettext.extract` in core
-  picks them up correctly. Do NOT refactor this into a lookup map —
-  the extractor only sees literal arguments to `gettext/1` at the
-  call site.
+  Translation files live in this module's own `priv/gettext/`; the
+  msgids below are literal arguments to `gettext/1` so
+  `mix gettext.extract` picks them up correctly. Do NOT refactor this
+  into a lookup map — the extractor only sees literal arguments to
+  `gettext/1` at the call site.
 
   Unknown atoms fall through to `inspect/1` so the catch-all returns
   a useful-if-ugly string rather than crashing.
   """
 
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
   @type error_atom ::
           :copy_failed

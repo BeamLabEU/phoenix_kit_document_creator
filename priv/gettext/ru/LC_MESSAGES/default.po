@@ -1,0 +1,369 @@
+## "default" domain translations for ru locale.
+msgid ""
+msgstr ""
+"Language: ru\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+## Tab labels
+msgid "Document Creator"
+msgstr "Создание документов"
+
+msgid "Documents"
+msgstr "Документы"
+
+msgid "Templates"
+msgstr "Шаблоны"
+
+## Page titles
+msgid "Document Creator — Folders"
+msgstr "Создание документов — папки"
+
+msgid "Document Creator Settings"
+msgstr "Настройки создания документов"
+
+## Section headings
+msgid "Google Account Not Connected"
+msgstr "Аккаунт Google не подключён"
+
+msgid "Google Account"
+msgstr "Аккаунт Google"
+
+msgid "Drive Folders"
+msgstr "Папки Drive"
+
+msgid "Select Folder"
+msgstr "Выбрать папку"
+
+msgid "Resolve Unfiled Item"
+msgstr "Обработать неразложенный файл"
+
+msgid "Create New Document"
+msgstr "Создать новый документ"
+
+msgid "Fill Template Variables"
+msgstr "Заполнить переменные шаблона"
+
+## Help & descriptive text
+msgid "Start blank or choose a template."
+msgstr "Начните с пустого документа или выберите шаблон."
+
+msgid "Configure Google Drive folders for templates and documents."
+msgstr "Настройте папки Google Drive для шаблонов и документов."
+
+msgid "Customize the Google Drive folder names used for storage. Folders are created automatically if they don't exist."
+msgstr "Настройте имена папок Google Drive для хранения. Папки создаются автоматически, если их нет."
+
+msgid "Click the path button to browse your Google Drive. Deleted items go to subfolders inside the deleted folder. Folders are created automatically if they don't exist."
+msgstr "Нажмите на кнопку пути, чтобы просмотреть Google Drive. Удалённые элементы помещаются в подпапки внутри папки удалённых. Папки создаются автоматически, если их нет."
+
+msgid "Manage your Google connections in"
+msgstr "Управляйте подключениями Google в"
+
+msgid "Settings → Integrations"
+msgstr "Настройки → Интеграции"
+
+msgid "No subfolders"
+msgstr "Нет подпапок"
+
+msgid "My Drive"
+msgstr "Мой диск"
+
+msgid "Browse Google Drive — root"
+msgstr "Просмотреть Google Drive — корень"
+
+msgid "Browse Google Drive — %{path}"
+msgstr "Просмотреть Google Drive — %{path}"
+
+msgid "Choose how %{name} should be handled."
+msgstr "Выберите, как обработать %{name}."
+
+msgid "Saved location:"
+msgstr "Сохранённое расположение:"
+
+## Action buttons
+msgid "Go to Settings"
+msgstr "Перейти в настройки"
+
+msgid "Open Folder"
+msgstr "Открыть папку"
+
+msgid "New Template"
+msgstr "Новый шаблон"
+
+msgid "New Document"
+msgstr "Новый документ"
+
+msgid "Create Document"
+msgstr "Создать документ"
+
+msgid "Blank Document"
+msgstr "Пустой документ"
+
+msgid "or from template"
+msgstr "или из шаблона"
+
+msgid "Document Name"
+msgstr "Название документа"
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "View"
+msgstr "Просмотр"
+
+msgid "Edit"
+msgstr "Редактировать"
+
+msgid "PDF"
+msgstr "PDF"
+
+msgid "Export PDF"
+msgstr "Экспорт PDF"
+
+msgid "Restore"
+msgstr "Восстановить"
+
+msgid "Delete"
+msgstr "Удалить"
+
+msgid "Save Folder Settings"
+msgstr "Сохранить настройки папок"
+
+msgid "Select Current Folder"
+msgstr "Выбрать текущую папку"
+
+msgid "Set This As Correct Location"
+msgstr "Назначить это правильным расположением"
+
+msgid "Move To Documents"
+msgstr "Переместить в документы"
+
+msgid "Move To Templates"
+msgstr "Переместить в шаблоны"
+
+msgid "Template language"
+msgstr "Язык шаблона"
+
+msgid "Set language"
+msgstr "Задать язык"
+
+msgid "Clear language"
+msgstr "Очистить язык"
+
+## Loading / progress states
+msgid "Refreshing…"
+msgstr "Обновление…"
+
+msgid "Creating..."
+msgstr "Создание..."
+
+msgid "Creating…"
+msgstr "Создание…"
+
+msgid "Opening..."
+msgstr "Открытие..."
+
+msgid "Working…"
+msgstr "Выполняется…"
+
+msgid "Loading…"
+msgstr "Загрузка…"
+
+msgid "Saving…"
+msgstr "Сохранение…"
+
+msgid "Exporting…"
+msgstr "Экспорт…"
+
+msgid "Restoring…"
+msgstr "Восстановление…"
+
+msgid "Deleting…"
+msgstr "Удаление…"
+
+## Table headers / form labels
+msgid "Name"
+msgstr "Название"
+
+msgid "Modified"
+msgstr "Изменён"
+
+msgid "Actions"
+msgstr "Действия"
+
+msgid "Status"
+msgstr "Статус"
+
+msgid "Deleted"
+msgstr "Удалённые"
+
+## Placeholders
+msgid "templates"
+msgstr "шаблоны"
+
+msgid "documents"
+msgstr "документы"
+
+msgid "deleted"
+msgstr "удалённые"
+
+## Status badges
+msgid "Active"
+msgstr "Активные"
+
+msgid "Trash"
+msgstr "Корзина"
+
+msgid "lost"
+msgstr "потерян"
+
+msgid "unfiled"
+msgstr "не разложен"
+
+msgid "root"
+msgstr "корень"
+
+msgid "Trash is empty"
+msgstr "Корзина пуста"
+
+msgid "No files yet"
+msgstr "Файлов пока нет"
+
+msgid "File not found in Google Drive"
+msgstr "Файл не найден в Google Drive"
+
+## Default names
+msgid "Untitled Template"
+msgstr "Шаблон без названия"
+
+msgid "Untitled Document"
+msgstr "Документ без названия"
+
+## Flash messages
+msgid "Moved to deleted folder"
+msgstr "Перемещено в папку удалённых"
+
+msgid "Restored"
+msgstr "Восстановлено"
+
+msgid "Moved to templates"
+msgstr "Перемещено в шаблоны"
+
+msgid "Moved to documents"
+msgstr "Перемещено в документы"
+
+msgid "Saved current location"
+msgstr "Текущее расположение сохранено"
+
+msgid "Updated"
+msgstr "Обновлено"
+
+msgid "Connection updated"
+msgstr "Подключение обновлено"
+
+msgid "Folder settings saved"
+msgstr "Настройки папок сохранены"
+
+## Error messages
+msgid "Failed to create template. Please try again."
+msgstr "Не удалось создать шаблон. Попробуйте ещё раз."
+
+msgid "Failed to update template language."
+msgstr "Не удалось обновить язык шаблона."
+
+msgid "Failed to create document. Please try again."
+msgstr "Не удалось создать документ. Попробуйте ещё раз."
+
+msgid "Action failed. Please try again."
+msgstr "Не удалось выполнить действие. Попробуйте ещё раз."
+
+msgid "PDF export failed. Please try again."
+msgstr "Не удалось экспортировать PDF. Попробуйте ещё раз."
+
+msgid "Delete failed. Please try again."
+msgstr "Не удалось удалить. Попробуйте ещё раз."
+
+msgid "Restore failed. Please try again."
+msgstr "Не удалось восстановить. Попробуйте ещё раз."
+
+## Errors module
+msgid "Failed to copy the Google Doc"
+msgstr "Не удалось скопировать Google-документ"
+
+msgid "Failed to create the Google Doc"
+msgstr "Не удалось создать Google-документ"
+
+msgid "Failed to create the Drive folder"
+msgstr "Не удалось создать папку в Drive"
+
+msgid "Deleted folder not found"
+msgstr "Папка удалённых не найдена"
+
+msgid "Documents folder not found"
+msgstr "Папка документов не найдена"
+
+msgid "File is in the Drive trash"
+msgstr "Файл находится в корзине Drive"
+
+msgid "Folder not found"
+msgstr "Папка не найдена"
+
+msgid "Failed to search Drive for the folder"
+msgstr "Не удалось найти папку в Drive"
+
+msgid "Failed to read file parents from Drive"
+msgstr "Не удалось прочитать родительские папки файла из Drive"
+
+msgid "Invalid action"
+msgstr "Недопустимое действие"
+
+msgid "Invalid file ID"
+msgstr "Недопустимый идентификатор файла"
+
+msgid "Invalid Google Doc ID"
+msgstr "Недопустимый идентификатор Google-документа"
+
+msgid "Invalid parent folder ID"
+msgstr "Недопустимый идентификатор родительской папки"
+
+msgid "Failed to list Drive files"
+msgstr "Не удалось получить список файлов Drive"
+
+msgid "Live folder not found"
+msgstr "Активная папка не найдена"
+
+msgid "Maximum folder depth exceeded"
+msgstr "Превышена максимальная глубина вложенности папок"
+
+msgid "Missing Google Doc ID"
+msgstr "Отсутствует идентификатор Google-документа"
+
+msgid "Missing name"
+msgstr "Отсутствует название"
+
+msgid "Failed to move the Drive file"
+msgstr "Не удалось переместить файл в Drive"
+
+msgid "No Google Doc ID set on this record"
+msgstr "У записи не указан идентификатор Google-документа"
+
+msgid "No thumbnail available"
+msgstr "Эскиз недоступен"
+
+msgid "Not found"
+msgstr "Не найдено"
+
+msgid "Failed to export PDF from Drive"
+msgstr "Не удалось экспортировать PDF из Drive"
+
+msgid "Failed to sync from Google Drive"
+msgstr "Не удалось синхронизировать с Google Drive"
+
+msgid "Templates folder not found"
+msgstr "Папка шаблонов не найдена"
+
+msgid "Failed to fetch the thumbnail"
+msgstr "Не удалось получить эскиз"
+
+msgid "Failed to read the thumbnail link from Drive"
+msgstr "Не удалось получить ссылку на эскиз из Drive"

@@ -147,4 +147,26 @@ end
 exclude = [:requires_unreleased_core]
 exclude = if repo_available, do: exclude, else: [:integration | exclude]
 
+# `:requires_phoenix_kit_i18n_api` gates tests that use
+# `PhoenixKit.Dashboard.Tab.localized_label/1` (the gettext_backend
+# API introduced by phoenix_kit#522). Standalone runs against a Hex
+# `phoenix_kit` that pre-dates the API would crash with
+# `UndefinedFunctionError`; the conditional skip below lets the suite
+# stay green until the consumer upgrades.
+exclude =
+  if Code.ensure_loaded?(PhoenixKit.Dashboard.Tab) and
+       function_exported?(PhoenixKit.Dashboard.Tab, :localized_label, 1) do
+    exclude
+  else
+    require Logger
+
+    Logger.info(
+      "[test_helper] PhoenixKit.Dashboard.Tab.localized_label/1 not available — " <>
+        "i18n tests excluded. They will run automatically once `phoenix_kit` is " <>
+        "upgraded to a release that ships the gettext_backend API."
+    )
+
+    [:requires_phoenix_kit_i18n_api | exclude]
+  end
+
 ExUnit.start(exclude: exclude)

@@ -116,7 +116,9 @@ defmodule PhoenixKitDocumentCreator do
         parent: :admin_settings,
         permission: module_key(),
         match: :exact,
-        live_view: {PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive, :index}
+        live_view: {PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive, :index},
+        gettext_backend: PhoenixKitDocumentCreator.Gettext,
+        gettext_domain: "default"
       }
     ]
   end
@@ -141,7 +143,9 @@ defmodule PhoenixKitDocumentCreator do
         subtab_display: :when_active,
         highlight_with_subtabs: false,
         redirect_to_first_subtab: true,
-        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents}
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents},
+        gettext_backend: PhoenixKitDocumentCreator.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_document_creator_documents,
@@ -153,7 +157,9 @@ defmodule PhoenixKitDocumentCreator do
         permission: module_key(),
         parent: :admin_document_creator,
         match: :prefix,
-        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents}
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :documents},
+        gettext_backend: PhoenixKitDocumentCreator.Gettext,
+        gettext_domain: "default"
       },
       %Tab{
         id: :admin_document_creator_templates,
@@ -165,7 +171,9 @@ defmodule PhoenixKitDocumentCreator do
         permission: module_key(),
         parent: :admin_document_creator,
         match: :prefix,
-        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :templates}
+        live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :templates},
+        gettext_backend: PhoenixKitDocumentCreator.Gettext,
+        gettext_domain: "default"
       }
     ]
   end

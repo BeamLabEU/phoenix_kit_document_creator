@@ -44,7 +44,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
   end
 
   def application do
-    [extra_applications: [:logger]]
+    [extra_applications: [:logger, :gettext]]
   end
 
   # test/support/ is compiled only in :test so DataCase and TestRepo
@@ -71,6 +71,11 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       # HTTP client for Google Docs/Drive API
       {:req, "~> 0.5"},
 
+      # Gettext owns this module's i18n catalogues under priv/gettext/.
+      # The parent app sets the user's locale per request; our backend
+      # (PhoenixKitDocumentCreator.Gettext) looks up msgids independently.
+      {:gettext, "~> 1.0"},
+
       # Code quality
       {:ex_doc, "~> 0.39", only: :dev, runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
@@ -86,7 +91,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     [
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url},
-      files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
+      files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE)
     ]
   end
 

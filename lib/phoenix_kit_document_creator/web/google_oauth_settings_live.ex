@@ -6,7 +6,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
   Settings → Integrations. This page handles folder configuration only.
   """
   use Phoenix.LiveView
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
   require Logger
 
@@ -32,7 +32,11 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
     {:ok,
      assign(socket,
-       page_title: gettext("Document Creator — Folders"),
+       # `page_title` is set in `handle_params/3` (which runs AFTER the
+       # parent app's telemetry locale-sync hook) — setting it here in
+       # `mount/3` would capture the raw English msgid because the
+       # process-global Gettext locale isn't propagated until the
+       # `[:phoenix, :live_view, :mount, :stop]` event fires.
        loaded: false,
        connected: false,
        connected_email: "",
@@ -59,7 +63,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
   @impl true
   def handle_params(_params, _uri, socket) do
-    {:noreply, socket}
+    {:noreply, assign(socket, page_title: gettext("Document Creator — Folders"))}
   end
 
   defp load_settings(socket) do

@@ -7,7 +7,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   disappear from Drive are shown with a "lost" indicator.
   """
   use Phoenix.LiveView
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
   require Logger
 
@@ -37,7 +37,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
     {:ok,
      assign(socket,
-       page_title: gettext("Document Creator"),
+       # `page_title` is set in `handle_params/3` so the gettext lookup
+       # runs AFTER the parent app's telemetry locale-sync hook has set
+       # the process-global locale. Setting it here in `mount/3` would
+       # capture the raw English msgid.
        view_mode: "cards",
        loaded: false,
        google_connected: false,
@@ -63,6 +66,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        unfiled_file: nil,
        unfiled_working: false
      )}
+  end
+
+  @impl true
+  def handle_params(_params, _uri, socket) do
+    title =
+      case socket.assigns.live_action do
+        :templates -> gettext("Templates")
+        _ -> gettext("Documents")
+      end
+
+    {:noreply, assign(socket, page_title: title)}
   end
 
   defp google_connected? do
