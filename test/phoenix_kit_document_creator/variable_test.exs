@@ -91,4 +91,56 @@ defmodule PhoenixKitDocumentCreator.VariableTest do
                %{text: [], image: []}
     end
   end
+
+  describe "build_definitions/1" do
+    test "builds text variables with empty config" do
+      fork = %{text: ["client_name"], image: []}
+
+      assert [
+               %PhoenixKitDocumentCreator.Variable{
+                 name: "client_name",
+                 type: :text,
+                 config: %{}
+               }
+             ] = PhoenixKitDocumentCreator.Variable.build_definitions(fork)
+    end
+
+    test "builds image variable with default config" do
+      fork = %{text: [], image: [%{name: "logo", kind: :image}]}
+
+      assert [
+               %PhoenixKitDocumentCreator.Variable{
+                 name: "logo",
+                 label: "Logo",
+                 type: :image,
+                 config: %{default_width_px: 400}
+               }
+             ] = PhoenixKitDocumentCreator.Variable.build_definitions(fork)
+    end
+
+    test "builds image_list variable with default config" do
+      fork = %{text: [], image: [%{name: "photos", kind: :image_list}]}
+
+      assert [
+               %PhoenixKitDocumentCreator.Variable{
+                 name: "photos",
+                 type: :image_list,
+                 config: %{default_width_px: 400, separator: :newline, max_count: nil}
+               }
+             ] = PhoenixKitDocumentCreator.Variable.build_definitions(fork)
+    end
+
+    test "preserves order: text first (alpha), then image (alpha)" do
+      fork = %{
+        text: ["b_text", "a_text"],
+        image: [
+          %{name: "b_img", kind: :image},
+          %{name: "a_img", kind: :image_list}
+        ]
+      }
+
+      names = PhoenixKitDocumentCreator.Variable.build_definitions(fork) |> Enum.map(& &1.name)
+      assert names == ["a_text", "b_text", "a_img", "b_img"]
+    end
+  end
 end

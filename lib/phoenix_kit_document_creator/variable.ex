@@ -79,19 +79,43 @@ defmodule PhoenixKitDocumentCreator.Variable do
   end
 
   @doc """
-  Builds Variable structs from a list of variable names, guessing types from names.
+  Builds Variable structs from a forked detection map. Text variables come first
+  (sorted), then image variables (sorted by name).
   """
-  @spec build_definitions([String.t()]) :: [t()]
-  def build_definitions(names) when is_list(names) do
-    Enum.map(names, fn name ->
-      %__MODULE__{
-        name: name,
-        label: humanize(name),
-        type: guess_type(name),
-        required: false,
-        default: nil
-      }
-    end)
+  @spec build_definitions(%{
+          text: [String.t()],
+          image: [%{name: String.t(), kind: :image | :image_list}]
+        }) :: [t()]
+  def build_definitions(%{text: text_names, image: image_defs}) do
+    text_vars =
+      text_names
+      |> Enum.sort()
+      |> Enum.map(fn name ->
+        %__MODULE__{
+          name: name,
+          label: humanize(name),
+          type: guess_type(name),
+          required: false,
+          default: nil,
+          config: %{}
+        }
+      end)
+
+    image_vars =
+      image_defs
+      |> Enum.sort_by(& &1.name)
+      |> Enum.map(fn %{name: name, kind: kind} ->
+        %__MODULE__{
+          name: name,
+          label: humanize(name),
+          type: kind,
+          required: false,
+          default: nil,
+          config: default_image_config(kind)
+        }
+      end)
+
+    text_vars ++ image_vars
   end
 
   @doc "Converts an underscore_name to a human-readable label."
@@ -116,4 +140,9 @@ defmodule PhoenixKitDocumentCreator.Variable do
 
   defp keyword_to_kind("image"), do: :image
   defp keyword_to_kind("images"), do: :image_list
+
+  defp default_image_config(:image), do: %{default_width_px: 400}
+
+  defp default_image_config(:image_list),
+    do: %{default_width_px: 400, separator: :newline, max_count: nil}
 end
