@@ -137,4 +137,114 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.ImageSubstitutionTest do
                GoogleDocsClient.find_image_tag_ranges(doc, ["logo"])
     end
   end
+
+  describe "build_image_batch_requests/2" do
+    test "single image: delete range + insert one image" do
+      ranges = [%{name: "logo", start_index: 10, end_index: 27}]
+
+      fills = %{
+        "logo" => %{
+          kind: :image,
+          default_width_px: 400,
+          separator: nil,
+          media: [%{uri: "https://x/a.png", width_px: 800, height_px: 400}]
+        }
+      }
+
+      [delete, insert] = GoogleDocsClient.build_image_batch_requests(ranges, fills)
+
+      assert delete == %{
+               deleteContentRange: %{range: %{startIndex: 10, endIndex: 27}}
+             }
+
+      assert insert == %{
+               insertInlineImage: %{
+                 location: %{index: 10},
+                 uri: "https://x/a.png",
+                 objectSize: %{
+                   width: %{magnitude: 400 * 9525, unit: "EMU"},
+                   height: %{magnitude: 200 * 9525, unit: "EMU"}
+                 }
+               }
+             }
+    end
+
+    test "image_list with newline separator: insertions ordered last-first to preserve visual order" do
+      ranges = [%{name: "photos", start_index: 5, end_index: 24}]
+
+      fills = %{
+        "photos" => %{
+          kind: :image_list,
+          default_width_px: 400,
+          separator: :newline,
+          media: [
+            %{uri: "u1", width_px: 400, height_px: 400},
+            %{uri: "u2", width_px: 400, height_px: 400},
+            %{uri: "u3", width_px: 400, height_px: 400}
+          ]
+        }
+      }
+
+      requests = GoogleDocsClient.build_image_batch_requests(ranges, fills)
+
+      assert [
+               %{deleteContentRange: _},
+               %{insertInlineImage: %{uri: "u3"}},
+               %{insertText: %{text: "\n", location: %{index: 5}}},
+               %{insertInlineImage: %{uri: "u2"}},
+               %{insertText: %{text: "\n", location: %{index: 5}}},
+               %{insertInlineImage: %{uri: "u1"}}
+             ] = requests
+    end
+
+    test "image_list with :none separator: no insertText" do
+      ranges = [%{name: "x", start_index: 0, end_index: 17}]
+
+      fills = %{
+        "x" => %{
+          kind: :image_list,
+          default_width_px: 400,
+          separator: :none,
+          media: [
+            %{uri: "u1", width_px: 400, height_px: 400},
+            %{uri: "u2", width_px: 400, height_px: 400}
+          ]
+        }
+      }
+
+      requests = GoogleDocsClient.build_image_batch_requests(ranges, fills)
+      refute Enum.any?(requests, &Map.has_key?(&1, :insertText))
+    end
+
+    test "multiple ranges: processed in descending startIndex order" do
+      ranges = [
+        %{name: "a", start_index: 5, end_index: 22},
+        %{name: "a", start_index: 50, end_index: 67}
+      ]
+
+      fills = %{
+        "a" => %{
+          kind: :image,
+          default_width_px: 400,
+          separator: nil,
+          media: [%{uri: "u", width_px: 400, height_px: 400}]
+        }
+      }
+
+      [del1, _ins1, del2, _ins2] = GoogleDocsClient.build_image_batch_requests(ranges, fills)
+      assert get_in(del1, [:deleteContentRange, :range, :startIndex]) == 50
+      assert get_in(del2, [:deleteContentRange, :range, :startIndex]) == 5
+    end
+
+    test "optional empty value still deletes the tag" do
+      ranges = [%{name: "x", start_index: 5, end_index: 22}]
+
+      fills = %{
+        "x" => %{kind: :image, default_width_px: 400, separator: nil, media: []}
+      }
+
+      assert [%{deleteContentRange: _}] =
+               GoogleDocsClient.build_image_batch_requests(ranges, fills)
+    end
+  end
 end

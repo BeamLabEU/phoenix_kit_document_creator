@@ -760,6 +760,98 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp extract_tag_ranges(_, _), do: []
 
+  @px_to_emu 9525
+
+  @doc """
+  Builds the list of `batchUpdate` request maps to substitute image tags.
+
+  `fills` is a map keyed by variable name; each value carries `kind`,
+  `default_width_px`, `separator` (atom or nil), and `media` — a list of
+  `%{uri, width_px, height_px}`.
+
+  Empty media list = the tag is still deleted (cleared).
+  """
+  @spec build_image_batch_requests([map()], map()) :: [map()]
+  def build_image_batch_requests(ranges, fills) do
+    ranges
+    |> Enum.sort_by(& &1.start_index, :desc)
+    |> Enum.flat_map(fn %{name: name, start_index: s, end_index: e} ->
+      fill = Map.fetch!(fills, name)
+      delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
+
+      inserts =
+        case fill.kind do
+          :image -> single_image_inserts(fill, s)
+          :image_list -> list_image_inserts(fill, s)
+        end
+
+      [delete | inserts]
+    end)
+  end
+
+  defp single_image_inserts(%{media: []}, _index), do: []
+
+  defp single_image_inserts(%{media: [media | _], default_width_px: w}, index) do
+    [insert_inline_image_request(media, w, index)]
+  end
+
+  defp list_image_inserts(%{media: []}, _index), do: []
+
+  defp list_image_inserts(%{media: media, default_width_px: w, separator: sep}, index) do
+    reversed = Enum.reverse(media)
+
+    reversed
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {m, i} ->
+      img = insert_inline_image_request(m, w, index)
+
+      if i < length(reversed) - 1 do
+        [img, separator_request(sep, index)]
+      else
+        [img]
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp insert_inline_image_request(
+         %{uri: uri, width_px: w_px, height_px: h_px},
+         default_width_px,
+         index
+       ) do
+    scaled_height_px = scale_height(default_width_px, w_px, h_px)
+
+    %{
+      insertInlineImage: %{
+        location: %{index: index},
+        uri: uri,
+        objectSize: %{
+          width: %{magnitude: default_width_px * @px_to_emu, unit: "EMU"},
+          height: %{magnitude: scaled_height_px * @px_to_emu, unit: "EMU"}
+        }
+      }
+    }
+  end
+
+  defp scale_height(_target_width, src_width, src_height) when src_width in [nil, 0],
+    do: src_height || 0
+
+  defp scale_height(target_width, src_width, src_height) do
+    round(target_width * src_height / src_width)
+  end
+
+  defp separator_request(:none, _index), do: nil
+
+  defp separator_request(sep, index) do
+    text =
+      case sep do
+        :newline -> "\n"
+        :space -> " "
+      end
+
+    %{insertText: %{text: text, location: %{index: index}}}
+  end
+
   # ===========================================================================
   # Google Drive API
   # ===========================================================================
