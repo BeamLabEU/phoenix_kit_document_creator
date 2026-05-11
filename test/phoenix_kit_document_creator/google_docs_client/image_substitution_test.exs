@@ -303,5 +303,47 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.ImageSubstitutionTest do
 
       assert_receive {:batch, [%{deleteContentRange: _}, %{insertInlineImage: _}]}
     end
+
+    test "no batch call when fills present but no tags found in doc" do
+      doc = %{"body" => %{"content" => []}}
+
+      get_fn = fn _ -> {:ok, %{body: doc}} end
+      batch_fn = fn _, _ -> flunk("batch_update should not be called") end
+
+      fills = %{
+        "logo" => %{
+          kind: :image,
+          default_width_px: 400,
+          separator: nil,
+          media: [%{uri: "u", width_px: 400, height_px: 400}]
+        }
+      }
+
+      assert {:ok, _} =
+               GoogleDocsClient.substitute_images("file-id", fills,
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+    end
+
+    test "propagates get_fn error" do
+      get_fn = fn _ -> {:error, :boom} end
+      batch_fn = fn _, _ -> flunk("batch_update should not be called") end
+
+      fills = %{
+        "logo" => %{
+          kind: :image,
+          default_width_px: 400,
+          separator: nil,
+          media: [%{uri: "u", width_px: 400, height_px: 400}]
+        }
+      }
+
+      assert {:error, :boom} =
+               GoogleDocsClient.substitute_images("file-id", fills,
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+    end
   end
 end
