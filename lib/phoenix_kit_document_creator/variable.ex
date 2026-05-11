@@ -21,6 +21,7 @@ defmodule PhoenixKitDocumentCreator.Variable do
   defstruct [:name, :label, :type, default: nil, required: false, config: %{}]
 
   @string_var_regex ~r/\{\{\s*(?!images?\s*:)(\w+)\s*\}\}/
+  @image_var_regex ~r/\{\{\s*(image|images)\s*:\s*(\w+)\s*\}\}/
 
   @doc """
   Extracts text variable names from `{{ name }}` placeholders.
@@ -40,6 +41,26 @@ defmodule PhoenixKitDocumentCreator.Variable do
   end
 
   def extract_string_variables(_), do: []
+
+  @doc """
+  Extracts image variable definitions from `{{ image: name }}` /
+  `{{ images: name }}` placeholders.
+
+  Returns a list of `%{name: String.t(), kind: :image | :image_list}` maps,
+  deduplicated by name, sorted by name.
+  """
+  @spec extract_image_variables(term()) :: [%{name: String.t(), kind: :image | :image_list}]
+  def extract_image_variables(text) when is_binary(text) do
+    @image_var_regex
+    |> Regex.scan(text)
+    |> Enum.map(fn [_full, keyword, name] ->
+      %{name: name, kind: keyword_to_kind(keyword)}
+    end)
+    |> Enum.uniq_by(& &1.name)
+    |> Enum.sort_by(& &1.name)
+  end
+
+  def extract_image_variables(_), do: []
 
   @doc """
   Extracts variable names from text by scanning for `{{ variable_name }}` patterns.
@@ -92,4 +113,7 @@ defmodule PhoenixKitDocumentCreator.Variable do
       true -> :text
     end
   end
+
+  defp keyword_to_kind("image"), do: :image
+  defp keyword_to_kind("images"), do: :image_list
 end

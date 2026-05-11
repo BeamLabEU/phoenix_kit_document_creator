@@ -36,4 +36,33 @@ defmodule PhoenixKitDocumentCreator.VariableTest do
       assert PhoenixKitDocumentCreator.Variable.extract_string_variables(:atom) == []
     end
   end
+
+  describe "extract_image_variables/1" do
+    test "captures single-image and list-image tags" do
+      text = """
+      Logo: {{ image: logo }}
+      Photos: {{ images: photos }}
+      Plain: {{ name }}
+      Duplicate: {{ image: logo }}
+      """
+
+      assert PhoenixKitDocumentCreator.Variable.extract_image_variables(text) == [
+               %{name: "logo", kind: :image},
+               %{name: "photos", kind: :image_list}
+             ]
+    end
+
+    test "tolerates whitespace variations" do
+      text = "{{image:a}} {{  images :  b  }}"
+
+      assert PhoenixKitDocumentCreator.Variable.extract_image_variables(text) == [
+               %{name: "a", kind: :image},
+               %{name: "b", kind: :image_list}
+             ]
+    end
+
+    test "returns [] for non-binary input" do
+      assert PhoenixKitDocumentCreator.Variable.extract_image_variables(nil) == []
+    end
+  end
 end
