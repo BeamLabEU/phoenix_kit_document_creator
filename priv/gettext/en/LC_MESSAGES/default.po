@@ -154,14 +154,11 @@ msgstr "Clear language"
 msgid "Refreshing…"
 msgstr "Refreshing…"
 
-msgid "Creating..."
-msgstr "Creating..."
-
 msgid "Creating…"
 msgstr "Creating…"
 
-msgid "Opening..."
-msgstr "Opening..."
+msgid "Opening…"
+msgstr "Opening…"
 
 msgid "Working…"
 msgstr "Working…"

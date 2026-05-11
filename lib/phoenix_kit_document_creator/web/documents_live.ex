@@ -725,7 +725,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               <button
                 class="btn btn-primary btn-sm"
                 phx-click="new_template"
-                phx-disable-with={gettext("Creating...")}
+                phx-disable-with={gettext("Creating…")}
               >
                 <span class="hero-plus w-4 h-4" /> {gettext("New Template")}
               </button>
@@ -741,7 +741,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               <button
                 class="btn btn-primary btn-sm"
                 phx-click="open_modal"
-                phx-disable-with={gettext("Opening...")}
+                phx-disable-with={gettext("Opening…")}
               >
                 <span class="hero-document-plus w-4 h-4" /> {gettext("New Document")}
               </button>

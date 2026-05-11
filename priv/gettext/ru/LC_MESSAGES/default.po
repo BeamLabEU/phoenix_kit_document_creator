@@ -154,14 +154,11 @@ msgstr "Очистить язык"
 msgid "Refreshing…"
 msgstr "Обновление…"
 
-msgid "Creating..."
-msgstr "Создание..."
-
 msgid "Creating…"
 msgstr "Создание…"
 
-msgid "Opening..."
-msgstr "Открытие..."
+msgid "Opening…"
+msgstr "Открытие…"
 
 msgid "Working…"
 msgstr "Выполняется…"

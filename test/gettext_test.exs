@@ -1,5 +1,9 @@
 defmodule PhoenixKitDocumentCreator.GettextTest do
-  use ExUnit.Case, async: true
+  # `async: false` per the per-module-i18n guide § Test pattern:
+  # `Gettext.put_locale/2` mutates the calling process's process dictionary,
+  # and although ExUnit gives each test its own process so `async: true`
+  # is in practice safe, the guide pins this to `false` for clarity.
+  use ExUnit.Case, async: false
 
   # Excluded by `test/test_helper.exs` when running against a `phoenix_kit`
   # release that pre-dates `PhoenixKit.Dashboard.Tab.localized_label/1`.

@@ -154,14 +154,11 @@ msgstr "Tühjenda keel"
 msgid "Refreshing…"
 msgstr "Värskendamine…"
 
-msgid "Creating..."
-msgstr "Loomine..."
-
 msgid "Creating…"
 msgstr "Loomine…"
 
-msgid "Opening..."
-msgstr "Avamine..."
+msgid "Opening…"
+msgstr "Avamine…"
 
 msgid "Working…"
 msgstr "Töötlen…"

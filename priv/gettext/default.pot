@@ -164,13 +164,10 @@ msgstr ""
 msgid "Refreshing…"
 msgstr ""
 
-msgid "Creating..."
-msgstr ""
-
 msgid "Creating…"
 msgstr ""
 
-msgid "Opening..."
+msgid "Opening…"
 msgstr ""
 
 msgid "Working…"

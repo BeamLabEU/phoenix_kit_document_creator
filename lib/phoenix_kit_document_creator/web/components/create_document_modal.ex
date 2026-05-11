@@ -137,7 +137,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
           phx-disable-with={gettext("Creating…")}
         >
           <span :if={@creating} class="loading loading-spinner loading-xs" />
-          {if @creating, do: gettext("Creating..."), else: gettext("Create Document")}
+          {if @creating, do: gettext("Creating…"), else: gettext("Create Document")}
         </button>
       </div>
     </form>
