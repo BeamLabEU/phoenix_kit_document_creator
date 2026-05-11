@@ -689,6 +689,77 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  @doc """
+  Scans a `documents.get` response for image tag occurrences.
+
+  Returns a flat list of `%{name, start_index, end_index}` covering every
+  occurrence in body content, headers, footers, and table cells, restricted
+  to the names supplied.
+
+  **Offset note:** `Regex.scan(..., return: :index)` returns byte offsets.
+  The Google Docs `startIndex` counts UTF-16 code units, not bytes. For
+  ASCII-only templates these are identical. Templates with multi-byte
+  characters (e.g. Cyrillic) *outside* the tag may cause divergence — see
+  Task 16 integration test for the Cyrillic validation.
+  """
+  @spec find_image_tag_ranges(map(), [String.t()]) ::
+          [%{name: String.t(), start_index: integer(), end_index: integer()}]
+  def find_image_tag_ranges(%{} = doc, names) when is_list(names) do
+    names_set = MapSet.new(names)
+
+    body_blocks = get_in(doc, ["body", "content"]) || []
+
+    header_blocks =
+      doc
+      |> Map.get("headers", %{})
+      |> Map.values()
+      |> Enum.flat_map(&Map.get(&1, "content", []))
+
+    footer_blocks =
+      doc
+      |> Map.get("footers", %{})
+      |> Map.values()
+      |> Enum.flat_map(&Map.get(&1, "content", []))
+
+    (body_blocks ++ header_blocks ++ footer_blocks)
+    |> Enum.flat_map(&walk_block/1)
+    |> Enum.flat_map(&extract_tag_ranges(&1, names_set))
+  end
+
+  defp walk_block(%{"paragraph" => %{"elements" => elements}}), do: elements
+
+  defp walk_block(%{"table" => %{"tableRows" => rows}}) do
+    Enum.flat_map(rows, fn %{"tableCells" => cells} ->
+      Enum.flat_map(cells, fn %{"content" => content} ->
+        Enum.flat_map(content, &walk_block/1)
+      end)
+    end)
+  end
+
+  defp walk_block(_), do: []
+
+  @image_tag_regex ~r/\{\{\s*(image|images)\s*:\s*(\w+)\s*\}\}/
+
+  defp extract_tag_ranges(
+         %{"textRun" => %{"content" => content}, "startIndex" => base},
+         names_set
+       ) do
+    Regex.scan(@image_tag_regex, content, return: :index)
+    |> Enum.flat_map(fn match ->
+      [{full_start, full_len} | _] = match
+      {name_start, name_len} = Enum.at(match, 2)
+      name = String.slice(content, name_start, name_len)
+
+      if MapSet.member?(names_set, name) do
+        [%{name: name, start_index: base + full_start, end_index: base + full_start + full_len}]
+      else
+        []
+      end
+    end)
+  end
+
+  defp extract_tag_ranges(_, _), do: []
+
   # ===========================================================================
   # Google Drive API
   # ===========================================================================
