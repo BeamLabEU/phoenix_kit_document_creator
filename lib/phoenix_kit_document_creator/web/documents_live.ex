@@ -91,11 +91,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         template_file_id = Map.get(params, "template_file_id")
         existing_json = Map.get(params, "picking_existing", "{}")
 
-        prior_image_values =
-          case Jason.decode(existing_json) do
-            {:ok, map} when is_map(map) -> map
-            _ -> %{}
-          end
+        prior_image_values = prior_image_values_from_json(existing_json)
 
         socket
         |> restore_template_state(template_file_id)
@@ -450,9 +446,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           "picking_existing" => existing_image_values
         })
 
+    mode_atom =
+      case mode do
+        "single" -> :single
+        "multiple" -> :multiple
+        _ -> :single
+      end
+
     selector_url =
       MediaSelectorHelper.media_selector_url(return_to,
-        mode: String.to_existing_atom(mode),
+        mode: mode_atom,
         filter: :image
       )
 
@@ -1503,4 +1506,24 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       last -> now_ms() - last < @refresh_cooldown_ms
     end
   end
+
+  defp prior_image_values_from_json(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) ->
+        map
+        |> Enum.filter(fn {k, v} -> is_binary(k) and valid_image_value?(v) end)
+        |> Map.new()
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp valid_image_value?(%{"media_id" => id}) when is_binary(id), do: true
+
+  defp valid_image_value?(%{"media_ids" => ids}) when is_list(ids) do
+    Enum.all?(ids, &is_binary/1)
+  end
+
+  defp valid_image_value?(_), do: false
 end
