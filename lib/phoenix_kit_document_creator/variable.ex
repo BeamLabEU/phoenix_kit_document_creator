@@ -20,6 +20,27 @@ defmodule PhoenixKitDocumentCreator.Variable do
   @enforce_keys [:name, :label, :type]
   defstruct [:name, :label, :type, default: nil, required: false, config: %{}]
 
+  @string_var_regex ~r/\{\{\s*(?!images?\s*:)(\w+)\s*\}\}/
+
+  @doc """
+  Extracts text variable names from `{{ name }}` placeholders.
+
+  Deliberately ignores `{{ image: name }}` and `{{ images: name }}` via a negative
+  lookahead — those are handled by `extract_image_variables/1`.
+
+  Returns a sorted list of unique names.
+  """
+  @spec extract_string_variables(term()) :: [String.t()]
+  def extract_string_variables(text) when is_binary(text) do
+    @string_var_regex
+    |> Regex.scan(text)
+    |> Enum.map(fn [_full, name] -> name end)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  def extract_string_variables(_), do: []
+
   @doc """
   Extracts variable names from text by scanning for `{{ variable_name }}` patterns.
 
