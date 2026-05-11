@@ -89,9 +89,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         var_name = Map.get(params, "picking_var")
         mode = Map.get(params, "picking_mode", "single")
         template_file_id = Map.get(params, "template_file_id")
+        existing_json = Map.get(params, "picking_existing", "{}")
+
+        prior_image_values =
+          case Jason.decode(existing_json) do
+            {:ok, map} when is_map(map) -> map
+            _ -> %{}
+          end
 
         socket
         |> restore_template_state(template_file_id)
+        |> assign(modal_image_values: prior_image_values)
         |> apply_image_selection(var_name, mode, uuids)
 
       :none ->
@@ -432,6 +440,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   def handle_event("open_media_picker", %{"name" => var_name, "mode" => mode}, socket) do
     current_path = socket.assigns[:url_path] || "/admin/document-creator"
     template_file_id = get_in(socket.assigns, [:modal_selected_template, "id"]) || ""
+    existing_image_values = Jason.encode!(socket.assigns.modal_image_values)
 
     return_to =
       current_path <>
@@ -439,7 +448,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         URI.encode_query(%{
           "picking_var" => var_name,
           "picking_mode" => mode,
-          "template_file_id" => template_file_id
+          "template_file_id" => template_file_id,
+          "picking_existing" => existing_image_values
         })
 
     selector_url =

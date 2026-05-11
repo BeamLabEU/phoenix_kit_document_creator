@@ -740,5 +740,42 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert get_in(state, [:modal_selected_template, "id"]) == file_id
       assert state.modal_image_values["logo"] == %{"media_id" => "media-uuid-1"}
     end
+
+    test "second round-trip preserves image values from the first pick",
+         %{conn: conn} do
+      file_id = "rt-tpl2-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Documents.upsert_template_from_drive(%{
+          "id" => file_id,
+          "name" => "Sequential Picks Template"
+        })
+
+      conn = put_test_scope(conn, fake_scope())
+
+      # Simulate returning from the second media pick, with the first pick
+      # encoded in `picking_existing`.
+      prior = Jason.encode!(%{"logo" => %{"media_id" => "first-uuid"}})
+
+      return_url =
+        "/en/admin/document-creator?" <>
+          URI.encode_query(%{
+            "selected_media" => "second-uuid",
+            "picking_var" => "photos",
+            "picking_mode" => "multiple",
+            "template_file_id" => file_id,
+            "picking_existing" => prior
+          })
+
+      {:ok, view, _html} = live(conn, return_url)
+
+      state = :sys.get_state(view.pid).socket.assigns
+      assert state.modal_open == true
+      assert state.modal_step == "variables"
+      # First pick is preserved
+      assert state.modal_image_values["logo"] == %{"media_id" => "first-uuid"}
+      # Second pick is applied
+      assert state.modal_image_values["photos"] == %{"media_ids" => ["second-uuid"]}
+    end
   end
 end
