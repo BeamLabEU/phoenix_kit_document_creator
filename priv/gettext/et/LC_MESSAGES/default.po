@@ -1,0 +1,366 @@
+## "default" domain translations for et locale.
+msgid ""
+msgstr ""
+"Language: et\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+## Tab labels
+msgid "Document Creator"
+msgstr "Dokumentide loomine"
+
+msgid "Documents"
+msgstr "Dokumendid"
+
+msgid "Templates"
+msgstr "Mallid"
+
+## Page titles
+msgid "Document Creator — Folders"
+msgstr "Dokumentide loomine — kaustad"
+
+msgid "Document Creator Settings"
+msgstr "Dokumentide loomise seaded"
+
+## Section headings
+msgid "Google Account Not Connected"
+msgstr "Google'i konto pole ühendatud"
+
+msgid "Google Account"
+msgstr "Google'i konto"
+
+msgid "Drive Folders"
+msgstr "Drive'i kaustad"
+
+msgid "Select Folder"
+msgstr "Vali kaust"
+
+msgid "Resolve Unfiled Item"
+msgstr "Lahenda paigutamata fail"
+
+msgid "Create New Document"
+msgstr "Loo uus dokument"
+
+msgid "Fill Template Variables"
+msgstr "Täida malli muutujad"
+
+## Help & descriptive text
+msgid "Start blank or choose a template."
+msgstr "Alusta tühjalt või vali mall."
+
+msgid "Configure Google Drive folders for templates and documents."
+msgstr "Seadista Google Drive'i kaustad mallide ja dokumentide jaoks."
+
+msgid "Customize the Google Drive folder names used for storage. Folders are created automatically if they don't exist."
+msgstr "Kohanda Google Drive'i kaustade nimesid hoiustamiseks. Kaustad luuakse automaatselt, kui neid ei eksisteeri."
+
+msgid "Click the path button to browse your Google Drive. Deleted items go to subfolders inside the deleted folder. Folders are created automatically if they don't exist."
+msgstr "Klõpsa teerajaga nuppu Google Drive'i sirvimiseks. Kustutatud elemendid liiguvad kustutatud kausta alamkaustadesse. Kaustad luuakse automaatselt, kui neid pole."
+
+msgid "Manage your Google connections in"
+msgstr "Halda oma Google'i ühendusi siin:"
+
+msgid "Settings → Integrations"
+msgstr "Seaded → Integratsioonid"
+
+msgid "No subfolders"
+msgstr "Alamkaustad puuduvad"
+
+msgid "My Drive"
+msgstr "Minu Drive"
+
+msgid "Browse Google Drive — root"
+msgstr "Sirvi Google Drive'i — juur"
+
+msgid "Browse Google Drive — %{path}"
+msgstr "Sirvi Google Drive'i — %{path}"
+
+msgid "Choose how %{name} should be handled."
+msgstr "Vali, kuidas käsitleda elementi %{name}."
+
+msgid "Saved location:"
+msgstr "Salvestatud asukoht:"
+
+## Action buttons
+msgid "Go to Settings"
+msgstr "Mine seadetesse"
+
+msgid "Open Folder"
+msgstr "Ava kaust"
+
+msgid "New Template"
+msgstr "Uus mall"
+
+msgid "New Document"
+msgstr "Uus dokument"
+
+msgid "Create Document"
+msgstr "Loo dokument"
+
+msgid "Blank Document"
+msgstr "Tühi dokument"
+
+msgid "or from template"
+msgstr "või mallist"
+
+msgid "Document Name"
+msgstr "Dokumendi nimi"
+
+msgid "Cancel"
+msgstr "Tühista"
+
+msgid "View"
+msgstr "Vaata"
+
+msgid "Edit"
+msgstr "Muuda"
+
+msgid "PDF"
+msgstr "PDF"
+
+msgid "Export PDF"
+msgstr "Ekspordi PDF"
+
+msgid "Restore"
+msgstr "Taasta"
+
+msgid "Delete"
+msgstr "Kustuta"
+
+msgid "Save Folder Settings"
+msgstr "Salvesta kaustade seaded"
+
+msgid "Select Current Folder"
+msgstr "Vali praegune kaust"
+
+msgid "Set This As Correct Location"
+msgstr "Määra see õigeks asukohaks"
+
+msgid "Move To Documents"
+msgstr "Liiguta dokumentidesse"
+
+msgid "Move To Templates"
+msgstr "Liiguta mallidesse"
+
+msgid "Template language"
+msgstr "Malli keel"
+
+msgid "Set language"
+msgstr "Määra keel"
+
+msgid "Clear language"
+msgstr "Tühjenda keel"
+
+## Loading / progress states
+msgid "Refreshing…"
+msgstr "Värskendamine…"
+
+msgid "Creating…"
+msgstr "Loomine…"
+
+msgid "Opening…"
+msgstr "Avamine…"
+
+msgid "Working…"
+msgstr "Töötlen…"
+
+msgid "Loading…"
+msgstr "Laadimine…"
+
+msgid "Saving…"
+msgstr "Salvestamine…"
+
+msgid "Exporting…"
+msgstr "Eksportimine…"
+
+msgid "Restoring…"
+msgstr "Taastamine…"
+
+msgid "Deleting…"
+msgstr "Kustutamine…"
+
+## Table headers / form labels
+msgid "Name"
+msgstr "Nimi"
+
+msgid "Modified"
+msgstr "Muudetud"
+
+msgid "Actions"
+msgstr "Toimingud"
+
+msgid "Status"
+msgstr "Olek"
+
+msgid "Deleted"
+msgstr "Kustutatud"
+
+## Placeholders
+msgid "templates"
+msgstr "mallid"
+
+msgid "documents"
+msgstr "dokumendid"
+
+msgid "deleted"
+msgstr "kustutatud"
+
+## Status badges
+msgid "Active"
+msgstr "Aktiivsed"
+
+msgid "Trash"
+msgstr "Prügikast"
+
+msgid "lost"
+msgstr "kadunud"
+
+msgid "unfiled"
+msgstr "paigutamata"
+
+msgid "root"
+msgstr "juur"
+
+msgid "Trash is empty"
+msgstr "Prügikast on tühi"
+
+msgid "No files yet"
+msgstr "Faile veel pole"
+
+msgid "File not found in Google Drive"
+msgstr "Faili ei leitud Google Drive'is"
+
+## Default names
+msgid "Untitled Template"
+msgstr "Nimetu mall"
+
+msgid "Untitled Document"
+msgstr "Nimetu dokument"
+
+## Flash messages
+msgid "Moved to deleted folder"
+msgstr "Liigutatud kustutatud kausta"
+
+msgid "Restored"
+msgstr "Taastatud"
+
+msgid "Moved to templates"
+msgstr "Liigutatud mallidesse"
+
+msgid "Moved to documents"
+msgstr "Liigutatud dokumentidesse"
+
+msgid "Saved current location"
+msgstr "Praegune asukoht salvestatud"
+
+msgid "Updated"
+msgstr "Uuendatud"
+
+msgid "Connection updated"
+msgstr "Ühendus uuendatud"
+
+msgid "Folder settings saved"
+msgstr "Kaustade seaded salvestatud"
+
+## Error messages
+msgid "Failed to create template. Please try again."
+msgstr "Malli loomine ebaõnnestus. Palun proovi uuesti."
+
+msgid "Failed to update template language."
+msgstr "Malli keele uuendamine ebaõnnestus."
+
+msgid "Failed to create document. Please try again."
+msgstr "Dokumendi loomine ebaõnnestus. Palun proovi uuesti."
+
+msgid "Action failed. Please try again."
+msgstr "Toiming ebaõnnestus. Palun proovi uuesti."
+
+msgid "PDF export failed. Please try again."
+msgstr "PDF-i eksport ebaõnnestus. Palun proovi uuesti."
+
+msgid "Delete failed. Please try again."
+msgstr "Kustutamine ebaõnnestus. Palun proovi uuesti."
+
+msgid "Restore failed. Please try again."
+msgstr "Taastamine ebaõnnestus. Palun proovi uuesti."
+
+## Errors module
+msgid "Failed to copy the Google Doc"
+msgstr "Google'i dokumendi kopeerimine ebaõnnestus"
+
+msgid "Failed to create the Google Doc"
+msgstr "Google'i dokumendi loomine ebaõnnestus"
+
+msgid "Failed to create the Drive folder"
+msgstr "Drive'i kausta loomine ebaõnnestus"
+
+msgid "Deleted folder not found"
+msgstr "Kustutatud kausta ei leitud"
+
+msgid "Documents folder not found"
+msgstr "Dokumentide kausta ei leitud"
+
+msgid "File is in the Drive trash"
+msgstr "Fail on Drive'i prügikastis"
+
+msgid "Folder not found"
+msgstr "Kausta ei leitud"
+
+msgid "Failed to search Drive for the folder"
+msgstr "Kausta otsimine Drive'ist ebaõnnestus"
+
+msgid "Failed to read file parents from Drive"
+msgstr "Faili ülemkaustade lugemine Drive'ist ebaõnnestus"
+
+msgid "Invalid action"
+msgstr "Vigane toiming"
+
+msgid "Invalid file ID"
+msgstr "Vigane faili ID"
+
+msgid "Invalid Google Doc ID"
+msgstr "Vigane Google'i dokumendi ID"
+
+msgid "Invalid parent folder ID"
+msgstr "Vigane ülemkausta ID"
+
+msgid "Failed to list Drive files"
+msgstr "Drive'i failide loendamine ebaõnnestus"
+
+msgid "Live folder not found"
+msgstr "Aktiivset kausta ei leitud"
+
+msgid "Maximum folder depth exceeded"
+msgstr "Ületatud kaustade maksimaalne sügavus"
+
+msgid "Missing Google Doc ID"
+msgstr "Google'i dokumendi ID puudub"
+
+msgid "Missing name"
+msgstr "Nimi puudub"
+
+msgid "Failed to move the Drive file"
+msgstr "Drive'i faili liigutamine ebaõnnestus"
+
+msgid "No Google Doc ID set on this record"
+msgstr "Sellele kirjele pole Google'i dokumendi ID-d määratud"
+
+msgid "No thumbnail available"
+msgstr "Pisipilt pole saadaval"
+
+msgid "Not found"
+msgstr "Ei leitud"
+
+msgid "Failed to export PDF from Drive"
+msgstr "PDF-i eksportimine Drive'ist ebaõnnestus"
+
+msgid "Failed to sync from Google Drive"
+msgstr "Google Drive'iga sünkroonimine ebaõnnestus"
+
+msgid "Templates folder not found"
+msgstr "Mallide kausta ei leitud"
+
+msgid "Failed to fetch the thumbnail"
+msgstr "Pisipildi hankimine ebaõnnestus"
+
+msgid "Failed to read the thumbnail link from Drive"
+msgstr "Pisipildi lingi lugemine Drive'ist ebaõnnestus"

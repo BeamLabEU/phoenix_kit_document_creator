@@ -1,0 +1,376 @@
+## This file is a PO Template file.
+##
+## "msgid"s here are often extracted from source code.
+## Add new translations manually or run "mix gettext.extract" to add
+## stale messages to this file.
+##
+## Run "mix gettext.merge priv/gettext --locale LOCALE" to merge
+## this template with a particular locale's PO file.
+##
+## NOTE: Tab labels declared via %Tab{label: "…"} in
+## phoenix_kit_document_creator.ex are NOT seen by `mix gettext.extract`
+## (no `gettext(…)` macro at the call site). They are maintained
+## manually here so the translation files cover them.
+msgid ""
+msgstr ""
+
+## Tab labels (manually maintained — Tab.new! / %Tab{} labels)
+msgid "Document Creator"
+msgstr ""
+
+msgid "Documents"
+msgstr ""
+
+msgid "Templates"
+msgstr ""
+
+## Page titles
+msgid "Document Creator — Folders"
+msgstr ""
+
+msgid "Document Creator Settings"
+msgstr ""
+
+## Section headings
+msgid "Google Account Not Connected"
+msgstr ""
+
+msgid "Google Account"
+msgstr ""
+
+msgid "Drive Folders"
+msgstr ""
+
+msgid "Select Folder"
+msgstr ""
+
+msgid "Resolve Unfiled Item"
+msgstr ""
+
+msgid "Create New Document"
+msgstr ""
+
+msgid "Fill Template Variables"
+msgstr ""
+
+## Help & descriptive text
+msgid "Start blank or choose a template."
+msgstr ""
+
+msgid "Configure Google Drive folders for templates and documents."
+msgstr ""
+
+msgid "Customize the Google Drive folder names used for storage. Folders are created automatically if they don't exist."
+msgstr ""
+
+msgid "Click the path button to browse your Google Drive. Deleted items go to subfolders inside the deleted folder. Folders are created automatically if they don't exist."
+msgstr ""
+
+msgid "Manage your Google connections in"
+msgstr ""
+
+msgid "Settings → Integrations"
+msgstr ""
+
+msgid "No subfolders"
+msgstr ""
+
+msgid "My Drive"
+msgstr ""
+
+msgid "Browse Google Drive — root"
+msgstr ""
+
+msgid "Browse Google Drive — %{path}"
+msgstr ""
+
+msgid "Choose how %{name} should be handled."
+msgstr ""
+
+msgid "Saved location:"
+msgstr ""
+
+## Action buttons
+msgid "Go to Settings"
+msgstr ""
+
+msgid "Open Folder"
+msgstr ""
+
+msgid "New Template"
+msgstr ""
+
+msgid "New Document"
+msgstr ""
+
+msgid "Create Document"
+msgstr ""
+
+msgid "Blank Document"
+msgstr ""
+
+msgid "or from template"
+msgstr ""
+
+msgid "Document Name"
+msgstr ""
+
+msgid "Cancel"
+msgstr ""
+
+msgid "View"
+msgstr ""
+
+msgid "Edit"
+msgstr ""
+
+msgid "PDF"
+msgstr ""
+
+msgid "Export PDF"
+msgstr ""
+
+msgid "Restore"
+msgstr ""
+
+msgid "Delete"
+msgstr ""
+
+msgid "Save Folder Settings"
+msgstr ""
+
+msgid "Select Current Folder"
+msgstr ""
+
+msgid "Set This As Correct Location"
+msgstr ""
+
+msgid "Move To Documents"
+msgstr ""
+
+msgid "Move To Templates"
+msgstr ""
+
+msgid "Template language"
+msgstr ""
+
+msgid "Set language"
+msgstr ""
+
+msgid "Clear language"
+msgstr ""
+
+## Loading / progress states (phx-disable-with)
+msgid "Refreshing…"
+msgstr ""
+
+msgid "Creating…"
+msgstr ""
+
+msgid "Opening…"
+msgstr ""
+
+msgid "Working…"
+msgstr ""
+
+msgid "Loading…"
+msgstr ""
+
+msgid "Saving…"
+msgstr ""
+
+msgid "Exporting…"
+msgstr ""
+
+msgid "Restoring…"
+msgstr ""
+
+msgid "Deleting…"
+msgstr ""
+
+## Table headers / form labels
+msgid "Name"
+msgstr ""
+
+msgid "Modified"
+msgstr ""
+
+msgid "Actions"
+msgstr ""
+
+msgid "Status"
+msgstr ""
+
+msgid "Deleted"
+msgstr ""
+
+## Placeholders
+msgid "templates"
+msgstr ""
+
+msgid "documents"
+msgstr ""
+
+msgid "deleted"
+msgstr ""
+
+## Status badges / inline indicators
+msgid "Active"
+msgstr ""
+
+msgid "Trash"
+msgstr ""
+
+msgid "lost"
+msgstr ""
+
+msgid "unfiled"
+msgstr ""
+
+msgid "root"
+msgstr ""
+
+msgid "Trash is empty"
+msgstr ""
+
+msgid "No files yet"
+msgstr ""
+
+msgid "File not found in Google Drive"
+msgstr ""
+
+## Default names
+msgid "Untitled Template"
+msgstr ""
+
+msgid "Untitled Document"
+msgstr ""
+
+## Flash messages (success)
+msgid "Moved to deleted folder"
+msgstr ""
+
+msgid "Restored"
+msgstr ""
+
+msgid "Moved to templates"
+msgstr ""
+
+msgid "Moved to documents"
+msgstr ""
+
+msgid "Saved current location"
+msgstr ""
+
+msgid "Updated"
+msgstr ""
+
+msgid "Connection updated"
+msgstr ""
+
+msgid "Folder settings saved"
+msgstr ""
+
+## Error messages
+msgid "Failed to create template. Please try again."
+msgstr ""
+
+msgid "Failed to update template language."
+msgstr ""
+
+msgid "Failed to create document. Please try again."
+msgstr ""
+
+msgid "Action failed. Please try again."
+msgstr ""
+
+msgid "PDF export failed. Please try again."
+msgstr ""
+
+msgid "Delete failed. Please try again."
+msgstr ""
+
+msgid "Restore failed. Please try again."
+msgstr ""
+
+## Errors module (atom → human-readable string)
+msgid "Failed to copy the Google Doc"
+msgstr ""
+
+msgid "Failed to create the Google Doc"
+msgstr ""
+
+msgid "Failed to create the Drive folder"
+msgstr ""
+
+msgid "Deleted folder not found"
+msgstr ""
+
+msgid "Documents folder not found"
+msgstr ""
+
+msgid "File is in the Drive trash"
+msgstr ""
+
+msgid "Folder not found"
+msgstr ""
+
+msgid "Failed to search Drive for the folder"
+msgstr ""
+
+msgid "Failed to read file parents from Drive"
+msgstr ""
+
+msgid "Invalid action"
+msgstr ""
+
+msgid "Invalid file ID"
+msgstr ""
+
+msgid "Invalid Google Doc ID"
+msgstr ""
+
+msgid "Invalid parent folder ID"
+msgstr ""
+
+msgid "Failed to list Drive files"
+msgstr ""
+
+msgid "Live folder not found"
+msgstr ""
+
+msgid "Maximum folder depth exceeded"
+msgstr ""
+
+msgid "Missing Google Doc ID"
+msgstr ""
+
+msgid "Missing name"
+msgstr ""
+
+msgid "Failed to move the Drive file"
+msgstr ""
+
+msgid "No Google Doc ID set on this record"
+msgstr ""
+
+msgid "No thumbnail available"
+msgstr ""
+
+msgid "Not found"
+msgstr ""
+
+msgid "Failed to export PDF from Drive"
+msgstr ""
+
+msgid "Failed to sync from Google Drive"
+msgstr ""
+
+msgid "Templates folder not found"
+msgstr ""
+
+msgid "Failed to fetch the thumbnail"
+msgstr ""
+
+msgid "Failed to read the thumbnail link from Drive"
+msgstr ""

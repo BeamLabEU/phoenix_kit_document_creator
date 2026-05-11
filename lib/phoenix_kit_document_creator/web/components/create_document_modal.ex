@@ -7,7 +7,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
   Step 3: Create document and redirect to Google Docs.
   """
   use Phoenix.Component
-  use Gettext, backend: PhoenixKitWeb.Gettext
+  use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
   attr(:open, :boolean, required: true)
   attr(:templates, :list, default: [])
@@ -137,7 +137,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
           phx-disable-with={gettext("Creating…")}
         >
           <span :if={@creating} class="loading loading-spinner loading-xs" />
-          {if @creating, do: gettext("Creating..."), else: gettext("Create Document")}
+          {if @creating, do: gettext("Creating…"), else: gettext("Create Document")}
         </button>
       </div>
     </form>
