@@ -264,6 +264,32 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.ImageSubstitutionTest do
       assert get_in(del2, [:deleteContentRange, :range, :startIndex]) == 5
     end
 
+    test "nil src dimensions produce square fallback using default_width_px" do
+      ranges = [%{name: "logo", start_index: 10, end_index: 27}]
+
+      fills = %{
+        "logo" => %{
+          kind: :image,
+          default_width_px: 400,
+          separator: nil,
+          media: [%{uri: "https://x/a.png", width_px: nil, height_px: nil}]
+        }
+      }
+
+      [_delete, insert] = GoogleDocsClient.build_image_batch_requests(ranges, fills)
+
+      assert insert == %{
+               insertInlineImage: %{
+                 location: %{index: 10},
+                 uri: "https://x/a.png",
+                 objectSize: %{
+                   width: %{magnitude: 400 * 9525, unit: "EMU"},
+                   height: %{magnitude: 400 * 9525, unit: "EMU"}
+                 }
+               }
+             }
+    end
+
     test "optional empty value still deletes the tag" do
       ranges = [%{name: "x", start_index: 5, end_index: 22}]
 

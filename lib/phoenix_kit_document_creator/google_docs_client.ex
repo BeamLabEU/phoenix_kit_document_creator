@@ -854,8 +854,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     }
   end
 
-  defp scale_height(_target_width, src_width, src_height) when src_width in [nil, 0],
-    do: src_height || 0
+  defp scale_height(target_width, src_width, src_height) when src_width in [nil, 0],
+    do: src_height || target_width
 
   defp scale_height(target_width, src_width, src_height) do
     round(target_width * src_height / src_width)
