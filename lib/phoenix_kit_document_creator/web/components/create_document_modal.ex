@@ -9,6 +9,8 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
   use Phoenix.Component
   use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
+  alias PhoenixKitDocumentCreator.Web.Components.VariableConfigForm
+
   attr(:open, :boolean, required: true)
   attr(:templates, :list, default: [])
   attr(:step, :string, default: "choose")
@@ -111,20 +113,23 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
         <label class="label py-1">
           <span class="label-text text-sm">{var[:label] || var["label"] || var[:name] || var["name"]}</span>
         </label>
-        <%= if (var[:type] || var["type"]) == :multiline do %>
-          <textarea
-            name={"var[#{var[:name] || var["name"]}]"}
-            class="textarea textarea-bordered textarea-sm w-full"
-            rows="3"
-            placeholder={var[:name] || var["name"]}
-          />
-        <% else %>
-          <input
-            type="text"
-            name={"var[#{var[:name] || var["name"]}]"}
-            class="input input-bordered input-sm w-full"
-            placeholder={var[:name] || var["name"]}
-          />
+        <%= case var[:type] || var["type"] do %>
+          <% :multiline -> %>
+            <textarea
+              name={"var[#{var[:name] || var["name"]}]"}
+              class="textarea textarea-bordered textarea-sm w-full"
+              rows="3"
+              placeholder={var[:name] || var["name"]}
+            />
+          <% type when type in [:image, :image_list] -> %>
+            <VariableConfigForm.config_form variable={var} />
+          <% _ -> %>
+            <input
+              type="text"
+              name={"var[#{var[:name] || var["name"]}]"}
+              class="input input-bordered input-sm w-full"
+              placeholder={var[:name] || var["name"]}
+            />
         <% end %>
       </div>
 
