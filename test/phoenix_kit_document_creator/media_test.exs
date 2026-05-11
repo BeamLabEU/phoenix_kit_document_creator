@@ -24,11 +24,11 @@ defmodule PhoenixKitDocumentCreator.MediaTest do
   end
 
   describe "get_url_and_dimensions/1" do
-    test "returns url, width, and height for a known media_id" do
-      assert {:ok, %{url: url, width_px: 1200, height_px: 800}} =
+    test "returns uri, width, and height for a known media_id" do
+      assert {:ok, %{uri: uri, width_px: 1200, height_px: 800}} =
                Media.get_url_and_dimensions("known-uuid")
 
-      assert url == "https://cdn.example.com/image.jpg"
+      assert uri == "https://cdn.example.com/image.jpg"
     end
 
     test "returns :image_not_found when media_id does not exist" do
@@ -46,7 +46,7 @@ defmodule PhoenixKitDocumentCreator.MediaTest do
     end
 
     test "returns nil width_px and height_px when dimensions are not stored" do
-      assert {:ok, %{url: _, width_px: nil, height_px: nil}} =
+      assert {:ok, %{uri: _, width_px: nil, height_px: nil}} =
                Media.get_url_and_dimensions("no-dims-uuid")
     end
   end

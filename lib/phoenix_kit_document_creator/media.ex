@@ -11,15 +11,15 @@ defmodule PhoenixKitDocumentCreator.Media do
   """
 
   @doc """
-  Resolves a media UUID to its public URL and stored pixel dimensions.
+  Resolves a media UUID to its public URI and stored pixel dimensions.
 
   Returns:
-  - `{:ok, %{url: String.t(), width_px: integer() | nil, height_px: integer() | nil}}`
+  - `{:ok, %{uri: String.t(), width_px: integer() | nil, height_px: integer() | nil}}`
   - `{:error, :image_not_found}` — UUID has no matching file record
   - `{:error, :image_url_not_public}` — file exists but has no resolvable public URL
   """
   @spec get_url_and_dimensions(String.t()) ::
-          {:ok, %{url: String.t(), width_px: integer() | nil, height_px: integer() | nil}}
+          {:ok, %{uri: String.t(), width_px: integer() | nil, height_px: integer() | nil}}
           | {:error, :image_not_found | :image_url_not_public}
   def get_url_and_dimensions(media_id) when is_binary(media_id) do
     mod = media_module()
@@ -33,8 +33,8 @@ defmodule PhoenixKitDocumentCreator.Media do
           nil ->
             {:error, :image_url_not_public}
 
-          url ->
-            {:ok, %{url: url, width_px: file.width, height_px: file.height}}
+          uri ->
+            {:ok, %{uri: uri, width_px: file.width, height_px: file.height}}
         end
     end
   end
