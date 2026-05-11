@@ -715,4 +715,167 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       )
     end
   end
+
+  describe "picking_existing JSON shape validation" do
+    test "bogus entries in picking_existing are dropped — only the new pick survives",
+         %{conn: conn} do
+      file_id = "rt-tpl-bogus-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Documents.upsert_template_from_drive(%{
+          "id" => file_id,
+          "name" => "Bogus Validation Template"
+        })
+
+      conn = put_test_scope(conn, fake_scope())
+
+      # The prior state contains one valid pick and one invalid entry.
+      prior =
+        Jason.encode!(%{
+          "logo" => %{"media_id" => "valid-uuid"},
+          "junk" => "value"
+        })
+
+      return_url =
+        "/en/admin/document-creator?" <>
+          URI.encode_query(%{
+            "selected_media" => "new-uuid",
+            "picking_var" => "banner",
+            "picking_mode" => "single",
+            "template_file_id" => file_id,
+            "picking_existing" => prior
+          })
+
+      {:ok, view, _html} = live(conn, return_url)
+
+      state = :sys.get_state(view.pid).socket.assigns
+      # Valid prior pick is preserved
+      assert state.modal_image_values["logo"] == %{"media_id" => "valid-uuid"}
+      # New pick is applied
+      assert state.modal_image_values["banner"] == %{"media_id" => "new-uuid"}
+      # Bogus entry is dropped
+      refute Map.has_key?(state.modal_image_values, "junk")
+    end
+
+    test "malformed (non-JSON) picking_existing is treated as empty prior",
+         %{conn: conn} do
+      file_id = "rt-tpl-malformed-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Documents.upsert_template_from_drive(%{
+          "id" => file_id,
+          "name" => "Malformed JSON Template"
+        })
+
+      conn = put_test_scope(conn, fake_scope())
+
+      return_url =
+        "/en/admin/document-creator?" <>
+          URI.encode_query(%{
+            "selected_media" => "pick-uuid",
+            "picking_var" => "logo",
+            "picking_mode" => "single",
+            "template_file_id" => file_id,
+            "picking_existing" => "not-json"
+          })
+
+      {:ok, view, _html} = live(conn, return_url)
+
+      state = :sys.get_state(view.pid).socket.assigns
+      assert state.modal_open == true
+      # Only the new pick — no crash, no stale junk
+      assert state.modal_image_values == %{"logo" => %{"media_id" => "pick-uuid"}}
+    end
+  end
+
+  describe "open_media_picker mode validation" do
+    test "open_media_picker with garbage mode defaults to :single without crashing",
+         %{conn: conn} do
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      # Inject a selected template so the handler has a valid template_file_id.
+      :sys.replace_state(view.pid, fn state ->
+        new_socket =
+          Phoenix.Component.assign(state.socket,
+            modal_open: true,
+            modal_step: "variables",
+            modal_image_values: %{},
+            modal_selected_template: %{"id" => "any-tpl", "name" => "Test"}
+          )
+
+        %{state | socket: new_socket}
+      end)
+
+      # A hostile client sends an arbitrary mode string. The LV must not crash.
+      assert {:error, {:live_redirect, %{to: redirect_url}}} =
+               render_click(view, "open_media_picker", %{"name" => "logo", "mode" => "garbage"})
+
+      # The redirect URL must NOT contain "garbage" — it defaults to "single".
+      refute String.contains?(redirect_url, "garbage")
+    end
+  end
+
+  describe "media picker round-trip" do
+    test "returning from media selector restores template state and applies image selection",
+         %{conn: conn} do
+      file_id = "rt-tpl-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Documents.upsert_template_from_drive(%{
+          "id" => file_id,
+          "name" => "Round-trip Template"
+        })
+
+      conn = put_test_scope(conn, fake_scope())
+
+      return_url =
+        "/en/admin/document-creator?selected_media=media-uuid-1&picking_var=logo&picking_mode=single&template_file_id=#{file_id}"
+
+      {:ok, view, _html} = live(conn, return_url)
+
+      state = :sys.get_state(view.pid).socket.assigns
+      assert state.modal_open == true
+      assert state.modal_step == "variables"
+      assert get_in(state, [:modal_selected_template, "id"]) == file_id
+      assert state.modal_image_values["logo"] == %{"media_id" => "media-uuid-1"}
+    end
+
+    test "second round-trip preserves image values from the first pick",
+         %{conn: conn} do
+      file_id = "rt-tpl2-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        Documents.upsert_template_from_drive(%{
+          "id" => file_id,
+          "name" => "Sequential Picks Template"
+        })
+
+      conn = put_test_scope(conn, fake_scope())
+
+      # Simulate returning from the second media pick, with the first pick
+      # encoded in `picking_existing`.
+      prior = Jason.encode!(%{"logo" => %{"media_id" => "first-uuid"}})
+
+      return_url =
+        "/en/admin/document-creator?" <>
+          URI.encode_query(%{
+            "selected_media" => "second-uuid",
+            "picking_var" => "photos",
+            "picking_mode" => "multiple",
+            "template_file_id" => file_id,
+            "picking_existing" => prior
+          })
+
+      {:ok, view, _html} = live(conn, return_url)
+
+      state = :sys.get_state(view.pid).socket.assigns
+      assert state.modal_open == true
+      assert state.modal_step == "variables"
+      # First pick is preserved
+      assert state.modal_image_values["logo"] == %{"media_id" => "first-uuid"}
+      # Second pick is applied
+      assert state.modal_image_values["photos"] == %{"media_ids" => ["second-uuid"]}
+    end
+  end
 end

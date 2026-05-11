@@ -689,6 +689,222 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  @doc """
+  Scans a `documents.get` response for image tag occurrences.
+
+  Returns a flat list of `%{name, start_index, end_index}` covering every
+  occurrence in body content, headers, footers, and table cells, restricted
+  to the names supplied.
+
+  **Offset note:** `Regex.scan(..., return: :index)` returns byte offsets;
+  Google Docs `startIndex` counts UTF-16 code units. The implementation
+  converts byte offsets to codepoint counts (one per BMP char). Supplementary
+  codepoints (rare emoji outside the BMP) would each require two UTF-16 code
+  units and are not yet handled.
+  """
+  @spec find_image_tag_ranges(map(), [String.t()]) ::
+          [%{name: String.t(), start_index: integer(), end_index: integer()}]
+  def find_image_tag_ranges(%{} = doc, names) when is_list(names) do
+    names_set = MapSet.new(names)
+
+    body_blocks = get_in(doc, ["body", "content"]) || []
+
+    header_blocks =
+      doc
+      |> Map.get("headers", %{})
+      |> Map.values()
+      |> Enum.flat_map(&Map.get(&1, "content", []))
+
+    footer_blocks =
+      doc
+      |> Map.get("footers", %{})
+      |> Map.values()
+      |> Enum.flat_map(&Map.get(&1, "content", []))
+
+    (body_blocks ++ header_blocks ++ footer_blocks)
+    |> Enum.flat_map(&walk_block/1)
+    |> Enum.flat_map(&extract_tag_ranges(&1, names_set))
+  end
+
+  defp walk_block(%{"paragraph" => %{"elements" => elements}}), do: elements
+
+  defp walk_block(%{"table" => %{"tableRows" => rows}}) do
+    Enum.flat_map(rows, fn %{"tableCells" => cells} ->
+      Enum.flat_map(cells, fn %{"content" => content} ->
+        Enum.flat_map(content, &walk_block/1)
+      end)
+    end)
+  end
+
+  defp walk_block(_), do: []
+
+  @image_tag_regex ~r/\{\{\s*(image|images)\s*:\s*(\w+)\s*\}\}/
+
+  defp extract_tag_ranges(
+         %{"textRun" => %{"content" => content}, "startIndex" => base},
+         names_set
+       ) do
+    Regex.scan(@image_tag_regex, content, return: :index)
+    |> Enum.flat_map(&match_to_range(&1, content, base, names_set))
+  end
+
+  defp extract_tag_ranges(_, _), do: []
+
+  defp match_to_range(
+         [{full_byte_start, full_byte_len}, _keyword_pos, {name_byte_start, name_byte_len}],
+         content,
+         base,
+         names_set
+       ) do
+    # `Regex.scan` with `return: :index` yields byte offsets. Google Docs
+    # `startIndex` counts UTF-16 code units (one per BMP codepoint, two per
+    # supplementary). We convert byte offsets to codepoint counts using the
+    # binary prefix before the match — for BMP text (Latin, Cyrillic, most
+    # CJK) codepoints equal UTF-16 code units. Surrogate pairs (rare emoji)
+    # would need an additional adjustment; that case is out of scope.
+    full_cp_start = content |> binary_part(0, full_byte_start) |> String.length()
+    full_cp_len = content |> binary_part(full_byte_start, full_byte_len) |> String.length()
+    name = binary_part(content, name_byte_start, name_byte_len)
+
+    if MapSet.member?(names_set, name) do
+      [
+        %{
+          name: name,
+          start_index: base + full_cp_start,
+          end_index: base + full_cp_start + full_cp_len
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  defp match_to_range(_, _, _, _), do: []
+
+  @px_to_emu 9525
+
+  @doc """
+  Builds the list of `batchUpdate` request maps to substitute image tags.
+
+  `fills` is a map keyed by variable name; each value carries `kind`,
+  `default_width_px`, `separator` (atom or nil), and `media` — a list of
+  `%{uri, width_px, height_px}`.
+
+  Empty media list = the tag is still deleted (cleared).
+  """
+  @spec build_image_batch_requests([map()], map()) :: [map()]
+  def build_image_batch_requests(ranges, fills) do
+    ranges
+    |> Enum.sort_by(& &1.start_index, :desc)
+    |> Enum.flat_map(fn %{name: name, start_index: s, end_index: e} ->
+      fill = Map.fetch!(fills, name)
+      delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
+
+      inserts =
+        case fill.kind do
+          :image -> single_image_inserts(fill, s)
+          :image_list -> list_image_inserts(fill, s)
+        end
+
+      [delete | inserts]
+    end)
+  end
+
+  defp single_image_inserts(%{media: []}, _index), do: []
+
+  defp single_image_inserts(%{media: [media | _], default_width_px: w}, index) do
+    [insert_inline_image_request(media, w, index)]
+  end
+
+  defp list_image_inserts(%{media: []}, _index), do: []
+
+  defp list_image_inserts(%{media: media, default_width_px: w, separator: sep}, index) do
+    reversed = Enum.reverse(media)
+
+    reversed
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {m, i} ->
+      img = insert_inline_image_request(m, w, index)
+
+      if i < length(reversed) - 1 do
+        [img, separator_request(sep, index)]
+      else
+        [img]
+      end
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp insert_inline_image_request(
+         %{uri: uri, width_px: w_px, height_px: h_px},
+         default_width_px,
+         index
+       ) do
+    scaled_height_px = scale_height(default_width_px, w_px, h_px)
+
+    %{
+      insertInlineImage: %{
+        location: %{index: index},
+        uri: uri,
+        objectSize: %{
+          width: %{magnitude: default_width_px * @px_to_emu, unit: "EMU"},
+          height: %{magnitude: scaled_height_px * @px_to_emu, unit: "EMU"}
+        }
+      }
+    }
+  end
+
+  defp scale_height(target_width, src_width, src_height) when src_width in [nil, 0],
+    do: src_height || target_width
+
+  defp scale_height(target_width, src_width, src_height) do
+    round(target_width * src_height / src_width)
+  end
+
+  defp separator_request(:none, _index), do: nil
+
+  defp separator_request(sep, index) do
+    text =
+      case sep do
+        :newline -> "\n"
+        :space -> " "
+      end
+
+    %{insertText: %{text: text, location: %{index: index}}}
+  end
+
+  @doc """
+  Two-step image substitution: GET the document, build the batch, send it.
+
+  `fills` is the same shape as `build_image_batch_requests/2`.
+
+  Options (used in tests):
+    * `:get_fn` — overrides `get_document/1`
+    * `:batch_fn` — overrides `batch_update/2`
+  """
+  @spec substitute_images(String.t(), map(), keyword()) ::
+          {:ok, map() | :noop} | {:error, term()}
+  def substitute_images(doc_id, fills, opts \\ []) when is_map(fills) do
+    if map_size(fills) == 0 do
+      {:ok, :noop}
+    else
+      get_fn = Keyword.get(opts, :get_fn, &get_document/1)
+      batch_fn = Keyword.get(opts, :batch_fn, &batch_update/2)
+
+      with {:ok, %{body: doc}} <- get_fn.(doc_id),
+           ranges = find_image_tag_ranges(doc, Map.keys(fills)),
+           requests = build_image_batch_requests(ranges, fills),
+           {:ok, _} = result <- maybe_batch(batch_fn, doc_id, requests) do
+        result
+      else
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  defp maybe_batch(_fn, _id, []), do: {:ok, %{}}
+  defp maybe_batch(fn_, id, requests), do: fn_.(id, requests)
+
   # ===========================================================================
   # Google Drive API
   # ===========================================================================

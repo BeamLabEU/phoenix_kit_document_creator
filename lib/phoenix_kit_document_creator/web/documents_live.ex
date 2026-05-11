@@ -16,6 +16,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
   alias PhoenixKitDocumentCreator.Web.Helpers
+  alias PhoenixKitWeb.Helpers.MediaSelectorHelper
 
   @pubsub_topic PhoenixKitDocumentCreator.Documents.pubsub_topic()
   @refresh_cooldown_ms :timer.seconds(5)
@@ -61,6 +62,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        modal_step: "choose",
        modal_selected_template: nil,
        modal_variables: [],
+       modal_image_values: %{},
        modal_creating: false,
        unfiled_modal_open: false,
        unfiled_file: nil,
@@ -69,14 +71,75 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   @impl true
-  def handle_params(_params, _uri, socket) do
+  def handle_params(params, uri, socket) do
     title =
       case socket.assigns.live_action do
         :templates -> gettext("Templates")
         _ -> gettext("Documents")
       end
 
-    {:noreply, assign(socket, page_title: title)}
+    url_path = URI.parse(uri).path || "/"
+    socket = assign(socket, page_title: title, url_path: url_path)
+    {:noreply, apply_media_selection(params, socket)}
+  end
+
+  defp apply_media_selection(params, socket) do
+    case MediaSelectorHelper.parse_selected_media(params) do
+      {:ok, uuids} ->
+        var_name = Map.get(params, "picking_var")
+        mode = Map.get(params, "picking_mode", "single")
+        template_file_id = Map.get(params, "template_file_id")
+        existing_json = Map.get(params, "picking_existing", "{}")
+
+        prior_image_values = prior_image_values_from_json(existing_json)
+
+        socket
+        |> restore_template_state(template_file_id)
+        |> assign(modal_image_values: prior_image_values)
+        |> apply_image_selection(var_name, mode, uuids)
+
+      :none ->
+        socket
+    end
+  end
+
+  defp restore_template_state(socket, nil), do: socket
+
+  defp restore_template_state(socket, template_file_id) do
+    case Documents.get_template_from_db(template_file_id) do
+      {:ok, template} ->
+        variables = Documents.get_template_variables_from_db(template_file_id)
+
+        assign(socket,
+          modal_selected_template: template,
+          modal_variables: Enum.map(variables, &Map.from_struct/1)
+        )
+
+      _ ->
+        socket
+    end
+  end
+
+  defp apply_image_selection(socket, nil, _mode, _uuids), do: socket
+
+  defp apply_image_selection(socket, var_name, "multiple", uuids) do
+    image_values = Map.put(socket.assigns.modal_image_values, var_name, %{"media_ids" => uuids})
+
+    assign(socket,
+      modal_open: true,
+      modal_step: "variables",
+      modal_image_values: image_values
+    )
+  end
+
+  defp apply_image_selection(socket, var_name, _single, [uuid | _]) do
+    image_values = Map.put(socket.assigns.modal_image_values, var_name, %{"media_id" => uuid})
+
+    assign(socket,
+      modal_open: true,
+      modal_step: "variables",
+      modal_image_values: image_values
+    )
   end
 
   defp google_connected? do
@@ -349,6 +412,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        modal_step: "choose",
        modal_selected_template: nil,
        modal_variables: [],
+       modal_image_values: %{},
        modal_creating: false
      )}
   end
@@ -359,7 +423,43 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   def handle_event("modal_back", _params, socket) do
     {:noreply,
-     assign(socket, modal_step: "choose", modal_selected_template: nil, modal_variables: [])}
+     assign(socket,
+       modal_step: "choose",
+       modal_selected_template: nil,
+       modal_variables: [],
+       modal_image_values: %{}
+     )}
+  end
+
+  def handle_event("open_media_picker", %{"name" => var_name, "mode" => mode}, socket) do
+    current_path = socket.assigns[:url_path] || "/admin/document-creator"
+    template_file_id = get_in(socket.assigns, [:modal_selected_template, "id"]) || ""
+    existing_image_values = Jason.encode!(socket.assigns.modal_image_values)
+
+    return_to =
+      current_path <>
+        "?" <>
+        URI.encode_query(%{
+          "picking_var" => var_name,
+          "picking_mode" => mode,
+          "template_file_id" => template_file_id,
+          "picking_existing" => existing_image_values
+        })
+
+    mode_atom =
+      case mode do
+        "single" -> :single
+        "multiple" -> :multiple
+        _ -> :single
+      end
+
+    selector_url =
+      MediaSelectorHelper.media_selector_url(return_to,
+        mode: mode_atom,
+        filter: :image
+      )
+
+    {:noreply, push_navigate(socket, to: selector_url)}
   end
 
   def handle_event("modal_create_blank", _params, socket) do
@@ -394,7 +494,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     template = socket.assigns.modal_selected_template
     file_id = template["id"]
     doc_name = Map.get(params, "doc_name", template["name"])
-    variable_values = Map.get(params, "var", %{})
+    text_values = Map.get(params, "var", %{})
+    variable_values = Map.merge(text_values, socket.assigns.modal_image_values)
 
     socket = assign(socket, modal_creating: true)
 
@@ -560,8 +661,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   defp do_modal_select_template(socket, file_id, name) do
     variables =
       case Documents.detect_variables(file_id) do
-        {:ok, vars} ->
-          PhoenixKitDocumentCreator.Variable.build_definitions(vars)
+        {:ok, fork} ->
+          PhoenixKitDocumentCreator.Variable.build_definitions(fork)
           |> Enum.map(&Map.from_struct/1)
 
         _ ->
@@ -883,6 +984,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       step={@modal_step}
       selected_template={@modal_selected_template}
       variables={@modal_variables}
+      image_values={@modal_image_values}
       creating={@modal_creating}
       thumbnails={@thumbnails}
     />
@@ -1404,4 +1506,24 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       last -> now_ms() - last < @refresh_cooldown_ms
     end
   end
+
+  defp prior_image_values_from_json(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) ->
+        map
+        |> Enum.filter(fn {k, v} -> is_binary(k) and valid_image_value?(v) end)
+        |> Map.new()
+
+      _ ->
+        %{}
+    end
+  end
+
+  defp valid_image_value?(%{"media_id" => id}) when is_binary(id), do: true
+
+  defp valid_image_value?(%{"media_ids" => ids}) when is_list(ids) do
+    Enum.all?(ids, &is_binary/1)
+  end
+
+  defp valid_image_value?(_), do: false
 end

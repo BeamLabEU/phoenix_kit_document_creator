@@ -146,4 +146,88 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModalTest do
       refute html =~ ~r/phx-click="modal_close"[^>]*phx-disable-with/
     end
   end
+
+  describe "image variable picker" do
+    test "image variable renders a 'Choose image' button" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => "T"},
+          variables: [
+            %{name: "logo", label: "Logo", type: :image, config: %{default_width_px: 400}}
+          ],
+          image_values: %{},
+          creating: false
+        )
+
+      assert html =~ "phx-click=\"open_media_picker\""
+      assert html =~ "phx-value-name=\"logo\""
+      assert html =~ "Choose image"
+    end
+
+    test "image_list variable renders a 'Choose images' button" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => "T"},
+          variables: [
+            %{
+              name: "photos",
+              label: "Photos",
+              type: :image_list,
+              config: %{default_width_px: 400, separator: :newline, max_count: nil}
+            }
+          ],
+          image_values: %{},
+          creating: false
+        )
+
+      assert html =~ "phx-click=\"open_media_picker\""
+      assert html =~ "phx-value-name=\"photos\""
+      assert html =~ "Choose images"
+    end
+
+    test "image_list variable shows count badge when images are pre-filled" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => "T"},
+          variables: [
+            %{
+              name: "photos",
+              label: "Photos",
+              type: :image_list,
+              config: %{default_width_px: 400, separator: :newline, max_count: nil}
+            }
+          ],
+          image_values: %{"photos" => %{"media_ids" => ["uuid-1", "uuid-2"]}},
+          creating: false
+        )
+
+      assert html =~ "2"
+    end
+
+    test "image variable shows selected indicator when filled" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [],
+          step: "variables",
+          selected_template: %{"id" => "tpl-1", "name" => "T"},
+          variables: [
+            %{name: "logo", label: "Logo", type: :image, config: %{default_width_px: 400}}
+          ],
+          image_values: %{"logo" => %{"media_id" => "some-uuid"}},
+          creating: false
+        )
+
+      assert html =~ "selected"
+    end
+  end
 end

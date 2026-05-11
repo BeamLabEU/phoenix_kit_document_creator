@@ -6,49 +6,118 @@ defmodule PhoenixKitDocumentCreator.Variable do
   get substituted with actual values via the Google Docs `replaceAllText` API.
   """
 
-  @type variable_type :: :text | :date | :currency | :multiline
+  @type variable_type :: :text | :date | :currency | :multiline | :image | :image_list
 
   @type t :: %__MODULE__{
           name: String.t(),
           label: String.t(),
           type: variable_type(),
           default: String.t() | nil,
-          required: boolean()
+          required: boolean(),
+          config: map()
         }
 
   @enforce_keys [:name, :label, :type]
-  defstruct [:name, :label, :type, default: nil, required: false]
+  defstruct [:name, :label, :type, default: nil, required: false, config: %{}]
+
+  @string_var_regex ~r/\{\{\s*(?!images?\s*:)(\w+)\s*\}\}/
+  @image_var_regex ~r/\{\{\s*(image|images)\s*:\s*(\w+)\s*\}\}/
 
   @doc """
-  Extracts variable names from text by scanning for `{{ variable_name }}` patterns.
+  Extracts text variable names from `{{ name }}` placeholders.
 
-  Returns a sorted list of unique variable names (strings).
+  Deliberately ignores `{{ image: name }}` and `{{ images: name }}` via a negative
+  lookahead — those are handled by `extract_image_variables/1`.
+
+  Returns a sorted list of unique names.
   """
-  @spec extract_variables(term()) :: [String.t()]
-  def extract_variables(text) when is_binary(text) do
-    ~r/\{\{\s*(\w+)\s*\}\}/
+  @spec extract_string_variables(term()) :: [String.t()]
+  def extract_string_variables(text) when is_binary(text) do
+    @string_var_regex
     |> Regex.scan(text)
     |> Enum.map(fn [_full, name] -> name end)
     |> Enum.uniq()
     |> Enum.sort()
   end
 
-  def extract_variables(_), do: []
+  def extract_string_variables(_), do: []
 
   @doc """
-  Builds Variable structs from a list of variable names, guessing types from names.
+  Extracts image variable definitions from `{{ image: name }}` /
+  `{{ images: name }}` placeholders.
+
+  Returns a list of `%{name: String.t(), kind: :image | :image_list}` maps,
+  deduplicated by name, sorted by name.
+
+  Note: if both `{{ image: foo }}` and `{{ images: foo }}` appear with the same name, the first occurrence (by document order) wins.
   """
-  @spec build_definitions([String.t()]) :: [t()]
-  def build_definitions(names) when is_list(names) do
-    Enum.map(names, fn name ->
-      %__MODULE__{
-        name: name,
-        label: humanize(name),
-        type: guess_type(name),
-        required: false,
-        default: nil
-      }
+  @spec extract_image_variables(term()) :: [%{name: String.t(), kind: :image | :image_list}]
+  def extract_image_variables(text) when is_binary(text) do
+    @image_var_regex
+    |> Regex.scan(text)
+    |> Enum.map(fn [_full, keyword, name] ->
+      %{name: name, kind: keyword_to_kind(keyword)}
     end)
+    |> Enum.uniq_by(& &1.name)
+    |> Enum.sort_by(& &1.name)
+  end
+
+  def extract_image_variables(_), do: []
+
+  @doc """
+  Convenience entry point that runs both detectors and returns a forked map.
+
+  Returns `%{text: [String.t()], image: [%{name, kind}]}`.
+  """
+  @spec extract_variables(term()) :: %{
+          text: [String.t()],
+          image: [%{name: String.t(), kind: :image | :image_list}]
+        }
+  def extract_variables(text) do
+    %{
+      text: extract_string_variables(text),
+      image: extract_image_variables(text)
+    }
+  end
+
+  @doc """
+  Builds Variable structs from a forked detection map. Text variables come first
+  (sorted), then image variables (sorted by name).
+  """
+  @spec build_definitions(%{
+          text: [String.t()],
+          image: [%{name: String.t(), kind: :image | :image_list}]
+        }) :: [t()]
+  def build_definitions(%{text: text_names, image: image_defs}) do
+    text_vars =
+      text_names
+      |> Enum.sort()
+      |> Enum.map(fn name ->
+        %__MODULE__{
+          name: name,
+          label: humanize(name),
+          type: guess_type(name),
+          required: false,
+          default: nil,
+          config: %{}
+        }
+      end)
+
+    image_vars =
+      image_defs
+      |> Enum.sort_by(& &1.name)
+      |> Enum.map(fn %{name: name, kind: kind} ->
+        %__MODULE__{
+          name: name,
+          label: humanize(name),
+          type: kind,
+          required: false,
+          default: nil,
+          config: default_image_config(kind)
+        }
+      end)
+
+    text_vars ++ image_vars
   end
 
   @doc "Converts an underscore_name to a human-readable label."
@@ -70,4 +139,12 @@ defmodule PhoenixKitDocumentCreator.Variable do
       true -> :text
     end
   end
+
+  defp keyword_to_kind("image"), do: :image
+  defp keyword_to_kind("images"), do: :image_list
+
+  defp default_image_config(:image), do: %{default_width_px: 400}
+
+  defp default_image_config(:image_list),
+    do: %{default_width_px: 400, separator: :newline, max_count: nil}
 end

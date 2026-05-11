@@ -83,6 +83,49 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # DB Listing (fast, no API calls)
   # ===========================================================================
 
+  @doc """
+  Fetches a single template row by its Google Doc ID.
+
+  Returns `{:ok, %{"id" => ..., "name" => ...}}` or `{:error, :not_found}`.
+  """
+  @spec get_template_from_db(String.t()) :: {:ok, map()} | {:error, :not_found}
+  def get_template_from_db(google_doc_id) when is_binary(google_doc_id) do
+    case repo().get_by(Template, google_doc_id: google_doc_id) do
+      nil -> {:error, :not_found}
+      record -> {:ok, schema_to_file_map(record)}
+    end
+  end
+
+  @doc """
+  Returns the DB-cached variable definitions for a template as a list of
+  `Variable.t()` structs, without making any Drive API calls.
+
+  Returns `[]` if the template has no cached variables.
+  """
+  @spec get_template_variables_from_db(String.t()) :: [PhoenixKitDocumentCreator.Variable.t()]
+  def get_template_variables_from_db(google_doc_id) when is_binary(google_doc_id) do
+    case repo().get_by(Template, google_doc_id: google_doc_id) do
+      nil ->
+        []
+
+      template ->
+        raw_vars = template.variables || []
+
+        Enum.map(raw_vars, fn var ->
+          type = var["type"] && String.to_existing_atom(var["type"])
+
+          %PhoenixKitDocumentCreator.Variable{
+            name: var["name"],
+            label: var["label"] || var["name"],
+            type: type || :text,
+            required: var["required"] || false,
+            default: var["default"],
+            config: var["config"] || %{}
+          }
+        end)
+    end
+  end
+
   @doc "List templates from the local DB. Returns maps compatible with the LiveView."
   @spec list_templates_from_db() :: [map()]
   def list_templates_from_db do
@@ -659,11 +702,16 @@ defmodule PhoenixKitDocumentCreator.Documents do
           {:ok, map()} | {:error, term()}
   def create_document_from_template(template_file_id, variable_values, opts \\ []) do
     doc_name = Keyword.get(opts, :name, "New Document")
+    client = docs_client()
+    {text_values, image_value_specs} = split_text_and_image_values(variable_values)
 
     with {:ok, target} <- resolve_create_target(opts),
+         {:ok, template_vars} <- load_template_vars(template_file_id),
+         {:ok, image_fills} <- resolve_image_fills(template_vars, image_value_specs),
          {:ok, new_doc_id} <-
-           GoogleDocsClient.copy_file(template_file_id, doc_name, parent: target.folder_id),
-         {:ok, _} <- GoogleDocsClient.replace_all_text(new_doc_id, variable_values) do
+           client.copy_file(template_file_id, doc_name, parent: target.folder_id),
+         {:ok, _} <- client.replace_all_text(new_doc_id, text_values),
+         {:ok, _} <- client.substitute_images(new_doc_id, image_fills) do
       persist_created_document(
         new_doc_id,
         template_file_id,
@@ -672,6 +720,39 @@ defmodule PhoenixKitDocumentCreator.Documents do
         target,
         opts
       )
+    end
+  end
+
+  @doc "Splits variable_values into text values and image specs."
+  @spec split_text_and_image_values(map()) :: {map(), map()}
+  def split_text_and_image_values(values) do
+    Enum.reduce(values, {%{}, %{}}, fn
+      {k, %{"media_id" => _} = spec}, {t, i} -> {t, Map.put(i, k, spec)}
+      {k, %{"media_ids" => _} = spec}, {t, i} -> {t, Map.put(i, k, spec)}
+      {k, v}, {t, i} -> {Map.put(t, k, v), i}
+    end)
+  end
+
+  @doc "Resolves image value specs against template variable defs and media module."
+  @spec resolve_image_fills([map()], map()) :: {:ok, map()} | {:error, term()}
+  def resolve_image_fills(template_vars, image_value_specs) do
+    defs = image_var_defs_from_list(template_vars)
+
+    Enum.reduce_while(image_value_specs, {:ok, %{}}, fn {name, spec}, {:ok, acc} ->
+      reduce_one_fill(defs, name, spec, acc)
+    end)
+  end
+
+  defp reduce_one_fill(defs, name, spec, acc) do
+    case Map.fetch(defs, name) do
+      :error ->
+        {:halt, {:error, :image_tag_not_found}}
+
+      {:ok, def_} ->
+        case resolve_one_image_spec(spec, def_) do
+          {:ok, fill} -> {:cont, {:ok, Map.put(acc, name, fill)}}
+          {:error, _} = err -> {:halt, err}
+        end
     end
   end
 
@@ -772,6 +853,75 @@ defmodule PhoenixKitDocumentCreator.Documents do
     |> where([t], t.google_doc_id == ^google_doc_id)
     |> select([t], t.uuid)
     |> repo().one()
+  end
+
+  defp docs_client do
+    Application.get_env(
+      :phoenix_kit_document_creator,
+      :docs_client,
+      GoogleDocsClient
+    )
+  end
+
+  defp load_template_vars(template_file_id) do
+    case repo().get_by(Template, google_doc_id: template_file_id) do
+      nil -> {:ok, []}
+      template -> {:ok, template.variables || []}
+    end
+  end
+
+  defp image_var_defs_from_list(template_vars) do
+    for var <- template_vars,
+        var["type"] in ["image", "image_list"],
+        into: %{} do
+      {var["name"],
+       %{
+         kind: String.to_existing_atom(var["type"]),
+         default_width_px: get_in(var, ["config", "default_width_px"]) || 400,
+         separator: var |> get_in(["config", "separator"]) |> normalize_separator()
+       }}
+    end
+  end
+
+  defp normalize_separator("newline"), do: :newline
+  defp normalize_separator(:newline), do: :newline
+  defp normalize_separator("space"), do: :space
+  defp normalize_separator(:space), do: :space
+  defp normalize_separator(_), do: :none
+
+  defp resolve_one_image_spec(%{"media_id" => media_id}, def_) do
+    with {:ok, m} <- PhoenixKitDocumentCreator.Media.get_url_and_dimensions(media_id) do
+      {:ok,
+       %{
+         kind: def_.kind,
+         default_width_px: def_.default_width_px,
+         separator: def_.separator,
+         media: [m]
+       }}
+    end
+  end
+
+  defp resolve_one_image_spec(%{"media_ids" => ids}, def_) when is_list(ids) do
+    ids
+    |> Enum.reduce_while({:ok, []}, fn id, {:ok, acc} ->
+      case PhoenixKitDocumentCreator.Media.get_url_and_dimensions(id) do
+        {:ok, m} -> {:cont, {:ok, [m | acc]}}
+        err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, list} ->
+        {:ok,
+         %{
+           kind: def_.kind,
+           default_width_px: def_.default_width_px,
+           separator: def_.separator,
+           media: Enum.reverse(list)
+         }}
+
+      err ->
+        err
+    end
   end
 
   # ===========================================================================
@@ -1431,15 +1581,17 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # activity feed with one row per template-pick. The mutating writes
   # that *consume* the detected variables — `create_document_from_template`,
   # `register_existing_*` — log activity at the right granularity.
-  @spec detect_variables(String.t()) :: {:ok, [String.t()]} | {:error, term()}
+  @spec detect_variables(String.t()) ::
+          {:ok, %{text: [String.t()], image: [%{name: String.t(), kind: :image | :image_list}]}}
+          | {:error, term()}
   def detect_variables(file_id) when is_binary(file_id) do
     case GoogleDocsClient.get_document_text(file_id) do
       {:ok, text} ->
-        vars = PhoenixKitDocumentCreator.Variable.extract_variables(text)
+        fork = PhoenixKitDocumentCreator.Variable.extract_variables(text)
 
-        # Persist variable definitions to the template record
         var_defs =
-          PhoenixKitDocumentCreator.Variable.build_definitions(vars)
+          fork
+          |> PhoenixKitDocumentCreator.Variable.build_definitions()
           |> Enum.map(&Map.from_struct/1)
 
         now = DateTime.utc_now() |> DateTime.truncate(:second)
@@ -1448,7 +1600,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         |> where([t], t.google_doc_id == ^file_id)
         |> repo().update_all(set: [variables: var_defs, updated_at: now])
 
-        {:ok, vars}
+        {:ok, fork}
 
       {:error, _} = err ->
         err
