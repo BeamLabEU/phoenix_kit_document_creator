@@ -791,7 +791,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     |> div(2)
   end
 
-  @px_to_emu 9525
+  # Google Docs `Unit` enum accepts only `PT` or `UNIT_UNSPECIFIED`; 1 px = 0.75 pt
+  # (96 dpi web → 72 dpi PostScript). Earlier versions sent `unit: "EMU"`, which
+  # Google rejects with `INVALID_ARGUMENT` (`google.apps.docs.v1.Unit`), so every
+  # `insertInlineImage` batch failed.
+  @px_to_pt 0.75
 
   @doc """
   Builds the list of `batchUpdate` request maps to substitute image tags.
@@ -857,8 +861,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         location: %{index: index},
         uri: uri,
         objectSize: %{
-          width: %{magnitude: default_width_px * @px_to_emu, unit: "EMU"},
-          height: %{magnitude: scaled_height_px * @px_to_emu, unit: "EMU"}
+          width: %{magnitude: default_width_px * @px_to_pt, unit: "PT"},
+          height: %{magnitude: scaled_height_px * @px_to_pt, unit: "PT"}
         }
       }
     }
