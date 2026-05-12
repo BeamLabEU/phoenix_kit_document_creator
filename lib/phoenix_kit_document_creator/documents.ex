@@ -126,6 +126,59 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
+  @doc """
+  Update the `config` map of a single variable on a template's `variables` jsonb.
+
+  Merges `new_config` (string-keyed map) into the existing variable's config, coercing
+  integer-shaped strings to integers (for inputs from HTML form fields).
+
+  Returns `{:ok, template}` on success or `{:error, :not_found}` if no template
+  matches the given file_id.
+  """
+  @spec update_template_variable_config(String.t(), String.t(), map()) ::
+          {:ok, Template.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def update_template_variable_config(template_file_id, var_name, new_config)
+      when is_binary(template_file_id) and is_binary(var_name) and is_map(new_config) do
+    case repo().get_by(Template, google_doc_id: template_file_id) do
+      nil ->
+        {:error, :not_found}
+
+      template ->
+        updated_vars =
+          Enum.map(template.variables || [], fn
+            %{"name" => ^var_name} = var ->
+              existing_config = var["config"] || %{}
+              merged = Map.merge(existing_config, coerce_config(new_config))
+              Map.put(var, "config", merged)
+
+            var ->
+              var
+          end)
+
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+        template
+        |> Ecto.Changeset.change(variables: updated_vars, updated_at: now)
+        |> repo().update()
+    end
+  end
+
+  defp coerce_config(config) do
+    Map.new(config, fn
+      {"default_width_px", v} -> {"default_width_px", to_integer(v)}
+      {"max_count", v} -> {"max_count", to_integer_or_nil(v)}
+      {k, v} -> {k, v}
+    end)
+  end
+
+  defp to_integer(v) when is_integer(v), do: v
+  defp to_integer(v) when is_binary(v), do: String.to_integer(v)
+
+  defp to_integer_or_nil(nil), do: nil
+  defp to_integer_or_nil(""), do: nil
+  defp to_integer_or_nil(v) when is_integer(v), do: v
+  defp to_integer_or_nil(v) when is_binary(v), do: String.to_integer(v)
+
   @doc "List templates from the local DB. Returns maps compatible with the LiveView."
   @spec list_templates_from_db() :: [map()]
   def list_templates_from_db do

@@ -462,6 +462,29 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     {:noreply, push_navigate(socket, to: selector_url)}
   end
 
+  def handle_event(
+        "update_variable_config",
+        %{"variables" => vars_params} = _params,
+        %{assigns: %{modal_selected_template: %{"id" => template_file_id}}} = socket
+      )
+      when is_map(vars_params) do
+    Enum.each(vars_params, fn {var_name, %{"config" => config_params}} ->
+      Documents.update_template_variable_config(template_file_id, var_name, config_params)
+    end)
+
+    variables =
+      template_file_id
+      |> Documents.get_template_variables_from_db()
+      |> Enum.map(&Map.from_struct/1)
+
+    broadcast_files_changed()
+
+    {:noreply, assign(socket, modal_variables: variables)}
+  end
+
+  # Fallback when modal_selected_template isn't a map with "id" (defensive)
+  def handle_event("update_variable_config", _params, socket), do: {:noreply, socket}
+
   def handle_event("modal_create_blank", _params, socket) do
     case Documents.create_document(gettext("Untitled Document"), actor_opts(socket)) do
       {:ok, %{url: url}} ->
