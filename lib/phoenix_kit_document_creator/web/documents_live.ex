@@ -481,18 +481,35 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         %{assigns: %{modal_selected_template: %{"id" => template_file_id}}} = socket
       )
       when is_map(vars_params) do
-    Enum.each(vars_params, fn {var_name, %{"config" => config_params}} ->
-      Documents.update_template_variable_config(template_file_id, var_name, config_params)
-    end)
+    result =
+      Enum.reduce_while(vars_params, :ok, fn {var_name, %{"config" => config_params}}, :ok ->
+        case Documents.update_template_variable_config(template_file_id, var_name, config_params) do
+          {:ok, _} -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
 
-    variables =
-      template_file_id
-      |> Documents.get_template_variables_from_db()
-      |> Enum.map(&Map.from_struct/1)
+    case result do
+      :ok ->
+        variables =
+          template_file_id
+          |> Documents.get_template_variables_from_db()
+          |> Enum.map(&Map.from_struct/1)
 
-    broadcast_files_changed()
+        broadcast_files_changed()
 
-    {:noreply, assign(socket, modal_variables: variables)}
+        {:noreply, assign(socket, modal_variables: variables)}
+
+      {:error, reason} ->
+        Logger.warning("update_variable_config failed: #{inspect(reason)}")
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Failed to save variable configuration. Please try again.")
+         )}
+    end
   end
 
   # Fallback when modal_selected_template isn't a map with "id" (defensive)

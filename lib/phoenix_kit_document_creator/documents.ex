@@ -135,11 +135,16 @@ defmodule PhoenixKitDocumentCreator.Documents do
   Merges `new_config` (string-keyed map) into the existing variable's config, coercing
   integer-shaped strings to integers (for inputs from HTML form fields).
 
-  Returns `{:ok, template}` on success or `{:error, :not_found}` if no template
-  matches the given file_id.
+  Uses an atomic SQL UPDATE with `jsonb_agg` to avoid the read-modify-write race
+  condition that would occur when two concurrent requests update different variables
+  on the same template.
+
+  Returns `{:ok, template}` on success, `{:error, :not_found}` if no template
+  matches the given file_id, or `{:error, :unknown_variable}` if the variable
+  name doesn't exist in the template's variables array.
   """
   @spec update_template_variable_config(String.t(), String.t(), map()) ::
-          {:ok, Template.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Template.t()} | {:error, :not_found | :unknown_variable}
   def update_template_variable_config(template_file_id, var_name, new_config)
       when is_binary(template_file_id) and is_binary(var_name) and is_map(new_config) do
     case repo().get_by(Template, google_doc_id: template_file_id) do
@@ -147,22 +152,41 @@ defmodule PhoenixKitDocumentCreator.Documents do
         {:error, :not_found}
 
       template ->
-        updated_vars =
-          Enum.map(template.variables || [], fn
-            %{"name" => ^var_name} = var ->
-              existing_config = var["config"] || %{}
-              merged = Map.merge(existing_config, coerce_config(new_config))
-              Map.put(var, "config", merged)
+        merged_config =
+          case Enum.find(template.variables || [], &(&1["name"] == var_name)) do
+            nil -> nil
+            existing_var -> Map.merge(existing_var["config"] || %{}, coerce_config(new_config))
+          end
 
-            var ->
-              var
-          end)
+        case merged_config do
+          nil ->
+            {:error, :unknown_variable}
 
-        now = DateTime.utc_now() |> DateTime.truncate(:second)
+          config_to_write ->
+            sql = """
+            UPDATE phoenix_kit_doc_templates
+            SET variables = (
+              SELECT jsonb_agg(
+                CASE
+                  WHEN elem->>'name' = $2
+                  THEN jsonb_set(elem, '{config}', $3::jsonb, true)
+                  ELSE elem
+                END
+              )
+              FROM jsonb_array_elements(variables) AS elem
+            ),
+                updated_at = NOW()
+            WHERE uuid = $1
+            """
 
-        template
-        |> Ecto.Changeset.change(variables: updated_vars, updated_at: now)
-        |> repo().update()
+            Ecto.Adapters.SQL.query!(
+              repo(),
+              sql,
+              [template.uuid, var_name, config_to_write]
+            )
+
+            {:ok, repo().get!(Template, template.uuid)}
+        end
     end
   end
 
@@ -2047,7 +2071,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
         {:error, :not_found}
 
       preset ->
-        template_uuids = Enum.map(preset.sections, &Map.get(&1, "template_uuid"))
+        template_uuids =
+          preset.sections
+          |> Enum.map(&Map.get(&1, "template_uuid"))
+          |> Enum.reject(&is_nil/1)
 
         existing =
           Template
@@ -2062,7 +2089,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
           end)
 
         if dropped != [] do
-          dropped_uuids = Enum.map_join(dropped, ", ", &Map.get(&1, "template_uuid"))
+          dropped_uuids = Enum.map_join(dropped, ", ", &to_string(Map.get(&1, "template_uuid")))
 
           Logger.warning(
             "apply_preset: dropped #{length(dropped)} section(s) with missing templates: #{dropped_uuids}"
