@@ -1132,6 +1132,18 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
+  @doc """
+  Set or clear the category for a template identified by `google_doc_id`.
+
+  Pass `nil` or `""` to clear the category. On success, logs a
+  `template.category_updated` activity row with `category_from`/`category_to`
+  metadata and broadcasts `:files_changed` so connected LiveViews resync.
+  On `{:error, changeset}`, logs a failed-mutation activity row (matching the
+  `update_template_language/3` pattern). Returns `{:error, :not_found}` when
+  no template row exists for `google_doc_id`.
+
+  Options: `:actor_uuid` — stored on the activity row.
+  """
   @spec update_template_category(String.t(), String.t() | nil, keyword()) ::
           {:ok, Template.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def update_template_category(google_doc_id, category, opts \\ [])
@@ -1171,6 +1183,11 @@ defmodule PhoenixKitDocumentCreator.Documents do
             {:ok, updated}
 
           {:error, _changeset} = err ->
+            log_failed_mutation("template.category_updated", "template", opts, %{
+              "google_doc_id" => google_doc_id,
+              "category_to" => normalized
+            })
+
             err
         end
     end

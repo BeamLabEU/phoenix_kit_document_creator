@@ -835,7 +835,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   When `z_index <= 0`, emits `insertInlineImage` (default inline behaviour).
   Opacity application requires a follow-up `UpdateEmbeddedObjectPropertiesRequest`
   with the object ID returned by the batchUpdate response — not emitted here.
-  A Logger warning is written when `opacity != 1.0`.
+  A Logger warning is written when `opacity != 1.0`. This is a documented
+  no-op (open risk) per the spec's "Open Risks" section: applying transparency
+  requires a second batchUpdate pass after the initial insert, using the
+  embedded object ID from the first response. Not yet implemented.
   """
   @spec build_single_image_request(String.t(), keyword()) :: map()
   def build_single_image_request(uri, opts) do

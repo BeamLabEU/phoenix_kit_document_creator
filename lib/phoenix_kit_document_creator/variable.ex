@@ -151,6 +151,10 @@ defmodule PhoenixKitDocumentCreator.Variable do
 
   For `:image`: `%{default_width_px: 400, opacity: 1.0, z_index: 0}`
   For `:image_list`: adds `separator: :newline, max_count: nil`.
+
+  Note: `:opacity` is currently a no-op in the inline path; positioned objects
+  (`z_index > 0`) also skip it pending a follow-up two-pass batchUpdate.
+  Values stored in the DB are preserved for future activation.
   """
   @spec default_image_config(:image | :image_list) :: map()
   def default_image_config(:image), do: %{default_width_px: 400, opacity: 1.0, z_index: 0}

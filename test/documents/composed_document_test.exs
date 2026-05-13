@@ -188,7 +188,7 @@ defmodule PhoenixKitDocumentCreator.Documents.ComposedDocumentTest do
       t1 = insert_template!(google_doc_id: "tmpl-1", published: true)
       t2 = insert_template!(google_doc_id: "tmpl-2", published: true)
 
-      stub_substitute_in_range_error!(:any, :rate_limited)
+      stub_substitute_all_sections_error!(:rate_limited)
 
       sections = [
         %{template_uuid: t1.uuid, position: 0, variable_values: %{}, image_params: %{}},
@@ -209,7 +209,7 @@ defmodule PhoenixKitDocumentCreator.Documents.ComposedDocumentTest do
     test "logs but does not fail if cleanup deletion fails" do
       t1 = insert_template!(google_doc_id: "tmpl-1", published: true)
 
-      stub_substitute_in_range_error!(:any, :boom)
+      stub_substitute_all_sections_error!(:boom)
       stub_delete_document_error!(:gone)
 
       log =

@@ -12,6 +12,10 @@ defmodule PhoenixKitDocumentCreator.Schemas.DocumentSection do
 
   Image substitution downstream is restricted to PNG, JPEG, and GIF formats
   only. `image_params` keys are validated at the context layer (Task 7+).
+
+  Note: the `opacity` key within `image_params` is currently a no-op — stored
+  in DB for future activation when a two-pass batchUpdate path is implemented.
+  See `GoogleDocsClient.build_single_image_request/2` for details.
   """
 
   use Ecto.Schema

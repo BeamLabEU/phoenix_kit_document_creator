@@ -19,7 +19,7 @@ defmodule PhoenixKitDocumentCreator.Test.StubDocsClient do
 
   - `copy_document/1` → `{:ok, "copy-of-<source_id>"}`
   - `append_template/2` → `{:ok, {100, 200}}`
-  - `substitute_in_range/5` → `:ok`
+  - `substitute_all_sections/3` → `:ok`
   - `delete_document/1` → `:ok`
 
   Override specific calls via the `stub_*_error!` helpers in
@@ -171,7 +171,7 @@ defmodule PhoenixKitDocumentCreator.Test.StubDocsClientHelpers do
   end
 
   @doc "Stub substitute_all_sections to return an error."
-  def stub_substitute_in_range_error!(_range_key, error) do
+  def stub_substitute_all_sections_error!(error) do
     StubDocsClient.add_override(:substitute_all_sections, {:error, error})
   end
 
