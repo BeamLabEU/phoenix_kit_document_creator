@@ -5,7 +5,10 @@ defmodule PhoenixKitDocumentCreator.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [PhoenixKit.Supervisor | oban_children()]
+    # PhoenixKit.Supervisor is started by the host app (per PhoenixKit
+    # convention); starting it here would race with the host's supervision
+    # tree and crash with :already_started.
+    children = oban_children()
 
     opts = [strategy: :one_for_one, name: PhoenixKitDocumentCreator.Supervisor]
     Supervisor.start_link(children, opts)
