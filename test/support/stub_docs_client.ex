@@ -73,7 +73,7 @@ defmodule PhoenixKitDocumentCreator.Test.StubDocsClient do
     end
   end
 
-  def append_template(target_doc_id, _template_doc_id) do
+  def append_template(_target_doc_id, _template_doc_id) do
     record(:append_template)
 
     case override_for(:append_template) do

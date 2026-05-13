@@ -1183,11 +1183,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Perform text and image substitution within a specific character range of a doc.
 
   `range` is either `{start_index, end_index}` (for a section-scoped substitution)
-  or `:full_document` (substitutes across the entire document — used for the first
-  section which occupies the whole doc before any append).
+  or `:full_document` (substitutes the entire document — used for the first
+  section which is copied as the base doc).
 
-  Text substitution runs before image substitution per production pipeline ordering
-  (text-sub must complete before image tags are resolved to avoid tag collisions).
+  Uses `documents.get` to fetch the current document structure, then locates
+  `{{key}}` placeholders whose positions fall within the range and replaces
+  them in-place via `deleteContentRange` + `insertText` (for text variables)
+  or `insertInlineImage` (for image variables). All requests are issued in
+  reverse startIndex order within a single batchUpdate so earlier substitutions
+  don't shift the indices of later ones.
+
+  Text substitution runs before image substitution per production pipeline
+  ordering — text-sub must complete so image tags aren't consumed by text
+  patterns.
   """
   @spec substitute_in_range(
           String.t(),
@@ -1196,19 +1204,98 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           map(),
           map()
         ) :: :ok | {:error, term()}
-  def substitute_in_range(doc_id, _range, variable_values, image_params, _default_image_cfg) do
-    # MVP: range-scoped substitution is approximated by full-document replace_all_text +
-    # substitute_images. True range-scoped substitution (restricting replaceAllText to
-    # a segment) is not supported by the Google Docs batchUpdate API — replaceAllText
-    # always applies to the whole document. Section ordering and unique variable keys
-    # per section are the caller's responsibility to avoid cross-section collisions.
+  def substitute_in_range(doc_id, range, variable_values, image_params, _default_image_cfg) do
     text_values = Map.reject(variable_values, fn {_, v} -> is_map(v) end)
     image_fills = build_image_fills(image_params)
 
-    with {:ok, _} <- replace_all_text(doc_id, text_values),
-         {:ok, _} <- substitute_images(doc_id, image_fills) do
-      :ok
+    # Text substitution first (must precede image sub — see image-substitution.md).
+    # Then re-fetch the doc for image substitution so indices are current after text edits.
+    with {:ok, %{body: doc}} <- get_document(doc_id),
+         {:ok, _} <- substitute_text_in_range(doc_id, doc, range, text_values),
+         {:ok, %{body: doc2}} <- get_document(doc_id) do
+      substitute_images_in_range(doc_id, doc2, range, image_fills)
     end
+  end
+
+  defp substitute_text_in_range(_doc_id, _doc, _range, text_values)
+       when map_size(text_values) == 0,
+       do: {:ok, :noop}
+
+  defp substitute_text_in_range(doc_id, doc, range, text_values) do
+    requests =
+      doc
+      |> body_text_runs()
+      |> Enum.flat_map(&find_text_var_ranges(&1, Map.keys(text_values)))
+      |> filter_to_range(range)
+      |> Enum.sort_by(& &1.start_index, :desc)
+      |> Enum.flat_map(fn %{key: key, start_index: s, end_index: e} ->
+        [
+          %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}},
+          %{insertText: %{location: %{index: s}, text: to_string(text_values[key])}}
+        ]
+      end)
+
+    maybe_batch(&batch_update/2, doc_id, requests)
+  end
+
+  defp substitute_images_in_range(_doc_id, _doc2, _range, image_fills)
+       when map_size(image_fills) == 0,
+       do: :ok
+
+  defp substitute_images_in_range(doc_id, doc2, range, image_fills) do
+    requests =
+      doc2
+      |> find_image_tag_ranges(Map.keys(image_fills))
+      |> filter_to_range(range)
+      |> build_image_batch_requests(image_fills)
+
+    case maybe_batch(&batch_update/2, doc_id, requests) do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  # Walk body content and return all textRun elements as %{content, startIndex}.
+  defp body_text_runs(doc) do
+    (get_in(doc, ["body", "content"]) || [])
+    |> Enum.flat_map(&walk_block/1)
+    |> Enum.filter(&match?(%{"textRun" => _, "startIndex" => _}, &1))
+  end
+
+  @text_var_regex ~r/\{\{\s*(\w+)\s*\}\}/
+
+  # Find {{key}} occurrences in a textRun element for the given key names.
+  # Returns %{key, start_index, end_index} with UTF-16 index arithmetic.
+  defp find_text_var_ranges(%{"textRun" => %{"content" => content}, "startIndex" => base}, keys) do
+    keys_set = MapSet.new(keys)
+
+    Regex.scan(@text_var_regex, content, return: :index)
+    |> Enum.flat_map(fn [{full_byte_start, full_byte_len}, {_name_byte_start, _name_byte_len}] ->
+      name =
+        Regex.run(@text_var_regex, binary_part(content, full_byte_start, full_byte_len),
+          capture: :all_but_first
+        )
+        |> hd()
+
+      if MapSet.member?(keys_set, name) do
+        u16_start = content |> binary_part(0, full_byte_start) |> utf16_units()
+        u16_len = content |> binary_part(full_byte_start, full_byte_len) |> utf16_units()
+
+        [%{key: name, start_index: base + u16_start, end_index: base + u16_start + u16_len}]
+      else
+        []
+      end
+    end)
+  end
+
+  defp find_text_var_ranges(_, _), do: []
+
+  # Keep only matches whose start_index falls within [scope_start, scope_end).
+  # :full_document means no filtering.
+  defp filter_to_range(matches, :full_document), do: matches
+
+  defp filter_to_range(matches, {scope_start, scope_end}) do
+    Enum.filter(matches, fn %{start_index: s} -> s >= scope_start and s < scope_end end)
   end
 
   @doc """

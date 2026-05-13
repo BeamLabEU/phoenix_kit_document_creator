@@ -174,34 +174,30 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
     end)
   end
 
-  # `replaceAllText` (the Google Docs API primitive) operates on the whole
-  # document — it cannot be scoped to a character range. Per-section looping
-  # with separate calls would cause section-0 values to replace every matching
-  # placeholder across all sections, leaving sections 1..N's values with nothing
-  # to substitute. To avoid that silent bug, we merge all sections' variable_values
-  # into a single map (position order, earlier positions win on key collision) and
-  # issue one substitution pass. Callers are responsible for using unique placeholder
-  # keys across sections; identical keys across sections share a single resolved value.
-  defp apply_substitutions(gdoc_id, sorted, _ranges, client) do
-    merged_variable_values =
-      sorted
-      |> Enum.map(& &1.variable_values)
-      |> Enum.reduce(%{}, fn vals, acc -> Map.merge(vals, acc) end)
+  # Each section is substituted against its own character range in the composed doc.
+  # Section 0 (the base copy) uses :full_document since it occupies the whole doc
+  # before any sections are appended. Sections 1..N use the {start, end} range
+  # returned by append_template/2. This means identical placeholder keys in
+  # different sections (e.g. {{name}}: "Alice" in s0, {{name}}: "Bob" in s1)
+  # resolve independently — each substitution only touches its section's range.
+  defp apply_substitutions(gdoc_id, sorted, ranges, client) do
+    Enum.reduce_while(sorted, :ok, fn section, _ ->
+      range = Map.get(ranges, section.position, :full_document)
 
-    merged_image_params =
-      sorted
-      |> Enum.map(& &1.image_params)
-      |> Enum.reduce(%{}, fn params, acc -> Map.merge(params, acc) end)
-
-    case client.substitute_in_range(
-           gdoc_id,
-           :full_document,
-           merged_variable_values,
-           merged_image_params,
-           %{}
-         ) do
+      case client.substitute_in_range(
+             gdoc_id,
+             range,
+             section.variable_values,
+             section.image_params,
+             %{}
+           ) do
+        :ok -> {:cont, :ok}
+        {:error, _} = e -> {:halt, e}
+      end
+    end)
+    |> case do
       :ok -> {:ok, :substituted}
-      {:error, _} = err -> err
+      other -> other
     end
   end
 

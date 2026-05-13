@@ -37,20 +37,20 @@ defmodule PhoenixKitDocumentCreator.Documents.ComposedDocumentTest do
       t1 = insert_template!(google_doc_id: "tmpl-1", published: true)
       t2 = insert_template!(google_doc_id: "tmpl-2", published: true)
 
-      # Use distinct variable keys per section — substitution is a single merged
-      # whole-doc pass (replaceAllText is document-wide; per-section scoping is
-      # not possible via the Google Docs API). Callers must use unique keys.
+      # Both sections use the same key "name" — range-scoped substitution means
+      # section 0 resolves {{name}} → "Alice" and section 1 resolves {{name}} → "Bob"
+      # independently, each within its own character range.
       sections = [
         %{
           template_uuid: t1.uuid,
           position: 0,
-          variable_values: %{"section1_name" => "Alice"},
+          variable_values: %{"name" => "Alice"},
           image_params: %{}
         },
         %{
           template_uuid: t2.uuid,
           position: 1,
-          variable_values: %{"section2_name" => "Bob"},
+          variable_values: %{"name" => "Bob"},
           image_params: %{}
         }
       ]
@@ -79,11 +79,11 @@ defmodule PhoenixKitDocumentCreator.Documents.ComposedDocumentTest do
       assert t1uuid == t1.uuid
       assert t2uuid == t2.uuid
 
-      # copy_document + append_template (for section 2) + one merged substitute_in_range.
-      # Substitution is a single whole-doc pass — see Composer.apply_substitutions/4.
+      # copy_document + append_template (section 2) + substitute_in_range per section.
       assert_google_docs_calls_in_order([
         :copy_document,
         :append_template,
+        :substitute_in_range,
         :substitute_in_range
       ])
     end

@@ -1656,10 +1656,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   Required opts: `:created_by_uuid`, `:name`. Optional: `:separator` (default `:page_break`).
 
-  Variable substitution is a single whole-document pass — `replaceAllText` cannot be
-  scoped to a character range in the Google Docs API. All sections' `variable_values`
-  are merged before substitution (earlier positions win on key collision). Callers must
-  use unique placeholder keys across sections to avoid unintended cross-section matches.
+  Variable substitution is range-scoped per section: each section's `variable_values`
+  are applied only within the character range that section occupies in the composed doc.
+  Identical placeholder keys in different sections (e.g. `{{name}}` in section 0 and
+  section 1) resolve independently.
   """
   @spec create_composed_document(
           [Composer.section_input()],
