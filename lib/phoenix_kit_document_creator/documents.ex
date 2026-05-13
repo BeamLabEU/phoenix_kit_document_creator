@@ -281,13 +281,15 @@ defmodule PhoenixKitDocumentCreator.Documents do
       "folder_id" => record.folder_id
     }
 
-    # Templates have a `language` column (V110); documents inherit
-    # language from their template at fill time and don't store one.
-    if Map.has_key?(record, :language) do
-      Map.put(base, "language", record.language)
-    else
-      base
-    end
+    # Templates have `language` (V110) and `category` columns; documents
+    # inherit language from their template at fill time and don't store either.
+    base
+    |> then(fn m ->
+      if Map.has_key?(record, :language), do: Map.put(m, "language", record.language), else: m
+    end)
+    |> then(fn m ->
+      if Map.has_key?(record, :category), do: Map.put(m, "category", record.category), else: m
+    end)
   end
 
   # ===========================================================================
