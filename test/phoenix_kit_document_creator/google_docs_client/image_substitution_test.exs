@@ -166,6 +166,91 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.ImageSubstitutionTest do
     end
   end
 
+  describe "build_single_image_request/2" do
+    test "builds positioned object when z_index > 0" do
+      cfg = %{default_width_px: 200, opacity: 0.5, z_index: 1}
+
+      request =
+        GoogleDocsClient.build_single_image_request("https://x/img.png",
+          insertion_index: 100,
+          config: cfg
+        )
+
+      refute match?(%{insertInlineImage: _}, request)
+
+      assert %{createPositionedObject: body} = request
+      assert body.positioning.layout == "WRAP_TEXT"
+      assert body.insertionIndex == 100
+      assert body.uri == "https://x/img.png"
+    end
+
+    test "builds inline image when z_index <= 0" do
+      cfg = %{default_width_px: 200, opacity: 1.0, z_index: 0}
+
+      request =
+        GoogleDocsClient.build_single_image_request("https://x/img.png",
+          insertion_index: 50,
+          config: cfg
+        )
+
+      assert %{insertInlineImage: body} = request
+      assert body.location.index == 50
+      assert body.uri == "https://x/img.png"
+      refute Map.has_key?(body, :transparency)
+    end
+
+    test "negative z_index produces inline image" do
+      cfg = %{default_width_px: 200, opacity: 1.0, z_index: -1}
+
+      request =
+        GoogleDocsClient.build_single_image_request("https://x/img.png",
+          insertion_index: 10,
+          config: cfg
+        )
+
+      assert match?(%{insertInlineImage: _}, request)
+    end
+  end
+
+  describe "build_image_batch_requests/2 with z_index" do
+    test "z_index > 0 produces createPositionedObject in batch" do
+      ranges = [%{name: "logo", start_index: 10, end_index: 27}]
+
+      fills = %{
+        "logo" => %{
+          kind: :image,
+          default_width_px: 400,
+          opacity: 1.0,
+          z_index: 1,
+          separator: nil,
+          media: [%{uri: "https://x/a.png", width_px: 800, height_px: 400}]
+        }
+      }
+
+      [delete, insert] = GoogleDocsClient.build_image_batch_requests(ranges, fills)
+      assert match?(%{deleteContentRange: _}, delete)
+      assert match?(%{createPositionedObject: %{positioning: %{layout: "WRAP_TEXT"}}}, insert)
+    end
+
+    test "z_index 0 (default) produces insertInlineImage in batch" do
+      ranges = [%{name: "logo", start_index: 10, end_index: 27}]
+
+      fills = %{
+        "logo" => %{
+          kind: :image,
+          default_width_px: 400,
+          opacity: 1.0,
+          z_index: 0,
+          separator: nil,
+          media: [%{uri: "https://x/a.png", width_px: 800, height_px: 400}]
+        }
+      }
+
+      [_delete, insert] = GoogleDocsClient.build_image_batch_requests(ranges, fills)
+      assert match?(%{insertInlineImage: _}, insert)
+    end
+  end
+
   describe "build_image_batch_requests/2" do
     test "single image: delete range + insert one image" do
       ranges = [%{name: "logo", start_index: 10, end_index: 27}]

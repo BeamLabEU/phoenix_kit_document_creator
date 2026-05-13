@@ -824,21 +824,88 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end)
   end
 
+  @doc """
+  Builds a single image insert request map.
+
+  Options:
+    - `:insertion_index` — document character index for insertion (required)
+    - `:config` — map with `:default_width_px`, `:opacity`, `:z_index` (required)
+
+  When `z_index > 0`, emits a `createPositionedObject` with `layout = "WRAP_TEXT"`.
+  When `z_index <= 0`, emits `insertInlineImage` (default inline behaviour).
+  Opacity application requires a follow-up `UpdateEmbeddedObjectPropertiesRequest`
+  with the object ID returned by the batchUpdate response — not emitted here.
+  A Logger warning is written when `opacity != 1.0`.
+  """
+  @spec build_single_image_request(String.t(), keyword()) :: map()
+  def build_single_image_request(uri, opts) do
+    index = Keyword.fetch!(opts, :insertion_index)
+    config = Keyword.fetch!(opts, :config)
+    w = Map.get(config, :default_width_px, 400)
+    z = Map.get(config, :z_index, 0)
+    opacity = Map.get(config, :opacity, 1.0)
+    media = %{uri: uri, width_px: nil, height_px: nil}
+
+    if opacity != 1.0 do
+      Logger.warning(
+        "image opacity #{opacity} cannot be applied in a single batchUpdate pass; skipped for #{uri}"
+      )
+    end
+
+    if z > 0 do
+      build_positioned_image_request(media, w, index)
+    else
+      insert_inline_image_request(media, w, index)
+    end
+  end
+
   defp single_image_inserts(%{media: []}, _index), do: []
 
-  defp single_image_inserts(%{media: [media | _], default_width_px: w}, index) do
-    [insert_inline_image_request(media, w, index)]
+  defp single_image_inserts(fill, index) do
+    %{media: [media | _], default_width_px: w} = fill
+    z = Map.get(fill, :z_index, 0)
+    opacity = Map.get(fill, :opacity, 1.0)
+
+    if opacity != 1.0 do
+      Logger.warning(
+        "image opacity #{opacity} cannot be applied in a single batchUpdate pass; skipped"
+      )
+    end
+
+    request =
+      if z > 0 do
+        build_positioned_image_request(media, w, index)
+      else
+        insert_inline_image_request(media, w, index)
+      end
+
+    [request]
   end
 
   defp list_image_inserts(%{media: []}, _index), do: []
 
-  defp list_image_inserts(%{media: media, default_width_px: w, separator: sep}, index) do
+  defp list_image_inserts(fill, index) do
+    %{media: media, default_width_px: w, separator: sep} = fill
+    z = Map.get(fill, :z_index, 0)
+    opacity = Map.get(fill, :opacity, 1.0)
+
+    if opacity != 1.0 do
+      Logger.warning(
+        "image opacity #{opacity} cannot be applied in a single batchUpdate pass; skipped"
+      )
+    end
+
     reversed = Enum.reverse(media)
 
     reversed
     |> Enum.with_index()
     |> Enum.flat_map(fn {m, i} ->
-      img = insert_inline_image_request(m, w, index)
+      img =
+        if z > 0 do
+          build_positioned_image_request(m, w, index)
+        else
+          insert_inline_image_request(m, w, index)
+        end
 
       if i < length(reversed) - 1 do
         [img, separator_request(sep, index)]
@@ -863,6 +930,28 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         objectSize: %{
           width: %{magnitude: default_width_px * @px_to_pt, unit: "PT"},
           height: %{magnitude: scaled_height_px * @px_to_pt, unit: "PT"}
+        }
+      }
+    }
+  end
+
+  defp build_positioned_image_request(
+         %{uri: uri, width_px: w_px, height_px: h_px},
+         default_width_px,
+         index
+       ) do
+    scaled_height_px = scale_height(default_width_px, w_px, h_px)
+
+    %{
+      createPositionedObject: %{
+        insertionIndex: index,
+        uri: uri,
+        objectSize: %{
+          width: %{magnitude: default_width_px * @px_to_pt, unit: "PT"},
+          height: %{magnitude: scaled_height_px * @px_to_pt, unit: "PT"}
+        },
+        positioning: %{
+          layout: "WRAP_TEXT"
         }
       }
     }
@@ -1394,6 +1483,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       fill = %{
         kind: kind,
         default_width_px: Map.get(params, "width_px", 400),
+        opacity: Map.get(params, "opacity", 1.0),
+        z_index: Map.get(params, "z_index", 0),
         separator: normalize_separator_atom(Map.get(params, "separator", "newline")),
         media: media_items
       }
