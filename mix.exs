@@ -40,7 +40,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       name: "PhoenixKitDocumentCreator",
       source_url: @source_url,
       docs: docs(),
-      compilers: [:phoenix_kit_css_sources]
+      compilers: [:phoenix_kit_css_sources] ++ Mix.compilers()
     ]
   end
 
