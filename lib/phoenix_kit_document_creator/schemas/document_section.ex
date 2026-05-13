@@ -23,8 +23,18 @@ defmodule PhoenixKitDocumentCreator.Schemas.DocumentSection do
   @foreign_key_type UUIDv7
 
   schema "phoenix_kit_doc_document_sections" do
-    field(:document_uuid, UUIDv7)
-    field(:template_uuid, UUIDv7)
+    belongs_to(:document, PhoenixKitDocumentCreator.Schemas.Document,
+      foreign_key: :document_uuid,
+      references: :uuid,
+      type: UUIDv7
+    )
+
+    belongs_to(:template, PhoenixKitDocumentCreator.Schemas.Template,
+      foreign_key: :template_uuid,
+      references: :uuid,
+      type: UUIDv7
+    )
+
     field(:position, :integer)
     field(:variable_values, :map, default: %{})
     field(:image_params, :map, default: %{})
@@ -44,5 +54,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.DocumentSection do
     |> unique_constraint([:document_uuid, :position],
       name: :phoenix_kit_doc_document_sections_doc_position_index
     )
+    |> foreign_key_constraint(:document_uuid)
+    |> foreign_key_constraint(:template_uuid)
   end
 end

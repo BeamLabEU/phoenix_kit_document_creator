@@ -240,7 +240,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplateTest do
     end
   end
 
-  describe "category field (V114)" do
+  describe "category field (V117)" do
     test "accepts a category string" do
       cs = changeset(%{name: "T", category: "invoices"})
       assert cs.valid?
