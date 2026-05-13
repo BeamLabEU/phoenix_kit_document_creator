@@ -1646,6 +1646,30 @@ defmodule PhoenixKitDocumentCreator.Documents do
   # Variables
   # ===========================================================================
 
+  @doc """
+  Returns the image variable slots defined in a template's Google Doc.
+
+  Fetches the current document text via the Google Docs client and extracts
+  all `{{ image: name }}` / `{{ images: name }}` tags, returning a list of
+  `%{name: String.t(), kind: :image | :image_list}` maps sorted by name.
+
+  Returns `{:error, :not_found}` if no template exists for the given UUID.
+  """
+  @spec image_slots_for_template(UUIDv7.t()) ::
+          {:ok, [%{name: String.t(), kind: :image | :image_list}]}
+          | {:error, :not_found | term()}
+  def image_slots_for_template(template_uuid) do
+    case repo().get(Template, template_uuid) do
+      nil ->
+        {:error, :not_found}
+
+      template ->
+        with {:ok, text} <- docs_client().get_document_text(template.google_doc_id) do
+          {:ok, PhoenixKitDocumentCreator.Variable.extract_image_variables(text)}
+        end
+    end
+  end
+
   @doc "Detect `{{ variables }}` in a Google Doc's text content."
   # No activity log entry: this is a cache update (variables are derived
   # from the Doc's text and re-detected every time the modal selects a
