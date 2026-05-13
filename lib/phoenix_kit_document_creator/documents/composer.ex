@@ -84,7 +84,9 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
     templates =
       repo.all(from(t in Template, where: t.uuid in ^Enum.map(sections, & &1.template_uuid)))
 
-    template_summaries = Enum.map(templates, &Map.take(&1, [:uuid, :published]))
+    # Template uses status: "published" | "trashed" | ... — translate to boolean for validate_sections.
+    template_summaries =
+      Enum.map(templates, fn t -> %{uuid: t.uuid, published: t.status == "published"} end)
 
     with :ok <- validate_sections(sections, all_templates: template_summaries) do
       sorted = Enum.sort_by(sections, & &1.position)
@@ -172,24 +174,34 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
     end)
   end
 
-  defp apply_substitutions(gdoc_id, sorted, ranges, client) do
-    Enum.reduce_while(sorted, :ok, fn section, _ ->
-      range = Map.get(ranges, section.position, :full_document)
+  # `replaceAllText` (the Google Docs API primitive) operates on the whole
+  # document — it cannot be scoped to a character range. Per-section looping
+  # with separate calls would cause section-0 values to replace every matching
+  # placeholder across all sections, leaving sections 1..N's values with nothing
+  # to substitute. To avoid that silent bug, we merge all sections' variable_values
+  # into a single map (position order, earlier positions win on key collision) and
+  # issue one substitution pass. Callers are responsible for using unique placeholder
+  # keys across sections; identical keys across sections share a single resolved value.
+  defp apply_substitutions(gdoc_id, sorted, _ranges, client) do
+    merged_variable_values =
+      sorted
+      |> Enum.map(& &1.variable_values)
+      |> Enum.reduce(%{}, fn vals, acc -> Map.merge(acc, vals) end)
 
-      case client.substitute_in_range(
-             gdoc_id,
-             range,
-             section.variable_values,
-             section.image_params,
-             %{}
-           ) do
-        :ok -> {:cont, :ok}
-        {:error, _} = e -> {:halt, e}
-      end
-    end)
-    |> case do
+    merged_image_params =
+      sorted
+      |> Enum.map(& &1.image_params)
+      |> Enum.reduce(%{}, fn params, acc -> Map.merge(acc, params) end)
+
+    case client.substitute_in_range(
+           gdoc_id,
+           :full_document,
+           merged_variable_values,
+           merged_image_params,
+           %{}
+         ) do
       :ok -> {:ok, :substituted}
-      other -> other
+      {:error, _} = err -> err
     end
   end
 
