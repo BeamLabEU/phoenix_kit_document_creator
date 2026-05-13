@@ -1425,14 +1425,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp find_text_var_ranges(_, _), do: []
 
-  # Keep only matches whose start_index falls within [scope_start, scope_end).
-  # :full_document means no filtering.
-  defp filter_to_range(matches, :full_document), do: matches
-
-  defp filter_to_range(matches, {scope_start, scope_end}) do
-    Enum.filter(matches, fn %{start_index: s} -> s >= scope_start and s < scope_end end)
-  end
-
   @doc """
   Delete (trash) a Google Doc. Used for best-effort cleanup after a failed composition.
   Returns `:ok` or `{:error, reason}`.
