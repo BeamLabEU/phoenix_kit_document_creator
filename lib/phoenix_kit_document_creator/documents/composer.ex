@@ -104,6 +104,11 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
     end
   end
 
+  # Dialyzer infers a concrete `%MapSet{map: %{}}` from `Multi.new()`'s
+  # implementation and rejects it against the opaque `MapSet.internal(_)` in
+  # `Multi.run/3`'s typespec — a known Dialyzer + Ecto.Multi opacity friction,
+  # not a runtime issue. The pipeline works correctly at runtime.
+  @dialyzer {:nowarn_function, run_multi: 4}
   defp run_multi(sorted_sections, by_uuid, created_by, name) do
     [first | rest] = sorted_sections
     first_template = by_uuid[first.template_uuid]

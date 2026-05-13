@@ -57,7 +57,11 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     [
       quality: ["format", "credo --strict", "dialyzer"],
       "quality.ci": ["format --check-formatted", "credo --strict", "dialyzer"],
-      precommit: ["compile --force --warnings-as-errors", "deps.unlock --check-unused", "quality.ci"]
+      precommit: [
+        "compile --force --warnings-as-errors",
+        "deps.unlock --check-unused",
+        "quality.ci"
+      ]
     ]
   end
 
