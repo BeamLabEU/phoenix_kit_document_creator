@@ -36,34 +36,34 @@ config :phoenix_kit, PhoenixKit.Users.RateLimiter,
   registration_ip_limit: 10,
   registration_ip_window_ms: 3_600_000
 
-# Configure Oban for PhoenixKit background jobs
-# Required for file processing (storage system), posts, and sitemap
-config :phoenix_kit_document_creator, Oban,
-  repo: PhoenixKitDocumentCreator.Repo,
-  queues: [
-    # General purpose queue
-    default: 10,
-    # File variant generation (storage system)
-    file_processing: 20,
-    # Posts scheduled publishing
-    posts: 10,
-    # Scheduled jobs cron
-    scheduled_jobs: 1,
-    # Sitemap generation
-    sitemap: 5,
-    # Newsletters broadcast deliveries
-    newsletters_delivery: 10
-  ],
-  plugins: [
-    # Pruner: delete completed/discarded jobs after 30 days
-    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 30},
-    {Oban.Plugins.Cron,
-     crontab: [
-       {"* * * * *", PhoenixKit.ScheduledJobs.Workers.ProcessScheduledJobsWorker},
-       {"0 3 * * *", PhoenixKit.Modules.Storage.Workers.PruneTrashJob},
-       {"0 4 * * *", PhoenixKit.Notifications.PruneWorker}
-     ]}
-  ]
+# Configure Oban for PhoenixKit background jobs (dev / prod standalone only).
+# Tests must not start Oban here: `PhoenixKitDocumentCreator.Repo` is not a
+# real module (host apps supply their own repo via their own Oban config),
+# so loading it in :test would crash `Application.start/2` before any test
+# can run. Host apps override the entire `:phoenix_kit_document_creator,
+# Oban` keyword to their own repo, so this block is irrelevant when this
+# library runs as a dependency.
+if config_env() != :test do
+  config :phoenix_kit_document_creator, Oban,
+    repo: PhoenixKitDocumentCreator.Repo,
+    queues: [
+      default: 10,
+      file_processing: 20,
+      posts: 10,
+      scheduled_jobs: 1,
+      sitemap: 5,
+      newsletters_delivery: 10
+    ],
+    plugins: [
+      {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 30},
+      {Oban.Plugins.Cron,
+       crontab: [
+         {"* * * * *", PhoenixKit.ScheduledJobs.Workers.ProcessScheduledJobsWorker},
+         {"0 3 * * *", PhoenixKit.Modules.Storage.Workers.PruneTrashJob},
+         {"0 4 * * *", PhoenixKit.Notifications.PruneWorker}
+       ]}
+    ]
+end
 
 if config_env() == :test do
   import_config "test.exs"
