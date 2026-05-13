@@ -186,12 +186,12 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
     merged_variable_values =
       sorted
       |> Enum.map(& &1.variable_values)
-      |> Enum.reduce(%{}, fn vals, acc -> Map.merge(acc, vals) end)
+      |> Enum.reduce(%{}, fn vals, acc -> Map.merge(vals, acc) end)
 
     merged_image_params =
       sorted
       |> Enum.map(& &1.image_params)
-      |> Enum.reduce(%{}, fn params, acc -> Map.merge(acc, params) end)
+      |> Enum.reduce(%{}, fn params, acc -> Map.merge(params, acc) end)
 
     case client.substitute_in_range(
            gdoc_id,
