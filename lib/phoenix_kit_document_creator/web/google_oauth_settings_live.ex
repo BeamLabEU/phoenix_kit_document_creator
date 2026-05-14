@@ -207,14 +207,6 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       Task.start(fn -> GoogleDocsClient.ensure_folder_path(root_abs) end)
     end
 
-    folder_data_after = Settings.get_json_setting(GoogleDocsClient.folder_settings_key(), %{})
-
-    has_cached_ids =
-      Enum.any?(
-        ~w(templates_folder_id documents_folder_id deleted_templates_folder_id deleted_documents_folder_id),
-        &(is_binary(folder_data_after[&1]) and folder_data_after[&1] != "")
-      )
-
     {:noreply,
      assign(socket,
        root_path: new["folder_path_root"],
@@ -225,7 +217,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
        documents_name: new["folder_name_documents"],
        deleted_path: new["folder_path_deleted"],
        deleted_name: new["folder_name_deleted"],
-       migration_needed: root_changed and has_cached_ids,
+       migration_needed: root_changed,
        success: gettext("Folder settings saved"),
        error: nil
      )}

@@ -317,14 +317,8 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLiveTest do
       assert state.browser_field == "root_path"
     end
 
-    test "migration banner appears when root changes and cached folder IDs exist",
+    test "migration banner appears when root name changes",
          %{conn: conn} do
-      PhoenixKit.Settings.update_json_setting_with_module(
-        "document_creator_folders",
-        %{"templates_folder_id" => "existing-folder-id"},
-        "document_creator"
-      )
-
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/settings/document-creator")
 
@@ -343,12 +337,6 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLiveTest do
     end
 
     test "skip_migration dismisses the banner", %{conn: conn} do
-      PhoenixKit.Settings.update_json_setting_with_module(
-        "document_creator_folders",
-        %{"templates_folder_id" => "existing-folder-id"},
-        "document_creator"
-      )
-
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/settings/document-creator")
 

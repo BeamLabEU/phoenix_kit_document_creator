@@ -519,9 +519,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def folder_settings_key, do: @folder_settings_key
 
   @doc """
-  Move the four known Drive folders (templates, documents, deleted_templates,
-  deleted_documents) into `root_folder_id`. Only moves folders whose cached ID
-  is present. Clears cached IDs on full success so they are re-discovered.
+  Move the top-level Drive folders (templates, documents, deleted) into
+  `root_folder_id`. For each folder the cached ID is tried first; when absent,
+  the folder is located by name in the Drive root. Moving the deleted folder
+  carries its sub-folders along automatically.
+
+  Clears cached folder IDs on full success so they are re-discovered from the
+  new location on next use.
 
   Returns `{:ok, %{moved: [labels], skipped: [labels]}}` or
   `{:error, [{label, reason}]}` if any move fails.
@@ -530,29 +534,43 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           {:ok, %{moved: [String.t()], skipped: [String.t()]}}
           | {:error, [{String.t(), term()}]}
   def migrate_folders_to_root(root_folder_id) do
+    config = get_folder_config()
     folder_data = Settings.get_json_setting(@folder_settings_key, %{})
 
+    resolve_id = fn name, cached_id ->
+      cond do
+        is_binary(cached_id) and cached_id != "" -> {:ok, cached_id}
+        name != "" -> find_folder_by_name(name, parent: "root")
+        true -> {:error, :not_found}
+      end
+    end
+
     candidates = [
-      {"templates", folder_data["templates_folder_id"]},
-      {"documents", folder_data["documents_folder_id"]},
-      {"deleted_templates", folder_data["deleted_templates_folder_id"]},
-      {"deleted_documents", folder_data["deleted_documents_folder_id"]}
+      {"templates", config.templates_name, folder_data["templates_folder_id"]},
+      {"documents", config.documents_name, folder_data["documents_folder_id"]},
+      {"deleted", config.deleted_name, nil}
     ]
 
-    {to_move, skipped} =
-      Enum.split_with(candidates, fn {_label, id} -> is_binary(id) and id != "" end)
-
     results =
-      Enum.map(to_move, fn {label, folder_id} ->
-        case move_file(folder_id, root_folder_id) do
-          :ok -> {:ok, label}
-          {:error, reason} -> {:error, {label, reason}}
+      Enum.map(candidates, fn {label, name, cached_id} ->
+        case resolve_id.(name, cached_id) do
+          {:ok, folder_id} ->
+            case move_file(folder_id, root_folder_id) do
+              :ok -> {:ok, label}
+              {:error, reason} -> {:error, {label, reason}}
+            end
+
+          {:error, :not_found} ->
+            {:skip, label}
+
+          {:error, reason} ->
+            {:error, {label, reason}}
         end
       end)
 
     failures = for {:error, f} <- results, do: f
     moved = for {:ok, label} <- results, do: label
-    skipped_labels = for {label, _} <- skipped, do: label
+    skipped = for {:skip, label} <- results, do: label
 
     if failures == [] do
       cache_keys = ~w(
@@ -561,7 +579,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       )
       updated = Map.drop(folder_data, cache_keys)
       Settings.update_json_setting_with_module(@folder_settings_key, updated, "document_creator")
-      {:ok, %{moved: moved, skipped: skipped_labels}}
+      {:ok, %{moved: moved, skipped: skipped}}
     else
       Logger.error("Document Creator folder migration failed: #{inspect(failures)}")
       {:error, failures}
@@ -1278,9 +1296,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   can be identified for best-effort cleanup on rollback before a final name
   is applied.
   """
-  @spec copy_document(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def copy_document(source_doc_id) do
-    copy_file(source_doc_id, "composed-doc-#{source_doc_id}")
+  @spec copy_document(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def copy_document(source_doc_id, opts \\ []) do
+    copy_opts = case Keyword.get(opts, :destination_folder_id) do
+      nil -> []
+      folder_id -> [parent: folder_id]
+    end
+
+    copy_file(source_doc_id, "composed-doc-#{source_doc_id}", copy_opts)
   end
 
   @doc """
