@@ -94,7 +94,7 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
   defp validate_separator(:page_break), do: :ok
   defp validate_separator(other), do: {:error, {:unsupported_separator, other}}
 
-  defp do_compose(sections, _opts, created_by, name) do
+  defp do_compose(sections, opts, created_by, name) do
     repo = PhoenixKit.RepoHelper.repo()
 
     templates =
@@ -108,7 +108,7 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
       sorted = Enum.sort_by(sections, & &1.position)
       templates_by_uuid = Map.new(templates, &{&1.uuid, &1})
 
-      case run_multi(sorted, templates_by_uuid, created_by, name) do
+      case run_multi(sorted, templates_by_uuid, created_by, name, opts) do
         {:ok, %{document: doc}} -> {:ok, doc}
         {:error, _} = err -> err
       end
@@ -124,14 +124,19 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
   # implementation and rejects it against the opaque `MapSet.internal(_)` in
   # `Multi.run/3`'s typespec — a known Dialyzer + Ecto.Multi opacity friction,
   # not a runtime issue. The pipeline works correctly at runtime.
-  @dialyzer {:nowarn_function, run_multi: 4}
-  defp run_multi(sorted_sections, by_uuid, created_by, name) do
+  @dialyzer {:nowarn_function, run_multi: 5}
+  defp run_multi(sorted_sections, by_uuid, created_by, name, opts) do
     [first | rest] = sorted_sections
     first_template = by_uuid[first.template_uuid]
     client = docs_client()
     repo = PhoenixKit.RepoHelper.repo()
 
-    with {:ok, gdoc_id} <- client.copy_document(first_template.google_doc_id),
+    copy_opts = case Keyword.get(opts, :destination_folder_id) do
+      nil -> []
+      folder_id -> [destination_folder_id: folder_id]
+    end
+
+    with {:ok, gdoc_id} <- client.copy_document(first_template.google_doc_id, copy_opts),
          # Capture section 0's range before any appends — indices shift after each append.
          {:ok, base_range} <- client.document_content_range(gdoc_id),
          {:ok, appended} <- append_sections(gdoc_id, rest, by_uuid, client),
