@@ -80,16 +80,21 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
 
   defp compose_with_opts(sections, opts, created_by, name) do
     # Section separator is configurable per spec; MVP only honours :page_break.
-    # Future values (:none, :blank_line) are accepted at the API surface once
-    # implemented. Anything else raises ArgumentError so callers can't silently
-    # pass an unsupported value.
+    # Future values (:none, :blank_line) will be accepted once implemented.
+    # Anything else returns {:error, {:unsupported_separator, _}} so callers
+    # get one uniform tagged-tuple error surface — raising would crash the
+    # LiveView caller, which is typed {:ok, _} | {:error, _}.
     separator = Keyword.get(opts, :separator, :page_break)
 
-    unless separator == :page_break do
-      raise ArgumentError,
-            "unsupported separator #{inspect(separator)}; MVP supports only :page_break"
+    with :ok <- validate_separator(separator) do
+      do_compose(sections, opts, created_by, name)
     end
+  end
 
+  defp validate_separator(:page_break), do: :ok
+  defp validate_separator(other), do: {:error, {:unsupported_separator, other}}
+
+  defp do_compose(sections, _opts, created_by, name) do
     repo = PhoenixKit.RepoHelper.repo()
 
     templates =
@@ -115,6 +120,11 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
   # inserts (Document row + DocumentSection rows) run inside a short transaction.
   # If the DB inserts fail, we call best_effort_delete on the already-created
   # Google Doc for orphan cleanup.
+  # Dialyzer infers a concrete `%MapSet{map: %{}}` from `Multi.new()`'s
+  # implementation and rejects it against the opaque `MapSet.internal(_)` in
+  # `Multi.run/3`'s typespec — a known Dialyzer + Ecto.Multi opacity friction,
+  # not a runtime issue. The pipeline works correctly at runtime.
+  @dialyzer {:nowarn_function, run_multi: 4}
   defp run_multi(sorted_sections, by_uuid, created_by, name) do
     [first | rest] = sorted_sections
     first_template = by_uuid[first.template_uuid]

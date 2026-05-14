@@ -1,3 +1,42 @@
+## 0.4.0 - 2026-05-13
+
+### Added
+
+- **Document composition.** Build a single Google Doc from N template sections, each with its own variable map and image config. Public API: `Documents.create_composed_document/2`. Sections are persisted as `DocumentSection` rows (`template_uuid`, `position`, `variable_values`, `image_params`) so the recipe survives template edits. Per-section variable substitution is range-scoped — identical `{{name}}` keys in different sections resolve independently (`GoogleDocsClient.substitute_in_range/5`). Whole flow is wrapped in `Ecto.Multi` with best-effort Google Doc cleanup on rollback.
+- **Template presets.** Named, reusable composition recipes scoped via `scope_type` + `scope_id` and optionally categorized. New schema `TemplatePreset` (jsonb `sections` array). API: `Documents.save_preset/1`, `list_presets/1`, `apply_preset/1`, `recipe_for/1`. `apply_preset/1` returns `{:ok, sections} | {:error, :not_found}` and drops sections referencing deleted templates with a warning.
+- **Template category.** New `category` string column on `phoenix_kit_doc_templates` (V117). Admin UI gains a popover category picker on each template card (cards + list views). API: `Documents.update_template_category/3` — emits `template.category_updated` activity row and broadcasts `:files_changed`.
+- **`Documents.image_slots_for_template/1`** — extracts `{{ image: name }}` / `{{ images: name }}` slot names + kinds from a template's Google Doc text via the injectable docs client.
+- **`Documents.update_template_variable_config/3`** — persists per-variable `config` edits (`default_width_px`, `separator`, `max_count`) into `phoenix_kit_doc_templates.variables` jsonb. Coerces empty / non-integer form inputs to skip rather than crash on `String.to_integer/1`. Used by the `VariableConfigForm` inside `CreateDocumentModal` for `:image` and `:image_list` variables (debounced 500ms on `phx-change`).
+- **`ImagePicker` LiveComponent** — generic, parameterised by `(scope_type, scope_id, mode, current_selection, files)`. Server-side pagination (page size 50) and name-substring filter. Host owns file resolution and receives `{:image_picker_changed, picker_id, selection}` messages.
+- **Migration V117** — `category` column on templates, `phoenix_kit_doc_document_sections` (unique on `(document_uuid, position)`), `phoenix_kit_doc_template_presets` tables.
+- **`PhoenixKitDocumentCreator.Application`** — module-application registered via `mix.exs :mod`. Starts conditional Oban supervision when the host app supplies `:phoenix_kit_document_creator, Oban` config; otherwise an empty supervisor. Does **not** start `PhoenixKit.Supervisor` (the host app owns it).
+- **Test scaffolding** — `StubDocsClient` + `StubDocsClientHelpers` for call-order assertions without HTTP traffic; `LiveCase.render_live/2` + `ComponentHostLive` for isolated LiveComponent testing.
+
+### Changed
+
+- **`Composer.compose/2` returns `{:error, {:unsupported_separator, sep}}`** for separators other than `:page_break` (MVP scope), instead of raising `ArgumentError`. Uniform tagged-tuple contract across the module and `Documents.create_composed_document/2`.
+- **`Documents.create_composed_document/2` broadcasts `:files_changed`** on success so connected admin LiveViews resync, matching every other mutation path in the context.
+- **`mix.exs` `:compilers`** — extends `Mix.compilers()` (`[:phoenix_kit_css_sources] ++ Mix.compilers()`) instead of replacing it. Fixes parent apps consuming this library as a path dep — `.beam` files were not being written, so `Documents.create_composed_document/2` etc. appeared undefined.
+
+### Fixed
+
+- **`GoogleDocsClient.insertInlineImage` Unit** — switched from `EMU` to `PT` (1 px = 0.75 pt). The Docs API only accepts `PT` or `UNIT_UNSPECIFIED`; the previous `EMU` made every image-substitution `batchUpdate` 400 with `INVALID_ARGUMENT`, so image-variable substitution never actually inserted anything in real usage.
+- **`DocumentsLive` empty-render crash** — `render_category_picker/1` was called as a plain function in HEEx and tried `assign/3` on a hand-built map, crashing `ArgumentError` on every render. Now matches the convention used by `render_language_picker/1` just above it (calls `category_options()` inline).
+- **`Composer` merge precedence** — earlier section positions now win on key collision (`Map.merge(vals, acc)` rather than the reverse) so a section-0 value isn't overwritten by a section-1 value during multi-section substitution.
+- **`config/config.exs` Oban block** gated on `config_env() != :test` so the library's standalone test suite can boot. Host apps overriding the entire `:phoenix_kit_document_creator, Oban` keyword are unaffected.
+
+### Removed
+
+- **`createPositionedObject` from image inserts.** Research against the Google Docs API reference confirmed `createPositionedObject` is not a valid `batchUpdate` request type — positioned objects can only be created interactively in the editor UI. The path was never reachable from any caller (default `z_index` is 0) so production traffic was unaffected. `z_index > 0` and `opacity != 1.0` now log a warning and fall back to `insertInlineImage`.
+
+### Known limitations (deferred to follow-ups)
+
+- `image_params.opacity` and `image_params.z_index` are stored on `DocumentSection` and accepted by `ImagePicker`'s config, but currently no-op at render time — the Google Docs API has no surface for image opacity, and positioned objects can't be created via `batchUpdate`. Stored for future activation if/when the API gains support.
+- `TemplatePreset.sections` is an unschema'd `{:array, :map}` — typos in section descriptor keys are silent at save time and surface as "dropped section" warnings at `apply_preset/1` time. An embedded schema would tighten this.
+- Orphan-doc sweeper (`TODO(orphan-doc-sweeper)` in `composer.ex`) not yet implemented — when a `Multi` rolls back after `:google_doc` succeeds, the best-effort `delete_document/1` only logs on failure; no periodic reconciliation yet.
+- Standalone dev/prod Oban config in `config/config.exs` still references a non-existent `PhoenixKitDocumentCreator.Repo`. Harmless when this library runs as a dependency (host overrides), but should be either repaired or removed.
+- The PubSub topic `"document_creator:files"` is not tenant-scoped. Fine for single-tenant hosts; a multi-tenant host should scope by tenant id.
+
 ## 0.3.0 - 2026-05-11
 
 ### Added
