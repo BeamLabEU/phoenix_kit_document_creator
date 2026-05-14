@@ -1087,6 +1087,25 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  @doc "Rename a file in Google Drive."
+  @spec rename_file(String.t(), String.t()) ::
+          :ok | {:error, :invalid_file_id | :rename_failed | term()}
+  def rename_file(file_id, new_name) do
+    with {:ok, fid} <- validate_file_id(file_id) do
+      case authenticated_request(:patch, "#{@drive_base}/files/#{fid}", json: %{name: new_name}) do
+        {:ok, %{status: status}} when status in 200..299 ->
+          :ok
+
+        {:ok, %{body: body}} ->
+          log_drive_error("rename failed", body)
+          {:error, :rename_failed}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
   @doc "Copy a file in Google Drive. Returns the new file's ID."
   @spec copy_file(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | {:error, :invalid_file_id | :copy_failed | term()}

@@ -310,10 +310,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
   describe "resolved_folder_paths/1" do
     test "no root: paths are unchanged" do
       config = %{
-        root_path: "", root_name: "",
-        templates_path: "", templates_name: "templates",
-        documents_path: "clients", documents_name: "docs",
-        deleted_path: "", deleted_name: "deleted"
+        root_path: "",
+        root_name: "",
+        templates_path: "",
+        templates_name: "templates",
+        documents_path: "clients",
+        documents_name: "docs",
+        deleted_path: "",
+        deleted_name: "deleted"
       }
 
       {t, d, del} = GoogleDocsClient.resolved_folder_paths(config)
@@ -325,10 +329,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
 
     test "root set: all paths prefixed with root" do
       config = %{
-        root_path: "", root_name: "my-project",
-        templates_path: "", templates_name: "šabloonid",
-        documents_path: "", documents_name: "dokumendid",
-        deleted_path: "", deleted_name: "kustutatud"
+        root_path: "",
+        root_name: "my-project",
+        templates_path: "",
+        templates_name: "šabloonid",
+        documents_path: "",
+        documents_name: "dokumendid",
+        deleted_path: "",
+        deleted_name: "kustutatud"
       }
 
       {t, d, del} = GoogleDocsClient.resolved_folder_paths(config)
@@ -340,10 +348,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTest do
 
     test "root with path: root path prefixes root name" do
       config = %{
-        root_path: "workspace", root_name: "project",
-        templates_path: "", templates_name: "templates",
-        documents_path: "", documents_name: "documents",
-        deleted_path: "", deleted_name: "deleted"
+        root_path: "workspace",
+        root_name: "project",
+        templates_path: "",
+        templates_name: "templates",
+        documents_path: "",
+        documents_name: "documents",
+        deleted_path: "",
+        deleted_name: "deleted"
       }
 
       {t, d, del} = GoogleDocsClient.resolved_folder_paths(config)

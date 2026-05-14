@@ -153,14 +153,14 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     folder_data = Settings.get_json_setting(GoogleDocsClient.folder_settings_key(), %{})
 
     new = %{
-      "folder_path_root"      => String.trim(params["root_path"] || ""),
-      "folder_name_root"      => String.trim(params["root_name"] || ""),
+      "folder_path_root" => String.trim(params["root_path"] || ""),
+      "folder_name_root" => String.trim(params["root_name"] || ""),
       "folder_path_templates" => String.trim(params["templates_path"] || ""),
       "folder_name_templates" => String.trim(params["templates_name"] || ""),
       "folder_path_documents" => String.trim(params["documents_path"] || ""),
       "folder_name_documents" => String.trim(params["documents_name"] || ""),
-      "folder_path_deleted"   => String.trim(params["deleted_path"] || ""),
-      "folder_name_deleted"   => String.trim(params["deleted_name"] || "")
+      "folder_path_deleted" => String.trim(params["deleted_path"] || ""),
+      "folder_name_deleted" => String.trim(params["deleted_name"] || "")
     }
 
     old_keys = Map.take(folder_data, Map.keys(new))
