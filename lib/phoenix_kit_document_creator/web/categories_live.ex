@@ -12,7 +12,6 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
   require Logger
 
   alias PhoenixKit.Utils.Routes
-  alias PhoenixKitDocumentCreator.Paths
   alias PhoenixKitDocumentCreator.Taxonomy
   alias PhoenixKitDocumentCreator.Web.Helpers
 
