@@ -1003,7 +1003,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         uri: uri,
         objectSize: %{
           width: %{magnitude: (default_width_px || 400) * @px_to_pt, unit: "PT"},
-          height: %{magnitude: (scaled_height_px || default_width_px || 400) * @px_to_pt, unit: "PT"}
+          height: %{
+            magnitude: (scaled_height_px || default_width_px || 400) * @px_to_pt,
+            unit: "PT"
+          }
         }
       }
     }
@@ -1298,10 +1301,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   """
   @spec copy_document(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def copy_document(source_doc_id, opts \\ []) do
-    copy_opts = case Keyword.get(opts, :destination_folder_id) do
-      nil -> []
-      folder_id -> [parent: folder_id]
-    end
+    copy_opts =
+      case Keyword.get(opts, :destination_folder_id) do
+        nil -> []
+        folder_id -> [parent: folder_id]
+      end
 
     copy_file(source_doc_id, "composed-doc-#{source_doc_id}", copy_opts)
   end

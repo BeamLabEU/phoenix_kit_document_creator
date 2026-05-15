@@ -131,10 +131,11 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
     client = docs_client()
     repo = PhoenixKit.RepoHelper.repo()
 
-    copy_opts = case Keyword.get(opts, :destination_folder_id) do
-      nil -> []
-      folder_id -> [destination_folder_id: folder_id]
-    end
+    copy_opts =
+      case Keyword.get(opts, :destination_folder_id) do
+        nil -> []
+        folder_id -> [destination_folder_id: folder_id]
+      end
 
     with {:ok, gdoc_id} <- client.copy_document(first_template.google_doc_id, copy_opts),
          # Capture section 0's range before any appends — indices shift after each append.
