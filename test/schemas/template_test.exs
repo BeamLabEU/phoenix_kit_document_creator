@@ -240,9 +240,31 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplateTest do
     end
   end
 
-  # The legacy `category` string field was removed in V120 (replaced with
-  # `category_uuid` / `type_uuid` FK fields). Tests for the removed field
-  # are intentionally omitted.
+  describe "taxonomy fields (V120)" do
+    test "accepts a category_uuid (nullable FK)" do
+      uuid = Ecto.UUID.generate()
+      cs = changeset(%{name: "T", category_uuid: uuid})
+      assert cs.valid?
+      assert cs.changes.category_uuid == uuid
+    end
+
+    test "accepts nil category_uuid" do
+      cs = changeset(%{name: "T", category_uuid: nil})
+      assert cs.valid?
+    end
+
+    test "category_uuid is optional — changeset valid without it" do
+      cs = changeset(%{name: "T"})
+      assert cs.valid?
+    end
+
+    test "accepts a type_uuid (nullable FK)" do
+      uuid = Ecto.UUID.generate()
+      cs = changeset(%{name: "T", type_uuid: uuid})
+      assert cs.valid?
+      assert cs.changes.type_uuid == uuid
+    end
+  end
 
   describe "language_changeset/2" do
     # Focused changeset used by both the create-time language stamp
