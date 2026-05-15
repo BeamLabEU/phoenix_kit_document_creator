@@ -27,7 +27,6 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplatePreset do
   schema "phoenix_kit_doc_template_presets" do
     field(:name, :string)
     field(:description, :string)
-    field(:category, :string)
     field(:scope_type, :string)
     field(:scope_id, :string)
     field(:sections, {:array, :map}, default: [])
@@ -37,7 +36,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplatePreset do
   end
 
   @required_fields [:name, :created_by_uuid]
-  @optional_fields [:description, :category, :scope_type, :scope_id, :sections]
+  @optional_fields [:description, :scope_type, :scope_id, :sections]
 
   def changeset(preset, attrs) do
     preset
