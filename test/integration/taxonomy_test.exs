@@ -443,18 +443,21 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
     end
 
     describe "category_options/0" do
-      test "returns [{name, uuid}] for active categories" do
+      test "returns [{name, uuid}] for active categories with leading empty option" do
         cat = create_category!(%{name: "Finance"})
         {:ok, deleted} = Taxonomy.create_category(%{name: "Deleted", status: "deleted"})
 
         opts = Taxonomy.category_options()
+
+        # Empty option always first.
+        assert List.first(opts) == {"No category", nil}
         assert Enum.any?(opts, fn {name, uuid} -> name == "Finance" and uuid == cat.uuid end)
         refute Enum.any?(opts, fn {_name, uuid} -> uuid == deleted.uuid end)
       end
     end
 
     describe "type_options/1" do
-      test "returns [{name, uuid}] for active types of a category" do
+      test "returns [{name, uuid}] for active types of a category with leading empty option" do
         cat = create_category!()
         t1 = create_type!(cat.uuid, %{name: "Invoice"})
 
@@ -462,8 +465,15 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
           Taxonomy.create_type(%{name: "Del", category_uuid: cat.uuid, status: "deleted"})
 
         opts = Taxonomy.type_options(cat.uuid)
+
+        # Empty option always first.
+        assert List.first(opts) == {"No type", nil}
         assert Enum.any?(opts, fn {name, uuid} -> name == "Invoice" and uuid == t1.uuid end)
         refute Enum.any?(opts, fn {_name, uuid} -> uuid == del_t.uuid end)
+      end
+
+      test "type_options(nil) returns only the empty option" do
+        assert Taxonomy.type_options(nil) == [{"No type", nil}]
       end
     end
 

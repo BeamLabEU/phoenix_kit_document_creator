@@ -251,8 +251,9 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
      `status → "published"` (only those, to avoid restoring manually
      trashed templates)
 
-  Falls back to restoring templates reachable via `category_uuid` /
-  type `type_uuid` when no activity log payload is found.
+  When `PhoenixKit.Activity` is not loaded (or no matching activity entry
+  exists), cascade-trashed templates are not restored — they must be
+  restored manually.
   """
   @spec restore_category(Category.t(), keyword()) :: {:ok, Category.t()} | {:error, term()}
   def restore_category(%Category{} = category, opts \\ []) do
@@ -687,25 +688,36 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   end
 
   @doc """
-  Returns `[{name, uuid}]` for all active categories, ordered by position.
+  Returns `[{label, value}]` for all active categories, ordered by position,
+  preceded by a `{"No category", nil}` empty option.
+
+  Suitable for `options_for_select/2`. The empty option lets users clear the
+  FK (which is nullable).
 
   Drop-in replacement for the hard-coded `category_options/0` in
   `documents_live.ex`.
   """
-  @spec category_options() :: [{String.t(), Ecto.UUID.t()}]
+  @spec category_options() :: [{String.t(), Ecto.UUID.t() | nil}]
   def category_options do
-    list_categories()
-    |> Enum.map(fn c -> {c.name, c.uuid} end)
+    entries = list_categories() |> Enum.map(fn c -> {c.name, c.uuid} end)
+    [{"No category", nil} | entries]
   end
 
   @doc """
-  Returns `[{name, uuid}]` for all active types within a category, ordered
-  by position.
+  Returns `[{label, value}]` for all active types within a category, ordered
+  by position, preceded by a `{"No type", nil}` empty option.
+
+  Pass `nil` as `category_uuid` (or when no category is selected) to get
+  only the empty option.
+
+  Suitable for `options_for_select/2`.
   """
-  @spec type_options(Ecto.UUID.t()) :: [{String.t(), Ecto.UUID.t()}]
+  @spec type_options(Ecto.UUID.t() | nil) :: [{String.t(), Ecto.UUID.t() | nil}]
+  def type_options(nil), do: [{"No type", nil}]
+
   def type_options(category_uuid) when is_binary(category_uuid) do
-    list_types_for_category(category_uuid)
-    |> Enum.map(fn t -> {t.name, t.uuid} end)
+    entries = list_types_for_category(category_uuid) |> Enum.map(fn t -> {t.name, t.uuid} end)
+    [{"No type", nil} | entries]
   end
 
   # ---------------------------------------------------------------------------
