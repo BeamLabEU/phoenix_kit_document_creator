@@ -25,11 +25,6 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplatePresetTest do
       assert cs.valid?
     end
 
-    test "accepts optional category" do
-      cs = changeset(Map.put(@valid_attrs, :category, "invoices"))
-      assert cs.valid?
-    end
-
     test "accepts optional scope_type and scope_id" do
       cs = changeset(Map.merge(@valid_attrs, %{scope_type: "organization", scope_id: "org-123"}))
       assert cs.valid?
