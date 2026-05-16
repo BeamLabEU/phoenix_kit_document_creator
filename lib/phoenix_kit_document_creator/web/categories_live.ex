@@ -46,12 +46,12 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
   @impl true
   def handle_event("select_category", %{"uuid" => uuid}, socket) do
-    category = Taxonomy.get_category!(uuid)
-
-    {:noreply,
-     socket
-     |> assign(selected: category, types_trash: false)
-     |> reload_types()}
+    with_category(socket, uuid, fn category ->
+      {:noreply,
+       socket
+       |> assign(selected: category, types_trash: false)
+       |> reload_types()}
+    end)
   end
 
   def handle_event("toggle_categories_trash", _params, socket) do
@@ -73,57 +73,56 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
   end
 
   def handle_event("trash_category", %{"uuid" => uuid}, socket) do
-    category = Taxonomy.get_category!(uuid)
+    with_category(socket, uuid, fn category ->
+      case Taxonomy.trash_category(category, Helpers.actor_opts(socket)) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(
+             :info,
+             gettext("Category trashed. Its types and templates have also been moved to trash.")
+           )
+           |> assign(selected: nil, types: [])
+           |> reload_categories()}
 
-    case Taxonomy.trash_category(category, Helpers.actor_opts(socket)) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(
-           :info,
-           gettext("Category trashed. Its types and templates have also been moved to trash.")
-         )
-         |> assign(selected: nil, types: [])
-         |> reload_categories()}
-
-      {:error, reason} ->
-        Logger.error("trash_category failed: #{inspect(reason)}")
-
-        {:noreply, put_flash(socket, :error, gettext("Could not trash category."))}
-    end
+        {:error, reason} ->
+          Logger.error("trash_category failed: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, gettext("Could not trash category."))}
+      end
+    end)
   end
 
   def handle_event("restore_category", %{"uuid" => uuid}, socket) do
-    category = Taxonomy.get_category!(uuid)
+    with_category(socket, uuid, fn category ->
+      case Taxonomy.restore_category(category, Helpers.actor_opts(socket)) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Category restored."))
+           |> reload_categories()}
 
-    case Taxonomy.restore_category(category, Helpers.actor_opts(socket)) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Category restored."))
-         |> reload_categories()}
-
-      {:error, reason} ->
-        Logger.error("restore_category failed: #{inspect(reason)}")
-        {:noreply, put_flash(socket, :error, gettext("Could not restore category."))}
-    end
+        {:error, reason} ->
+          Logger.error("restore_category failed: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, gettext("Could not restore category."))}
+      end
+    end)
   end
 
   def handle_event("delete_category_forever", %{"uuid" => uuid}, socket) do
-    category = Taxonomy.get_category!(uuid)
+    with_category(socket, uuid, fn category ->
+      case Taxonomy.permanently_delete_category(category, Helpers.actor_opts(socket)) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Category permanently deleted."))
+           |> assign(selected: nil, types: [])
+           |> reload_categories()}
 
-    case Taxonomy.permanently_delete_category(category, Helpers.actor_opts(socket)) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Category permanently deleted."))
-         |> assign(selected: nil, types: [])
-         |> reload_categories()}
-
-      {:error, reason} ->
-        Logger.error("permanently_delete_category failed: #{inspect(reason)}")
-        {:noreply, put_flash(socket, :error, gettext("Could not delete category."))}
-    end
+        {:error, reason} ->
+          Logger.error("permanently_delete_category failed: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, gettext("Could not delete category."))}
+      end
+    end)
   end
 
   def handle_event("reorder_categories", %{"ordered_ids" => uuids}, socket)
@@ -144,54 +143,54 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
   # ── Type events ────────────────────────────────────────────────────────────
 
   def handle_event("trash_type", %{"uuid" => uuid}, socket) do
-    type = Taxonomy.get_type!(uuid)
+    with_type(socket, uuid, fn type ->
+      case Taxonomy.trash_type(type, Helpers.actor_opts(socket)) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(
+             :info,
+             gettext("Type trashed. Its templates have also been moved to trash.")
+           )
+           |> reload_types()}
 
-    case Taxonomy.trash_type(type, Helpers.actor_opts(socket)) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(
-           :info,
-           gettext("Type trashed. Its templates have also been moved to trash.")
-         )
-         |> reload_types()}
-
-      {:error, reason} ->
-        Logger.error("trash_type failed: #{inspect(reason)}")
-        {:noreply, put_flash(socket, :error, gettext("Could not trash type."))}
-    end
+        {:error, reason} ->
+          Logger.error("trash_type failed: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, gettext("Could not trash type."))}
+      end
+    end)
   end
 
   def handle_event("restore_type", %{"uuid" => uuid}, socket) do
-    type = Taxonomy.get_type!(uuid)
+    with_type(socket, uuid, fn type ->
+      case Taxonomy.restore_type(type, Helpers.actor_opts(socket)) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Type restored."))
+           |> reload_types()}
 
-    case Taxonomy.restore_type(type, Helpers.actor_opts(socket)) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Type restored."))
-         |> reload_types()}
-
-      {:error, reason} ->
-        Logger.error("restore_type failed: #{inspect(reason)}")
-        {:noreply, put_flash(socket, :error, gettext("Could not restore type."))}
-    end
+        {:error, reason} ->
+          Logger.error("restore_type failed: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, gettext("Could not restore type."))}
+      end
+    end)
   end
 
   def handle_event("delete_type_forever", %{"uuid" => uuid}, socket) do
-    type = Taxonomy.get_type!(uuid)
+    with_type(socket, uuid, fn type ->
+      case Taxonomy.permanently_delete_type(type, Helpers.actor_opts(socket)) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, gettext("Type permanently deleted."))
+           |> reload_types()}
 
-    case Taxonomy.permanently_delete_type(type, Helpers.actor_opts(socket)) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, gettext("Type permanently deleted."))
-         |> reload_types()}
-
-      {:error, reason} ->
-        Logger.error("permanently_delete_type failed: #{inspect(reason)}")
-        {:noreply, put_flash(socket, :error, gettext("Could not delete type."))}
-    end
+        {:error, reason} ->
+          Logger.error("permanently_delete_type failed: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, gettext("Could not delete type."))}
+      end
+    end)
   end
 
   def handle_event("reorder_types", %{"ordered_ids" => uuids}, socket)
@@ -460,6 +459,35 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
   end
 
   # ── Private helpers ────────────────────────────────────────────────────────
+
+  # Looks the category up by uuid and runs `fun` with it. If the row is gone
+  # (e.g. another admin deleted it between render and click), flashes a notice
+  # and reloads instead of letting a bang getter crash the LiveView.
+  defp with_category(socket, uuid, fun) do
+    case Taxonomy.get_category(uuid) do
+      nil ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("That category no longer exists."))
+         |> reload_categories()}
+
+      category ->
+        fun.(category)
+    end
+  end
+
+  defp with_type(socket, uuid, fun) do
+    case Taxonomy.get_type(uuid) do
+      nil ->
+        {:noreply,
+         socket
+         |> put_flash(:error, gettext("That type no longer exists."))
+         |> reload_types()}
+
+      type ->
+        fun.(type)
+    end
+  end
 
   defp reload_categories(socket) do
     opts = if socket.assigns.categories_trash, do: [status: "deleted"], else: []
