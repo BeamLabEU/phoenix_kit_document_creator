@@ -29,10 +29,6 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
 
   @impl true
   def update(assigns, socket) do
-    # `assign_new(:current_selection, ...)` AFTER `assign(assigns)` ensures that
-    # a host re-render which omits `:current_selection` does not clobber the
-    # component's internally-managed selection. Hosts that want to control
-    # selection externally MUST echo it back on every render (see moduledoc).
     socket =
       socket
       |> assign(assigns)
@@ -72,14 +68,32 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
   end
 
   def handle_event("pick", %{"uuid" => uuid}, socket) do
+    sel = socket.assigns.current_selection
+
     new =
       case socket.assigns.mode do
-        :single -> [uuid]
-        :list -> Enum.uniq(socket.assigns.current_selection ++ [uuid])
+        :single ->
+          if sel == [uuid], do: [], else: [uuid]
+
+        :list ->
+          if uuid in sel,
+            do: Enum.reject(sel, &(&1 == uuid)),
+            else: Enum.uniq(sel ++ [uuid])
       end
 
     notify(socket, new)
     {:noreply, assign(socket, current_selection: new)}
+  end
+
+  def handle_event("remove", %{"uuid" => uuid}, socket) do
+    new = Enum.reject(socket.assigns.current_selection, &(&1 == uuid))
+    notify(socket, new)
+    {:noreply, assign(socket, current_selection: new)}
+  end
+
+  def handle_event("clear", _params, socket) do
+    notify(socket, [])
+    {:noreply, assign(socket, current_selection: [])}
   end
 
   defp notify(%{assigns: %{picker_id: picker_id}}, sel) do
@@ -87,36 +101,124 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
     :ok
   end
 
+  defp file_name(files, uuid) do
+    case Enum.find(files, &(&1.uuid == uuid)) do
+      nil -> uuid
+      f -> f.name
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
-    <div id={@id} class="space-y-2">
-      <.form for={%{}} as={:filter} id="image-picker-filter" phx-change="filter" phx-target={@myself}>
-        <input name="filter[q]" value={@filter} placeholder="Search by name" class="input input-bordered w-full" />
+    <div id={@id} class="space-y-3">
+      <%!-- Selected chips --%>
+      <%= if @current_selection != [] do %>
+        <div class="flex flex-wrap gap-1.5 p-2 bg-base-200 rounded-lg">
+          <div
+            :for={uuid <- @current_selection}
+            class="badge badge-primary gap-1 max-w-[200px]"
+          >
+            <span class="truncate text-xs" title={file_name(@files, uuid)}>
+              {file_name(@files, uuid)}
+            </span>
+            <button
+              type="button"
+              phx-click="remove"
+              phx-value-uuid={uuid}
+              phx-target={@myself}
+              class="hover:opacity-70 flex-shrink-0 ml-0.5"
+              title="Убрать"
+            >
+              &times;
+            </button>
+          </div>
+          <button
+            :if={@mode == :single}
+            type="button"
+            phx-click="clear"
+            phx-target={@myself}
+            class="badge badge-ghost text-xs"
+          >
+            Сбросить
+          </button>
+        </div>
+      <% end %>
+
+      <%!-- Filter --%>
+      <.form
+        for={%{}}
+        as={:filter}
+        id={"image-picker-filter-#{@id}"}
+        phx-change="filter"
+        phx-target={@myself}
+      >
+        <input
+          name="filter[q]"
+          value={@filter}
+          placeholder="Поиск по имени"
+          class="input input-sm input-bordered w-full"
+        />
       </.form>
 
-      <div class="grid grid-cols-4 gap-2">
-        <button
-          :for={f <- @visible}
-          type="button"
-          data-pick={f.uuid}
-          phx-click="pick"
-          phx-value-uuid={f.uuid}
-          phx-target={@myself}
-          class={["btn btn-ghost p-1", f.uuid in @current_selection && "ring ring-primary"]}
-        >
-          <img src={f.url} alt={f.name} class="h-20 object-contain" />
-          <span class="text-xs truncate">{f.name}</span>
-        </button>
-      </div>
+      <%!-- Image grid --%>
+      <%= if @visible == [] do %>
+        <div class="text-sm text-base-content/50 text-center py-4">Файлы не найдены</div>
+      <% else %>
+        <div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
+          <button
+            :for={f <- @visible}
+            type="button"
+            phx-click="pick"
+            phx-value-uuid={f.uuid}
+            phx-target={@myself}
+            title={f.name}
+            class={[
+              "relative flex flex-col items-center gap-1 p-2 rounded-lg border-2 transition-colors",
+              "hover:bg-base-200 focus:outline-none",
+              if(f.uuid in @current_selection,
+                do: "border-primary bg-primary/10",
+                else: "border-base-300 bg-base-100"
+              )
+            ]}
+          >
+            <span
+              :if={f.uuid in @current_selection}
+              class="absolute top-1 right-1 w-4 h-4 bg-primary text-primary-content rounded-full text-[10px] flex items-center justify-center font-bold leading-none"
+            >
+              ✓
+            </span>
+            <img src={f.url} alt={f.name} class="w-full h-16 object-contain" />
+            <span class="text-[11px] text-center leading-tight w-full line-clamp-2 break-words">
+              {f.name}
+            </span>
+          </button>
+        </div>
+      <% end %>
 
-      <div class="flex justify-between">
-        <button type="button" data-action="prev-page" phx-click="prev-page" phx-target={@myself} class="btn btn-sm">
-          ‹
+      <%!-- Pagination --%>
+      <div class="flex items-center justify-between">
+        <button
+          type="button"
+          phx-click="prev-page"
+          phx-target={@myself}
+          class="btn btn-xs btn-ghost"
+          disabled={@page == 0}
+        >
+          &lsaquo; Назад
         </button>
-        <span>{@page + 1} / {max(1, div(@filtered_count - 1, @page_size) + 1)}</span>
-        <button type="button" data-action="next-page" phx-click="next-page" phx-target={@myself} class="btn btn-sm">
-          ›
+        <span class="text-xs text-base-content/60">
+          {@page + 1} / {max(1, div(@filtered_count - 1, @page_size) + 1)}
+          &nbsp;({@filtered_count} файл.)
+        </span>
+        <button
+          type="button"
+          phx-click="next-page"
+          phx-target={@myself}
+          class="btn btn-xs btn-ghost"
+          disabled={@page + 1 >= max(1, div(@filtered_count - 1, @page_size) + 1)}
+        >
+          Вперёд &rsaquo;
         </button>
       </div>
     </div>

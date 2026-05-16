@@ -61,10 +61,10 @@ defmodule PhoenixKitDocumentCreatorTest do
   end
 
   describe "admin_tabs/0" do
-    test "returns 3 tabs (parent + documents + templates)" do
+    test "returns 4 tabs (parent + documents + templates + categories)" do
       tabs = PhoenixKitDocumentCreator.admin_tabs()
       assert is_list(tabs)
-      assert length(tabs) == 3
+      assert length(tabs) == 4
     end
 
     test "parent tab has correct fields" do

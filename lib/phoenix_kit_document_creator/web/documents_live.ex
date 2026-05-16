@@ -15,6 +15,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
+  alias PhoenixKitDocumentCreator.Taxonomy
   alias PhoenixKitDocumentCreator.Web.Helpers
   alias PhoenixKitWeb.Helpers.MediaSelectorHelper
 
@@ -391,17 +392,38 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
-  def handle_event("set_template_category", %{"id" => file_id} = params, socket) do
-    category =
-      case Map.get(params, "category", "") do
-        "" -> nil
-        value -> value
+  def handle_event(
+        "set_taxonomy_category",
+        %{"google_doc_id" => gid, "kind" => kind} = params,
+        socket
+      ) do
+    category_uuid = blank_to_nil(params["value"])
+    taxonomy = %{category_uuid: category_uuid, type_uuid: nil}
+
+    result =
+      case kind do
+        "template" -> Documents.update_template_taxonomy(gid, taxonomy)
+        "document" -> Documents.update_document_taxonomy(gid, taxonomy)
       end
 
-    case verify_known_file(socket, file_id) do
-      :ok -> do_set_template_category(socket, file_id, category)
-      _ -> {:noreply, socket}
-    end
+    {:noreply, apply_taxonomy_result(socket, result, :category)}
+  end
+
+  def handle_event(
+        "set_taxonomy_type",
+        %{"google_doc_id" => gid, "kind" => kind} = params,
+        socket
+      ) do
+    type_uuid = blank_to_nil(params["value"])
+    taxonomy = %{type_uuid: type_uuid}
+
+    result =
+      case kind do
+        "template" -> Documents.update_template_taxonomy(gid, taxonomy)
+        "document" -> Documents.update_document_taxonomy(gid, taxonomy)
+      end
+
+    {:noreply, apply_taxonomy_result(socket, result, :type)}
   end
 
   def handle_event("new_blank_document", _params, socket) do
@@ -481,18 +503,35 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         %{assigns: %{modal_selected_template: %{"id" => template_file_id}}} = socket
       )
       when is_map(vars_params) do
-    Enum.each(vars_params, fn {var_name, %{"config" => config_params}} ->
-      Documents.update_template_variable_config(template_file_id, var_name, config_params)
-    end)
+    result =
+      Enum.reduce_while(vars_params, :ok, fn {var_name, %{"config" => config_params}}, :ok ->
+        case Documents.update_template_variable_config(template_file_id, var_name, config_params) do
+          {:ok, _} -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
 
-    variables =
-      template_file_id
-      |> Documents.get_template_variables_from_db()
-      |> Enum.map(&Map.from_struct/1)
+    case result do
+      :ok ->
+        variables =
+          template_file_id
+          |> Documents.get_template_variables_from_db()
+          |> Enum.map(&Map.from_struct/1)
 
-    broadcast_files_changed()
+        broadcast_files_changed()
 
-    {:noreply, assign(socket, modal_variables: variables)}
+        {:noreply, assign(socket, modal_variables: variables)}
+
+      {:error, reason} ->
+        Logger.warning("update_variable_config failed: #{inspect(reason)}")
+
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           gettext("Failed to save variable configuration. Please try again.")
+         )}
+    end
   end
 
   # Fallback when modal_selected_template isn't a map with "id" (defensive)
@@ -1123,6 +1162,33 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── File grid ──────────────────────────────────────────────────
 
   defp assign_files(assigns, files) do
+    cats = Taxonomy.list_categories()
+    cat_names = Map.new(cats, &{&1.uuid, &1.name})
+
+    # category_options/0 includes the leading {nil, "No category"} entry;
+    # drop the nil entry here so the template only loops over real options.
+    cat_options =
+      cats
+      |> Enum.map(&{&1.uuid, &1.name})
+
+    # types_by_category: %{category_uuid => [{type_uuid, type_name}, ...]}
+    # Built once per grid render; each picker row reads from this map instead
+    # of issuing its own query.
+    types_by_category =
+      Map.new(cats, fn cat ->
+        options =
+          cat.uuid
+          |> Taxonomy.list_types_for_category()
+          |> Enum.map(&{&1.uuid, &1.name})
+
+        {cat.uuid, options}
+      end)
+
+    type_names =
+      types_by_category
+      |> Enum.flat_map(fn {_cat_uuid, opts} -> opts end)
+      |> Map.new()
+
     %{
       files: files,
       view_mode: assigns.view_mode,
@@ -1130,7 +1196,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       pending_files: assigns.pending_files,
       thumbnails: assigns.thumbnails,
       is_template: assigns.live_action == :templates,
-      enabled_languages: assigns.enabled_languages
+      enabled_languages: assigns.enabled_languages,
+      category_names: cat_names,
+      cat_options: cat_options,
+      types_by_category: types_by_category,
+      type_names: type_names
     }
   end
 
@@ -1217,7 +1287,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               {render_category_picker(%{
                 file: file,
                 is_template: @is_template,
-                status_mode: @status_mode
+                status_mode: @status_mode,
+                category_names: @category_names,
+                cat_options: @cat_options,
+                types_by_category: @types_by_category,
+                type_names: @type_names
               })}
             </div>
             <p :if={file["modifiedTime"]} class="text-xs text-base-content/40 mt-auto pt-2">
@@ -1312,7 +1386,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   {render_category_picker(%{
                     file: file,
                     is_template: @is_template,
-                    status_mode: @status_mode
+                    status_mode: @status_mode,
+                    category_names: @category_names,
+                    cat_options: @cat_options,
+                    types_by_category: @types_by_category,
+                    type_names: @type_names
                   })}
                 </div>
               </td>
@@ -1480,52 +1558,68 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     """
   end
 
-  defp category_options do
-    [
-      {"", gettext("No category")},
-      {"financial", gettext("Financial")},
-      {"technical", gettext("Technical")}
-    ]
-  end
-
   defp render_category_picker(assigns) do
+    # Resolve display names from the precomputed lookup maps (no DB call per row).
+    assigns =
+      Map.merge(assigns, %{
+        cat_name: assigns.category_names[assigns.file["category_uuid"]],
+        type_name: assigns.type_names[assigns.file["type_uuid"]],
+        # Types for the currently selected category (nil → empty list).
+        type_options: Map.get(assigns.types_by_category, assigns.file["category_uuid"], [])
+      })
+
     ~H"""
-    <div :if={@is_template and @status_mode != "trashed"} class="relative inline-flex">
-      <button
-        type="button"
-        popovertarget={"cat-pop-" <> @file["id"]}
-        style={"anchor-name: --cat-trigger-#{@file["id"]}"}
-        class={"badge badge-xs cursor-pointer #{if @file["category"], do: "badge-secondary", else: "badge-outline border-dashed"}"}
-        title={gettext("Template category")}
-      >
-        <span :if={@file["category"]}>{@file["category"]}</span>
-        <span :if={!@file["category"]}>{gettext("Set category")}</span>
-        <span class="hero-chevron-down w-2.5 h-2.5" />
-      </button>
-      <div
-        id={"cat-pop-" <> @file["id"]}
-        popover="auto"
-        style={
-          "position-anchor: --cat-trigger-#{@file["id"]}; " <>
-          "position-area: bottom span-right; " <>
-          "margin: 4px 0 0 0; inset: auto;"
-        }
-        class="bg-base-100 rounded-box w-48 p-1 shadow-lg border border-base-300 [&:not(:popover-open)]:hidden"
-      >
-        <%= for {value, label} <- category_options() do %>
-          <button
-            type="button"
-            popovertarget={"cat-pop-" <> @file["id"]}
-            popovertargetaction="hide"
-            phx-click="set_template_category"
-            phx-value-id={@file["id"]}
-            phx-value-category={value}
-            class={"w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm hover:bg-base-200 #{if @file["category"] == value or (value == "" and is_nil(@file["category"])), do: "bg-primary/10 text-primary", else: ""}"}
-          >
-            {label}
-          </button>
-        <% end %>
-      </div>
+    <div class="flex items-center gap-1">
+      <%= if @status_mode == "trashed" do %>
+        <%!-- In trash view: read-only name badges --%>
+        <span
+          :if={@cat_name}
+          class="badge badge-xs badge-secondary"
+          title={gettext("Category")}
+        >
+          {@cat_name}
+        </span>
+        <span
+          :if={@type_name}
+          class="badge badge-xs badge-outline"
+          title={gettext("Type")}
+        >
+          {@type_name}
+        </span>
+      <% else %>
+        <%!--
+          Active view: interactive selects sourced from precomputed options.
+          Each <select> is wrapped in its own <form> — phx-change is a form
+          binding, so a bare <select> outside a form does not serialize its
+          value (only the phx-value-* attrs would arrive).
+        --%>
+        <form
+          phx-change="set_taxonomy_category"
+          phx-value-google_doc_id={@file["id"]}
+          phx-value-kind={if @is_template, do: "template", else: "document"}
+        >
+          <select name="value" class="select select-bordered select-xs" title={gettext("Category")}>
+            <option value="">{gettext("No category")}</option>
+            <%= for {uuid, name} <- @cat_options do %>
+              <option value={uuid} selected={@file["category_uuid"] == uuid}>{name}</option>
+            <% end %>
+          </select>
+        </form>
+        <%!-- Type select — only shown when a category is chosen --%>
+        <form
+          :if={@file["category_uuid"]}
+          phx-change="set_taxonomy_type"
+          phx-value-google_doc_id={@file["id"]}
+          phx-value-kind={if @is_template, do: "template", else: "document"}
+        >
+          <select name="value" class="select select-bordered select-xs" title={gettext("Type")}>
+            <option value="">{gettext("No type")}</option>
+            <%= for {uuid, name} <- @type_options do %>
+              <option value={uuid} selected={@file["type_uuid"] == uuid}>{name}</option>
+            <% end %>
+          </select>
+        </form>
+      <% end %>
     </div>
     """
   end
@@ -1586,24 +1680,40 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end)
   end
 
-  defp do_set_template_category(socket, file_id, category) do
-    result = Documents.update_template_category(file_id, category, actor_opts(socket))
-    apply_category_update(socket, file_id, result)
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(v), do: v
+
+  defp apply_taxonomy_result(socket, {:ok, file_map}, _field) do
+    patch_file_in_assigns(socket, file_map)
   end
 
-  defp apply_category_update(socket, file_id, {:ok, updated}) do
-    templates = patch_template_category(socket.assigns.templates, file_id, updated.category)
-    {:noreply, assign(socket, templates: templates)}
+  defp apply_taxonomy_result(socket, {:error, _reason}, :category) do
+    assign(socket, error: gettext("Could not update category"))
   end
 
-  defp apply_category_update(socket, file_id, {:error, reason}) do
-    Logger.error("Failed to set template category for #{file_id}: #{inspect(reason)}")
-    {:noreply, assign(socket, error: gettext("Failed to update template category."))}
+  defp apply_taxonomy_result(socket, {:error, _reason}, :type) do
+    assign(socket, error: gettext("Could not update type"))
   end
 
-  defp patch_template_category(templates, file_id, new_category) do
-    Enum.map(templates, fn t ->
-      if t["id"] == file_id, do: Map.put(t, "category", new_category), else: t
+  defp patch_file_in_assigns(socket, %{"id" => file_id} = file_map) do
+    assigns = socket.assigns
+
+    templates = patch_file_list(assigns.templates, file_id, file_map)
+    documents = patch_file_list(assigns.documents, file_id, file_map)
+    trashed_templates = patch_file_list(assigns.trashed_templates, file_id, file_map)
+    trashed_documents = patch_file_list(assigns.trashed_documents, file_id, file_map)
+
+    assign(socket,
+      templates: templates,
+      documents: documents,
+      trashed_templates: trashed_templates,
+      trashed_documents: trashed_documents
+    )
+  end
+
+  defp patch_file_list(files, file_id, replacement) do
+    Enum.map(files, fn f ->
+      if f["id"] == file_id, do: Map.merge(f, replacement), else: f
     end)
   end
 

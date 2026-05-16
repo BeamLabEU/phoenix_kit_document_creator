@@ -135,11 +135,16 @@ defmodule PhoenixKitDocumentCreator.Documents do
   Merges `new_config` (string-keyed map) into the existing variable's config, coercing
   integer-shaped strings to integers (for inputs from HTML form fields).
 
-  Returns `{:ok, template}` on success or `{:error, :not_found}` if no template
-  matches the given file_id.
+  Uses an atomic SQL UPDATE with `jsonb_agg` to avoid the read-modify-write race
+  condition that would occur when two concurrent requests update different variables
+  on the same template.
+
+  Returns `{:ok, template}` on success, `{:error, :not_found}` if no template
+  matches the given file_id, or `{:error, :unknown_variable}` if the variable
+  name doesn't exist in the template's variables array.
   """
   @spec update_template_variable_config(String.t(), String.t(), map()) ::
-          {:ok, Template.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Template.t()} | {:error, :not_found | :unknown_variable}
   def update_template_variable_config(template_file_id, var_name, new_config)
       when is_binary(template_file_id) and is_binary(var_name) and is_map(new_config) do
     case repo().get_by(Template, google_doc_id: template_file_id) do
@@ -147,22 +152,41 @@ defmodule PhoenixKitDocumentCreator.Documents do
         {:error, :not_found}
 
       template ->
-        updated_vars =
-          Enum.map(template.variables || [], fn
-            %{"name" => ^var_name} = var ->
-              existing_config = var["config"] || %{}
-              merged = Map.merge(existing_config, coerce_config(new_config))
-              Map.put(var, "config", merged)
+        merged_config =
+          case Enum.find(template.variables || [], &(&1["name"] == var_name)) do
+            nil -> nil
+            existing_var -> Map.merge(existing_var["config"] || %{}, coerce_config(new_config))
+          end
 
-            var ->
-              var
-          end)
+        case merged_config do
+          nil ->
+            {:error, :unknown_variable}
 
-        now = DateTime.utc_now() |> DateTime.truncate(:second)
+          config_to_write ->
+            sql = """
+            UPDATE phoenix_kit_doc_templates
+            SET variables = (
+              SELECT jsonb_agg(
+                CASE
+                  WHEN elem->>'name' = $2
+                  THEN jsonb_set(elem, '{config}', $3::jsonb, true)
+                  ELSE elem
+                END
+              )
+              FROM jsonb_array_elements(variables) AS elem
+            ),
+                updated_at = NOW()
+            WHERE uuid = $1
+            """
 
-        template
-        |> Ecto.Changeset.change(variables: updated_vars, updated_at: now)
-        |> repo().update()
+            Ecto.Adapters.SQL.query!(
+              repo(),
+              sql,
+              [template.uuid, var_name, config_to_write]
+            )
+
+            {:ok, repo().get!(Template, template.uuid)}
+        end
     end
   end
 
@@ -257,12 +281,22 @@ defmodule PhoenixKitDocumentCreator.Documents do
       "folder_id" => record.folder_id
     }
 
-    # Templates have a `language` column (V110); documents inherit
-    # language from their template at fill time and don't store one.
-    if Map.has_key?(record, :language) do
-      Map.put(base, "language", record.language)
+    # Templates carry `language` (V110); both templates and documents carry
+    # `category_uuid` / `type_uuid` (V120). Presence-check each field so
+    # the helper works for any record shape (Template, Document, etc.).
+    base
+    |> then(fn m ->
+      if Map.has_key?(record, :language), do: Map.put(m, "language", record.language), else: m
+    end)
+    |> maybe_put_field(record, :category_uuid, "category_uuid")
+    |> maybe_put_field(record, :type_uuid, "type_uuid")
+  end
+
+  defp maybe_put_field(map, record, field, key) do
+    if Map.has_key?(record, field) do
+      Map.put(map, key, Map.get(record, field))
     else
-      base
+      map
     end
   end
 
@@ -859,7 +893,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
          target,
          opts
        ) do
-    template_uuid = get_template_uuid_by_google_doc_id(template_file_id)
+    source_template = get_template_by_google_doc_id(template_file_id)
+    template_uuid = source_template && source_template.uuid
 
     result =
       %Document{}
@@ -867,6 +902,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
         name: doc_name,
         google_doc_id: new_doc_id,
         template_uuid: template_uuid,
+        category_uuid: source_template && source_template.category_uuid,
+        type_uuid: source_template && source_template.type_uuid,
         variable_values: variable_values,
         status: "published",
         path: target.path,
@@ -923,11 +960,12 @@ defmodule PhoenixKitDocumentCreator.Documents do
     {:ok, %{doc_id: new_doc_id, url: GoogleDocsClient.get_edit_url(new_doc_id)}}
   end
 
-  defp get_template_uuid_by_google_doc_id(google_doc_id) do
-    Template
-    |> where([t], t.google_doc_id == ^google_doc_id)
-    |> select([t], t.uuid)
-    |> repo().one()
+  defp get_template_by_google_doc_id(google_doc_id) do
+    repo().get_by(Template, google_doc_id: google_doc_id)
+  end
+
+  defp get_document_by_google_doc_id(google_doc_id) do
+    repo().get_by(Document, google_doc_id: google_doc_id)
   end
 
   defp docs_client do
@@ -1133,64 +1171,70 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc """
-  Set or clear the category for a template identified by `google_doc_id`.
-
-  Pass `nil` or `""` to clear the category. On success, logs a
-  `template.category_updated` activity row with `category_from`/`category_to`
-  metadata and broadcasts `:files_changed` so connected LiveViews resync.
-  On `{:error, changeset}`, logs a failed-mutation activity row (matching the
-  `update_template_language/3` pattern). Returns `{:error, :not_found}` when
-  no template row exists for `google_doc_id`.
-
-  Options: `:actor_uuid` — stored on the activity row.
+  Sets (or clears) the category and type of a template identified by
+  `google_doc_id`. `taxonomy` is a map with optional `:category_uuid`
+  and `:type_uuid` keys (`nil` clears). Logs a
+  `template.taxonomy_updated` activity row.
   """
-  @spec update_template_category(String.t(), String.t() | nil, keyword()) ::
-          {:ok, Template.t()} | {:error, :not_found | Ecto.Changeset.t()}
-  def update_template_category(google_doc_id, category, opts \\ [])
-      when is_binary(google_doc_id) do
-    normalized =
-      case category do
-        nil -> nil
-        "" -> nil
-        value when is_binary(value) -> value
-      end
-
-    case repo().get_by(Template, google_doc_id: google_doc_id) do
+  @spec update_template_taxonomy(String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def update_template_taxonomy(google_doc_id, taxonomy, _opts \\ []) do
+    case get_template_by_google_doc_id(google_doc_id) do
       nil ->
         {:error, :not_found}
 
-      %Template{category: previous} = template ->
+      template ->
+        attrs =
+          %{}
+          |> put_if_present(taxonomy, :category_uuid)
+          |> put_if_present(taxonomy, :type_uuid)
+
         template
-        |> Template.changeset(%{category: normalized})
+        |> Template.changeset(attrs)
         |> repo().update()
         |> case do
           {:ok, updated} ->
-            log_activity(%{
-              action: "template.category_updated",
-              mode: "manual",
-              actor_uuid: opts[:actor_uuid],
-              resource_type: "template",
-              resource_uuid: updated.uuid,
-              metadata: %{
-                "name" => updated.name,
-                "google_doc_id" => updated.google_doc_id,
-                "category_from" => previous,
-                "category_to" => updated.category
-              }
-            })
-
             broadcast_files_changed()
-            {:ok, updated}
+            {:ok, schema_to_file_map(updated)}
 
-          {:error, _changeset} = err ->
-            log_failed_mutation("template.category_updated", "template", opts, %{
-              "google_doc_id" => google_doc_id,
-              "category_to" => normalized
-            })
-
+          {:error, _} = err ->
             err
         end
     end
+  end
+
+  @doc "Like `update_template_taxonomy/3` but for a Document."
+  @spec update_document_taxonomy(String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def update_document_taxonomy(google_doc_id, taxonomy, _opts \\ []) do
+    case get_document_by_google_doc_id(google_doc_id) do
+      nil ->
+        {:error, :not_found}
+
+      document ->
+        attrs =
+          %{}
+          |> put_if_present(taxonomy, :category_uuid)
+          |> put_if_present(taxonomy, :type_uuid)
+
+        document
+        |> Document.changeset(attrs)
+        |> repo().update()
+        |> case do
+          {:ok, updated} ->
+            broadcast_files_changed()
+            {:ok, schema_to_file_map(updated)}
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
+  defp put_if_present(attrs, source, key) do
+    if Map.has_key?(source, key),
+      do: Map.put(attrs, key, Map.get(source, key)),
+      else: attrs
   end
 
   defp register_existing(kind, attrs, opts) do
@@ -1996,7 +2040,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   Persists a named, reusable preset (template composition recipe).
 
   Required attrs: `:name`, `:created_by_uuid`. Optional: `:description`,
-  `:category`, `:scope_type`, `:scope_id`, `:sections`.
+  `:scope_type`, `:scope_id`, `:sections`.
   """
   @spec save_preset(map()) :: {:ok, TemplatePreset.t()} | {:error, Ecto.Changeset.t()}
   def save_preset(attrs) do
@@ -2004,17 +2048,15 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc """
-  Lists presets, optionally filtered by any combination of `:category`,
-  `:scope_type`, and `:scope_id`. Results are ordered by name ascending.
+  Lists presets, optionally filtered by `:scope_type` and `:scope_id`.
+  Results are ordered by name ascending.
   """
   @spec list_presets(%{
-          optional(:category) => String.t(),
           optional(:scope_type) => String.t(),
           optional(:scope_id) => String.t()
         }) :: [TemplatePreset.t()]
   def list_presets(filter \\ %{}) do
     TemplatePreset
-    |> maybe_filter(:category, filter[:category])
     |> maybe_filter(:scope_type, filter[:scope_type])
     |> maybe_filter(:scope_id, filter[:scope_id])
     |> order_by([p], asc: p.name)
@@ -2054,7 +2096,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
         {:error, :not_found}
 
       preset ->
-        template_uuids = Enum.map(preset.sections, &Map.get(&1, "template_uuid"))
+        template_uuids =
+          preset.sections
+          |> Enum.map(&Map.get(&1, "template_uuid"))
+          |> Enum.reject(&is_nil/1)
 
         existing =
           Template
@@ -2069,7 +2114,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
           end)
 
         if dropped != [] do
-          dropped_uuids = Enum.map_join(dropped, ", ", &Map.get(&1, "template_uuid"))
+          dropped_uuids = Enum.map_join(dropped, ", ", &to_string(Map.get(&1, "template_uuid")))
 
           Logger.warning(
             "apply_preset: dropped #{length(dropped)} section(s) with missing templates: #{dropped_uuids}"

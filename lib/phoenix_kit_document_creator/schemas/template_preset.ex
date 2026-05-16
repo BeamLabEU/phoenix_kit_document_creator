@@ -7,7 +7,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplatePreset do
   document to produce a multi-section composition in one step.
 
   Presets are optionally scoped via `scope_type` + `scope_id` (e.g.
-  `"organization"` + org uuid) and optionally categorized for UI grouping.
+  `"organization"` + org uuid).
 
   The `sections` field is a JSONB array where each element is a map
   describing one section (keys: `template_uuid`, `position`,
@@ -27,7 +27,6 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplatePreset do
   schema "phoenix_kit_doc_template_presets" do
     field(:name, :string)
     field(:description, :string)
-    field(:category, :string)
     field(:scope_type, :string)
     field(:scope_id, :string)
     field(:sections, {:array, :map}, default: [])
@@ -37,7 +36,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplatePreset do
   end
 
   @required_fields [:name, :created_by_uuid]
-  @optional_fields [:description, :category, :scope_type, :scope_id, :sections]
+  @optional_fields [:description, :scope_type, :scope_id, :sections]
 
   def changeset(preset, attrs) do
     preset

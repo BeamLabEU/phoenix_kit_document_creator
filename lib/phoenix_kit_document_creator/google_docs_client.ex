@@ -365,6 +365,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     creds = Settings.get_json_setting(@folder_settings_key, %{})
 
     %{
+      root_path: creds["folder_path_root"] || "",
+      root_name: non_empty(creds["folder_name_root"], ""),
       templates_path: creds["folder_path_templates"] || "",
       templates_name: non_empty(creds["folder_name_templates"], "templates"),
       documents_path: creds["folder_path_documents"] || "",
@@ -399,6 +401,27 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp build_full_path("", name), do: name
   defp build_full_path(path, name), do: "#{path}/#{name}"
 
+  @doc "Compute the three Drive paths (templates, documents, deleted) given a folder config map."
+  @spec resolved_folder_paths(map()) :: {String.t(), String.t(), String.t()}
+  def resolved_folder_paths(config) do
+    root_abs =
+      if config.root_name != "" do
+        build_full_path(config.root_path, config.root_name)
+      else
+        nil
+      end
+
+    prefix = fn path ->
+      if root_abs, do: "#{root_abs}/#{path}", else: path
+    end
+
+    templates = prefix.(build_full_path(config.templates_path, config.templates_name))
+    documents = prefix.(build_full_path(config.documents_path, config.documents_name))
+    deleted = prefix.(build_full_path(config.deleted_path, config.deleted_name))
+
+    {templates, documents, deleted}
+  end
+
   @doc """
   Discover templates, documents, and deleted folder IDs.
   Looks for folders by name in Drive root, creating them if they don't exist.
@@ -413,9 +436,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def discover_folders do
     config = get_folder_config()
 
-    templates_path = build_full_path(config.templates_path, config.templates_name)
-    documents_path = build_full_path(config.documents_path, config.documents_name)
-    deleted_path = build_full_path(config.deleted_path, config.deleted_name)
+    {templates_path, documents_path, deleted_path} = resolved_folder_paths(config)
 
     # Resolve all four folder paths in parallel to minimize sequential API calls.
     #
@@ -496,6 +517,74 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @doc "The Settings key used for folder configuration."
   @spec folder_settings_key() :: String.t()
   def folder_settings_key, do: @folder_settings_key
+
+  @doc """
+  Move the top-level Drive folders (templates, documents, deleted) into
+  `root_folder_id`. For each folder the cached ID is tried first; when absent,
+  the folder is located by name in the Drive root. Moving the deleted folder
+  carries its sub-folders along automatically.
+
+  Clears cached folder IDs on full success so they are re-discovered from the
+  new location on next use.
+
+  Returns `{:ok, %{moved: [labels], skipped: [labels]}}` or
+  `{:error, [{label, reason}]}` if any move fails.
+  """
+  @spec migrate_folders_to_root(String.t()) ::
+          {:ok, %{moved: [String.t()], skipped: [String.t()]}}
+          | {:error, [{String.t(), term()}]}
+  def migrate_folders_to_root(root_folder_id) do
+    config = get_folder_config()
+    folder_data = Settings.get_json_setting(@folder_settings_key, %{})
+
+    resolve_id = fn name, cached_id ->
+      cond do
+        is_binary(cached_id) and cached_id != "" -> {:ok, cached_id}
+        name != "" -> find_folder_by_name(name, parent: "root")
+        true -> {:error, :not_found}
+      end
+    end
+
+    candidates = [
+      {"templates", config.templates_name, folder_data["templates_folder_id"]},
+      {"documents", config.documents_name, folder_data["documents_folder_id"]},
+      {"deleted", config.deleted_name, nil}
+    ]
+
+    results =
+      Enum.map(candidates, fn {label, name, cached_id} ->
+        case resolve_id.(name, cached_id) do
+          {:ok, folder_id} ->
+            case move_file(folder_id, root_folder_id) do
+              :ok -> {:ok, label}
+              {:error, reason} -> {:error, {label, reason}}
+            end
+
+          {:error, :not_found} ->
+            {:skip, label}
+
+          {:error, reason} ->
+            {:error, {label, reason}}
+        end
+      end)
+
+    failures = for {:error, f} <- results, do: f
+    moved = for {:ok, label} <- results, do: label
+    skipped = for {:skip, label} <- results, do: label
+
+    if failures == [] do
+      cache_keys = ~w(
+        templates_folder_id documents_folder_id
+        deleted_templates_folder_id deleted_documents_folder_id
+      )
+      updated = Map.drop(folder_data, cache_keys)
+      Settings.update_json_setting_with_module(@folder_settings_key, updated, "document_creator")
+      {:ok, %{moved: moved, skipped: skipped}}
+    else
+      Logger.error("Document Creator folder migration failed: #{inspect(failures)}")
+      {:error, failures}
+    end
+  end
 
   @doc """
   List subfolders within a parent folder (non-recursive, fully paginated).
@@ -844,7 +933,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def build_single_image_request(uri, opts) do
     index = Keyword.fetch!(opts, :insertion_index)
     config = Keyword.fetch!(opts, :config)
-    w = Map.get(config, :default_width_px, 400)
+    w = Map.get(config, :default_width_px) || 400
     media = %{uri: uri, width_px: nil, height_px: nil}
     image_request(media, w, index, config, uri)
   end
@@ -880,8 +969,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # options are accepted in `config` for forward-compat and ignored with a
   # warning when set away from the defaults.
   defp image_request(media, width, index, config, log_ctx) do
-    z = Map.get(config, :z_index, 0)
-    opacity = Map.get(config, :opacity, 1.0)
+    z = Map.get(config, :z_index) || 0
+    opacity = Map.get(config, :opacity) || 1.0
 
     if z > 0 do
       Logger.warning(
@@ -913,8 +1002,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         location: %{index: index},
         uri: uri,
         objectSize: %{
-          width: %{magnitude: default_width_px * @px_to_pt, unit: "PT"},
-          height: %{magnitude: scaled_height_px * @px_to_pt, unit: "PT"}
+          width: %{magnitude: (default_width_px || 400) * @px_to_pt, unit: "PT"},
+          height: %{
+            magnitude: (scaled_height_px || default_width_px || 400) * @px_to_pt,
+            unit: "PT"
+          }
         }
       }
     }
@@ -1013,6 +1105,25 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
       {:error, _} = err ->
         err
+    end
+  end
+
+  @doc "Rename a file in Google Drive."
+  @spec rename_file(String.t(), String.t()) ::
+          :ok | {:error, :invalid_file_id | :rename_failed | term()}
+  def rename_file(file_id, new_name) do
+    with {:ok, fid} <- validate_file_id(file_id) do
+      case authenticated_request(:patch, "#{@drive_base}/files/#{fid}", json: %{name: new_name}) do
+        {:ok, %{status: status}} when status in 200..299 ->
+          :ok
+
+        {:ok, %{body: body}} ->
+          log_drive_error("rename failed", body)
+          {:error, :rename_failed}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -1188,9 +1299,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   can be identified for best-effort cleanup on rollback before a final name
   is applied.
   """
-  @spec copy_document(String.t()) :: {:ok, String.t()} | {:error, term()}
-  def copy_document(source_doc_id) do
-    copy_file(source_doc_id, "composed-doc-#{source_doc_id}")
+  @spec copy_document(String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def copy_document(source_doc_id, opts \\ []) do
+    copy_opts =
+      case Keyword.get(opts, :destination_folder_id) do
+        nil -> []
+        folder_id -> [parent: folder_id]
+      end
+
+    copy_file(source_doc_id, "composed-doc-#{source_doc_id}", copy_opts)
   end
 
   @doc """
@@ -1364,7 +1481,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     |> Enum.filter(&match?(%{"textRun" => _, "startIndex" => _}, &1))
   end
 
-  @text_var_regex ~r/\{\{\s*(\w+)\s*\}\}/
+  @text_var_regex ~r/\{\{\s*([\p{L}\p{N}_]+)\s*\}\}/u
 
   # Find {{key}} occurrences in a textRun element for the given key names.
   # Returns %{key, start_index, end_index} with UTF-16 index arithmetic.
@@ -1437,10 +1554,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
       fill = %{
         kind: kind,
-        default_width_px: Map.get(params, "width_px", 400),
-        opacity: Map.get(params, "opacity", 1.0),
-        z_index: Map.get(params, "z_index", 0),
-        separator: normalize_separator_atom(Map.get(params, "separator", "newline")),
+        default_width_px: Map.get(params, "width_px") || 400,
+        opacity: Map.get(params, "opacity") || 1.0,
+        z_index: Map.get(params, "z_index") || 0,
+        separator: normalize_separator_atom(Map.get(params, "separator") || "newline"),
         media: media_items
       }
 

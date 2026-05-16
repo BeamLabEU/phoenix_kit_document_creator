@@ -240,21 +240,29 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplateTest do
     end
   end
 
-  describe "category field (V117)" do
-    test "accepts a category string" do
-      cs = changeset(%{name: "T", category: "invoices"})
+  describe "taxonomy fields (V120)" do
+    test "accepts a category_uuid (nullable FK)" do
+      uuid = Ecto.UUID.generate()
+      cs = changeset(%{name: "T", category_uuid: uuid})
       assert cs.valid?
-      assert cs.changes.category == "invoices"
+      assert cs.changes.category_uuid == uuid
     end
 
-    test "accepts nil category (nullable)" do
-      cs = changeset(%{name: "T", category: nil})
+    test "accepts nil category_uuid" do
+      cs = changeset(%{name: "T", category_uuid: nil})
       assert cs.valid?
     end
 
-    test "category is optional — changeset valid without it" do
+    test "category_uuid is optional — changeset valid without it" do
       cs = changeset(%{name: "T"})
       assert cs.valid?
+    end
+
+    test "accepts a type_uuid (nullable FK)" do
+      uuid = Ecto.UUID.generate()
+      cs = changeset(%{name: "T", type_uuid: uuid})
+      assert cs.valid?
+      assert cs.changes.type_uuid == uuid
     end
   end
 

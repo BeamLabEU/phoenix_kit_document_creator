@@ -65,9 +65,20 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
   # Required opts: `:created_by_uuid :: UUIDv7.t()`, `:name :: String.t()` (caller-supplied
   # document name; ANDI derives from order/sub-order context). Optional: `:separator`.
   def compose(sections, opts) do
-    created_by = Keyword.fetch!(opts, :created_by_uuid)
-    name = Keyword.fetch!(opts, :name)
+    with {:ok, created_by} <- fetch_opt(opts, :created_by_uuid),
+         {:ok, name} <- fetch_opt(opts, :name) do
+      compose_with_opts(sections, opts, created_by, name)
+    end
+  end
 
+  defp fetch_opt(opts, key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, _} = ok -> ok
+      :error -> {:error, {:missing_opt, key}}
+    end
+  end
+
+  defp compose_with_opts(sections, opts, created_by, name) do
     # Section separator is configurable per spec; MVP only honours :page_break.
     # Future values (:none, :blank_line) will be accepted once implemented.
     # Anything else returns {:error, {:unsupported_separator, _}} so callers
@@ -83,7 +94,7 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
   defp validate_separator(:page_break), do: :ok
   defp validate_separator(other), do: {:error, {:unsupported_separator, other}}
 
-  defp do_compose(sections, _opts, created_by, name) do
+  defp do_compose(sections, opts, created_by, name) do
     repo = PhoenixKit.RepoHelper.repo()
 
     templates =
@@ -97,41 +108,60 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
       sorted = Enum.sort_by(sections, & &1.position)
       templates_by_uuid = Map.new(templates, &{&1.uuid, &1})
 
-      case run_multi(sorted, templates_by_uuid, created_by, name) do
+      case run_multi(sorted, templates_by_uuid, created_by, name, opts) do
         {:ok, %{document: doc}} -> {:ok, doc}
         {:error, _} = err -> err
       end
     end
   end
 
+  # Google Docs HTTP work runs OUTSIDE the transaction so we don't hold a
+  # Postgres connection open across multiple network round-trips. Only the two
+  # inserts (Document row + DocumentSection rows) run inside a short transaction.
+  # If the DB inserts fail, we call best_effort_delete on the already-created
+  # Google Doc for orphan cleanup.
   # Dialyzer infers a concrete `%MapSet{map: %{}}` from `Multi.new()`'s
   # implementation and rejects it against the opaque `MapSet.internal(_)` in
   # `Multi.run/3`'s typespec — a known Dialyzer + Ecto.Multi opacity friction,
   # not a runtime issue. The pipeline works correctly at runtime.
-  @dialyzer {:nowarn_function, run_multi: 4}
-  defp run_multi(sorted_sections, by_uuid, created_by, name) do
+  @dialyzer {:nowarn_function, run_multi: 5}
+  defp run_multi(sorted_sections, by_uuid, created_by, name, opts) do
     [first | rest] = sorted_sections
     first_template = by_uuid[first.template_uuid]
     client = docs_client()
     repo = PhoenixKit.RepoHelper.repo()
 
+    copy_opts =
+      case Keyword.get(opts, :destination_folder_id) do
+        nil -> []
+        folder_id -> [destination_folder_id: folder_id]
+      end
+
+    with {:ok, gdoc_id} <- client.copy_document(first_template.google_doc_id, copy_opts),
+         # Capture section 0's range before any appends — indices shift after each append.
+         {:ok, base_range} <- client.document_content_range(gdoc_id),
+         {:ok, appended} <- append_sections(gdoc_id, rest, by_uuid, client),
+         ranges = Map.put(appended, first.position, base_range),
+         {:ok, _} <- apply_substitutions(gdoc_id, sorted_sections, ranges, client) do
+      insert_result =
+        insert_document_and_sections(gdoc_id, sorted_sections, created_by, name, repo)
+
+      case insert_result do
+        {:ok, doc} ->
+          {:ok, %{document: doc}}
+
+        {:error, reason} ->
+          best_effort_delete(gdoc_id, client)
+          {:error, reason}
+      end
+    else
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp insert_document_and_sections(gdoc_id, sorted_sections, created_by, name, repo) do
     Multi.new()
-    |> Multi.run(:google_doc, fn _, _ ->
-      client.copy_document(first_template.google_doc_id)
-    end)
-    |> Multi.run(:base_range, fn _, %{google_doc: gdoc_id} ->
-      # Capture section 0's range before any appends — indices shift after each append.
-      client.document_content_range(gdoc_id)
-    end)
-    |> Multi.run(:appended, fn _, %{google_doc: gdoc_id} ->
-      append_sections(gdoc_id, rest, by_uuid, client)
-    end)
-    |> Multi.run(:substituted, fn _,
-                                  %{google_doc: gdoc_id, base_range: base, appended: appended} ->
-      ranges = Map.put(appended, first.position, base)
-      apply_substitutions(gdoc_id, sorted_sections, ranges, client)
-    end)
-    |> Multi.insert(:document, fn %{google_doc: gdoc_id} ->
+    |> Multi.insert(:document, fn _ ->
       Document.changeset(%Document{}, %{
         name: name,
         google_doc_id: gdoc_id,
@@ -158,22 +188,13 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
           }
         end)
 
-      {count, _} = repo.insert_all(DocumentSection, rows)
-      {:ok, count}
+      {_count, _} = repo.insert_all(DocumentSection, rows)
+      {:ok, :inserted}
     end)
     |> repo.transaction()
     |> case do
-      {:ok, _} = ok ->
-        ok
-
-      # Don't reorder Multi steps without revisiting this cleanup match —
-      # :google_doc must remain the first step for the rollback guard to work.
-      {:error, _step, reason, %{google_doc: gdoc_id}} ->
-        best_effort_delete(gdoc_id, client)
-        {:error, reason}
-
-      {:error, _step, reason, _} ->
-        {:error, reason}
+      {:ok, %{document: doc}} -> {:ok, doc}
+      {:error, _step, reason, _} -> {:error, reason}
     end
   end
 

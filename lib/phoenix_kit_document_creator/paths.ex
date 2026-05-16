@@ -16,6 +16,9 @@ defmodule PhoenixKitDocumentCreator.Paths do
   @spec documents() :: String.t()
   def documents, do: Routes.path("#{@base}/documents")
 
+  @spec categories() :: String.t()
+  def categories, do: Routes.path("#{@base}/categories")
+
   @spec settings() :: String.t()
   def settings, do: Routes.path("/admin/settings/document-creator")
 end

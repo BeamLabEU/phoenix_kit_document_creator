@@ -98,6 +98,9 @@ defmodule PhoenixKitDocumentCreator do
   def css_sources, do: [:phoenix_kit_document_creator]
 
   @impl PhoenixKit.Module
+  def route_module, do: PhoenixKitDocumentCreator.Web.Routes
+
+  @impl PhoenixKit.Module
   def required_integrations, do: ["google"]
 
   @impl PhoenixKit.Module
@@ -172,6 +175,20 @@ defmodule PhoenixKitDocumentCreator do
         parent: :admin_document_creator,
         match: :prefix,
         live_view: {PhoenixKitDocumentCreator.Web.DocumentsLive, :templates},
+        gettext_backend: PhoenixKitDocumentCreator.Gettext,
+        gettext_domain: "default"
+      },
+      %Tab{
+        id: :admin_document_creator_categories,
+        label: "Categories",
+        icon: "hero-folder",
+        path: "document-creator/categories",
+        priority: 647,
+        level: :admin,
+        permission: module_key(),
+        parent: :admin_document_creator,
+        match: :prefix,
+        live_view: {PhoenixKitDocumentCreator.Web.CategoriesLive, :index},
         gettext_backend: PhoenixKitDocumentCreator.Gettext,
         gettext_domain: "default"
       }

@@ -31,6 +31,20 @@ defmodule PhoenixKitDocumentCreator.Test.Router do
       on_mount: {PhoenixKitDocumentCreator.Test.Hooks, :assign_scope} do
       live("/", DocumentsLive, :documents)
       live("/templates", DocumentsLive, :templates)
+      live("/categories", CategoriesLive, :index)
+      live("/categories/new", CategoryFormLive, :new)
+      live("/categories/:uuid/edit", CategoryFormLive, :edit)
+      live("/categories/:category_uuid/types/new", TypeFormLive, :new)
+    end
+  end
+
+  scope "/en/admin/document-creator", PhoenixKitDocumentCreator.Web do
+    pipe_through(:browser)
+
+    live_session :doc_creator_types_test,
+      layout: {PhoenixKitDocumentCreator.Test.Layouts, :app},
+      on_mount: {PhoenixKitDocumentCreator.Test.Hooks, :assign_scope} do
+      live("/types/:uuid/edit", TypeFormLive, :edit)
     end
   end
 
