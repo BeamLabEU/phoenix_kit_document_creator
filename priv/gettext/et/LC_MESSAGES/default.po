@@ -188,40 +188,40 @@ msgstr "Dokumendi nimi"
 msgid "Cancel"
 msgstr "Tühista"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1287
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1401
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1310
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1426
 #, elixir-autogen
 msgid "View"
 msgstr "Vaata"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:329
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:364
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1295
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1410
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:369
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:404
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1318
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1435
 #, elixir-autogen
 msgid "Edit"
 msgstr "Muuda"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1305
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1328
 #, elixir-autogen
 msgid "PDF"
 msgstr "PDF"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1420
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1445
 #, elixir-autogen
 msgid "Export PDF"
 msgstr "Ekspordi PDF"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:340
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:375
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1312
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1430
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1434
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:380
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:415
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1335
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1455
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1459
 #, elixir-autogen
 msgid "Restore"
 msgstr "Taasta"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1441
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1466
 #, elixir-autogen
 msgid "Delete"
 msgstr "Kustuta"
@@ -251,17 +251,17 @@ msgstr "Liiguta dokumentidesse"
 msgid "Move To Templates"
 msgstr "Liiguta mallidesse"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1485
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1510
 #, elixir-autogen
 msgid "Template language"
 msgstr "Malli keel"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1491
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1516
 #, elixir-autogen
 msgid "Set language"
 msgstr "Määra keel"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1529
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1554
 #, elixir-autogen
 msgid "Clear language"
 msgstr "Tühjenda keel"
@@ -307,20 +307,20 @@ msgstr "Laadimine…"
 msgid "Saving…"
 msgstr "Salvestamine…"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1303
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1421
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1326
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1446
 #, elixir-autogen
 msgid "Exporting…"
 msgstr "Eksportimine…"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1313
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1431
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1336
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1456
 #, elixir-autogen
 msgid "Restoring…"
 msgstr "Taastamine…"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1322
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1442
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1345
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1467
 #, elixir-autogen
 msgid "Deleting…"
 msgstr "Kustutamine…"
@@ -328,25 +328,25 @@ msgstr "Kustutamine…"
 ## Table headers / form labels
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:129
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1017
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1335
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1358
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:149
 #, elixir-autogen
 msgid "Name"
 msgstr "Nimi"
 
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1018
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1337
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1360
 #, elixir-autogen
 msgid "Modified"
 msgstr "Muudetud"
 
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1019
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1338
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1361
 #, elixir-autogen
 msgid "Actions"
 msgstr "Toimingud"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1336
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1359
 #, elixir-autogen
 msgid "Status"
 msgstr "Olek"
@@ -373,51 +373,51 @@ msgid "deleted"
 msgstr "kustutatud"
 
 ## Status badges
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:221
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:281
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:223
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:302
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:938
 #, elixir-autogen
 msgid "Active"
 msgstr "Aktiivsed"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:228
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:288
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:334
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:369
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:230
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:309
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:374
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:409
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:939
 #, elixir-autogen
 msgid "Trash"
 msgstr "Prügikast"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1240
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1374
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1261
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1399
 #, elixir-autogen
 msgid "lost"
 msgstr "kadunud"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1256
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1390
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1277
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1415
 #, elixir-autogen
 msgid "unfiled"
 msgstr "paigutamata"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1458
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1459
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1483
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1484
 #, elixir-autogen
 msgid "root"
 msgstr "juur"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1192
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1213
 #, elixir-autogen
 msgid "Trash is empty"
 msgstr "Prügikast on tühi"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1195
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1216
 #, elixir-autogen
 msgid "No files yet"
 msgstr "Faile veel pole"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1238
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1259
 #, elixir-autogen
 msgid "File not found in Google Drive"
 msgstr "Faili ei leitud Google Drive'is"
@@ -447,22 +447,22 @@ msgstr "Liigutatud kustutatud kausta"
 msgid "Restored"
 msgstr "Taastatud"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1462
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1487
 #, elixir-autogen
 msgid "Moved to templates"
 msgstr "Liigutatud mallidesse"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1463
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1488
 #, elixir-autogen
 msgid "Moved to documents"
 msgstr "Liigutatud dokumentidesse"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1464
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1489
 #, elixir-autogen
 msgid "Saved current location"
 msgstr "Praegune asukoht salvestatud"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1465
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1490
 #, elixir-autogen
 msgid "Updated"
 msgstr "Uuendatud"
@@ -666,15 +666,15 @@ msgid "Are you sure? This cannot be undone."
 msgstr "Oled kindel? Seda ei saa tagasi võtta."
 
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:22
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:200
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:208
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:202
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:210
 #, elixir-autogen, elixir-format
 msgid "Categories"
 msgstr "Kategooriad"
 
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:24
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1548
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1566
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1578
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1596
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:180
 #, elixir-autogen, elixir-format
 msgid "Category"
@@ -722,7 +722,7 @@ msgstr "Juurkausta \"%{name}\" ei õnnestunud luua"
 msgid "Could not delete category."
 msgstr "Kategooria kustutamine ebaõnnestus."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:181
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:182
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:127
 #, elixir-autogen, elixir-format
 msgid "Could not delete type."
@@ -733,7 +733,7 @@ msgstr "Tüübi kustutamine ebaõnnestus."
 msgid "Could not restore category."
 msgstr "Kategooria taastamine ebaõnnestus."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:165
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:166
 #, elixir-autogen, elixir-format
 msgid "Could not restore type."
 msgstr "Tüübi taastamine ebaõnnestus."
@@ -743,12 +743,12 @@ msgstr "Tüübi taastamine ebaõnnestus."
 msgid "Could not trash category."
 msgstr "Kategooria prügikasti liigutamine ebaõnnestus."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:149
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:150
 #, elixir-autogen, elixir-format
 msgid "Could not trash type."
 msgstr "Tüübi prügikasti liigutamine ebaõnnestus."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1656
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1686
 #, elixir-autogen, elixir-format
 msgid "Could not update category"
 msgstr "Kategooria uuendamine ebaõnnestus"
@@ -765,8 +765,8 @@ msgstr "Ohtlik tsoon"
 msgid "Default width (px)"
 msgstr "Vaikimisi laius (px)"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:345
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:380
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:385
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:420
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:185
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:229
 #, elixir-autogen, elixir-format, fuzzy
@@ -806,8 +806,8 @@ msgstr "Piltide lisamine dokumenti ebaõnnestus"
 msgid "Failed to save variable configuration. Please try again."
 msgstr "Muutuja konfiguratsiooni salvestamine ebaõnnestus. Palun proovi uuesti."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1251
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1385
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1272
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1410
 #, elixir-autogen, elixir-format
 msgid "File exists in Drive but is outside the configured Document Creator folders"
 msgstr "Fail on Drive'is olemas, kuid asub väljaspool seadistatud dokumentide loomise kaustu"
@@ -857,7 +857,7 @@ msgstr "Liigutada mallid, dokumendid ja kustutatud asukohta \"%{name}\"?"
 msgid "Moving…"
 msgstr "Salvestamine…"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:210
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:212
 #, elixir-autogen, elixir-format
 msgid "New"
 msgstr "Uus"
@@ -868,7 +868,7 @@ msgstr "Uus"
 msgid "New Category"
 msgstr "Uus kategooria"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:268
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:289
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:61
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:74
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:140
@@ -881,32 +881,32 @@ msgstr "Uus tüüp"
 msgid "New line"
 msgstr "Uus rida"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:236
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:247
 #, elixir-autogen, elixir-format
 msgid "No categories yet."
 msgstr "Kategooriaid pole veel."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1568
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1598
 #, elixir-autogen, elixir-format
 msgid "No category"
 msgstr "Kategooria puudub"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:236
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:247
 #, elixir-autogen, elixir-format
 msgid "No trashed categories."
 msgstr "Prügikastis kategooriaid pole."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:295
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:325
 #, elixir-autogen, elixir-format
 msgid "No trashed types."
 msgstr "Prügikastis tüüpe pole."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1582
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1612
 #, elixir-autogen, elixir-format
 msgid "No type"
 msgstr "Tüüp puudub"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:295
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:325
 #, elixir-autogen, elixir-format
 msgid "No types yet."
 msgstr "Tüüpe pole veel."
@@ -958,7 +958,7 @@ msgstr "Salvesta"
 msgid "Select a category"
 msgstr "Vali kategooria"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:307
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:347
 #, elixir-autogen, elixir-format
 msgid "Select a category to see its types."
 msgstr "Vali kategooria, et näha selle tüüpe."
@@ -988,20 +988,20 @@ msgstr "Tühik"
 msgid "The Document Creator uses Google Docs for editing and Google Drive for storage. Connect a Google account in Settings to get started."
 msgstr "Dokumentide looja kasutab redigeerimiseks Google Docsi ja salvestamiseks Google Drive'i. Alustamiseks ühenda Google'i konto Seadetes."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1555
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1580
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1585
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1610
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:25
 #, elixir-autogen, elixir-format
 msgid "Type"
 msgstr "Tüüp"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:176
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:177
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:122
 #, elixir-autogen, elixir-format
 msgid "Type permanently deleted."
 msgstr "Tüüp kustutati jäädavalt."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:160
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:161
 #, elixir-autogen, elixir-format
 msgid "Type restored."
 msgstr "Tüüp taastati."
@@ -1011,12 +1011,12 @@ msgstr "Tüüp taastati."
 msgid "Type saved."
 msgstr "Tüüp salvestati."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:143
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:144
 #, elixir-autogen, elixir-format
 msgid "Type trashed. Its templates have also been moved to trash."
 msgstr "Tüüp liigutati prügikasti. Selle mallid liigutati samuti prügikasti."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:261
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:282
 #, elixir-autogen, elixir-format
 msgid "Types"
 msgstr "Tüübid"
@@ -1025,3 +1025,9 @@ msgstr "Tüübid"
 #, elixir-autogen, elixir-format, fuzzy
 msgid "selected"
 msgstr "kustutatud"
+
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:258
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:336
+#, elixir-autogen, elixir-format
+msgid "Drag to reorder"
+msgstr "Lohista ümberjärjestamiseks"

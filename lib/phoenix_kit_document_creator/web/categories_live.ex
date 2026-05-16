@@ -124,7 +124,8 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     end
   end
 
-  def handle_event("reorder_categories", %{"uuids" => uuids}, socket) when is_list(uuids) do
+  def handle_event("reorder_categories", %{"ordered_ids" => uuids}, socket)
+      when is_list(uuids) do
     Taxonomy.reorder_categories(uuids, Helpers.actor_opts(socket))
     {:noreply, reload_categories(socket)}
   end
@@ -182,7 +183,8 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     end
   end
 
-  def handle_event("reorder_types", %{"uuids" => uuids}, socket) when is_list(uuids) do
+  def handle_event("reorder_types", %{"ordered_ids" => uuids}, socket)
+      when is_list(uuids) do
     if socket.assigns.selected do
       Taxonomy.reorder_types(socket.assigns.selected.uuid, uuids, Helpers.actor_opts(socket))
     end
@@ -230,14 +232,33 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
             </div>
 
             <%!-- Category list --%>
-            <ul class="flex flex-col gap-1">
+            <ul
+              id={"categories-sortable-#{@categories_trash}"}
+              class="flex flex-col gap-1"
+              phx-hook={!@categories_trash && "SortableGrid"}
+              data-sortable={!@categories_trash && "true"}
+              data-sortable-event="reorder_categories"
+              data-sortable-items=".sortable-item"
+              data-sortable-handle=".pk-drag-handle"
+              data-sortable-hide-source="false"
+            >
               <%= if @categories == [] do %>
                 <li class="text-sm text-base-content/50 py-4 text-center">
                   {if @categories_trash, do: gettext("No trashed categories."), else: gettext("No categories yet.")}
                 </li>
               <% end %>
               <%= for cat <- @categories do %>
-                <li class={"flex items-center justify-between px-2 py-1.5 rounded cursor-pointer hover:bg-base-200 #{if @selected && @selected.uuid == cat.uuid, do: "bg-base-200"}"}>
+                <li
+                  class={"sortable-item flex items-center gap-1 px-2 py-1.5 rounded cursor-pointer hover:bg-base-200 #{if @selected && @selected.uuid == cat.uuid, do: "bg-base-200"}"}
+                  data-id={cat.uuid}
+                >
+                  <span
+                    :if={not @categories_trash}
+                    class="pk-drag-handle cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/60 shrink-0"
+                    title={gettext("Drag to reorder")}
+                  >
+                    <span class="hero-bars-3 w-4 h-4" />
+                  </span>
                   <button
                     type="button"
                     phx-click="select_category"
@@ -289,14 +310,33 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                 </button>
               </div>
 
-              <ul class="flex flex-col gap-1">
+              <ul
+                id={"types-sortable-#{@types_trash}"}
+                class="flex flex-col gap-1"
+                phx-hook={!@types_trash && "SortableGrid"}
+                data-sortable={!@types_trash && "true"}
+                data-sortable-event="reorder_types"
+                data-sortable-items=".sortable-item"
+                data-sortable-handle=".pk-drag-handle"
+                data-sortable-hide-source="false"
+              >
                 <%= if @types == [] do %>
                   <li class="text-sm text-base-content/50 py-4 text-center">
                     {if @types_trash, do: gettext("No trashed types."), else: gettext("No types yet.")}
                   </li>
                 <% end %>
                 <%= for type <- @types do %>
-                  <li class="flex items-center justify-between px-2 py-1.5 rounded hover:bg-base-200">
+                  <li
+                    class="sortable-item flex items-center gap-1 px-2 py-1.5 rounded hover:bg-base-200"
+                    data-id={type.uuid}
+                  >
+                    <span
+                      :if={not @types_trash}
+                      class="pk-drag-handle cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/60 shrink-0"
+                      title={gettext("Drag to reorder")}
+                    >
+                      <span class="hero-bars-3 w-4 h-4" />
+                    </span>
                     <span class="flex-1 text-sm font-medium">{type.name}</span>
                     <.type_row_menu type={type} trash_view={@types_trash} />
                   </li>

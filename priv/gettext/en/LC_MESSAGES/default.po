@@ -188,40 +188,40 @@ msgstr "Document Name"
 msgid "Cancel"
 msgstr "Cancel"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1287
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1401
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1310
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1426
 #, elixir-autogen
 msgid "View"
 msgstr "View"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:329
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:364
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1295
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1410
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:369
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:404
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1318
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1435
 #, elixir-autogen
 msgid "Edit"
 msgstr "Edit"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1305
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1328
 #, elixir-autogen
 msgid "PDF"
 msgstr "PDF"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1420
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1445
 #, elixir-autogen
 msgid "Export PDF"
 msgstr "Export PDF"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:340
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:375
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1312
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1430
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1434
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:380
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:415
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1335
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1455
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1459
 #, elixir-autogen
 msgid "Restore"
 msgstr "Restore"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1441
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1466
 #, elixir-autogen
 msgid "Delete"
 msgstr "Delete"
@@ -251,17 +251,17 @@ msgstr "Move To Documents"
 msgid "Move To Templates"
 msgstr "Move To Templates"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1485
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1510
 #, elixir-autogen
 msgid "Template language"
 msgstr "Template language"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1491
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1516
 #, elixir-autogen
 msgid "Set language"
 msgstr "Set language"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1529
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1554
 #, elixir-autogen
 msgid "Clear language"
 msgstr "Clear language"
@@ -307,20 +307,20 @@ msgstr "Loading…"
 msgid "Saving…"
 msgstr "Saving…"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1303
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1421
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1326
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1446
 #, elixir-autogen
 msgid "Exporting…"
 msgstr "Exporting…"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1313
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1431
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1336
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1456
 #, elixir-autogen
 msgid "Restoring…"
 msgstr "Restoring…"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1322
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1442
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1345
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1467
 #, elixir-autogen
 msgid "Deleting…"
 msgstr "Deleting…"
@@ -328,25 +328,25 @@ msgstr "Deleting…"
 ## Table headers / form labels
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:129
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1017
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1335
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1358
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:149
 #, elixir-autogen
 msgid "Name"
 msgstr "Name"
 
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1018
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1337
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1360
 #, elixir-autogen
 msgid "Modified"
 msgstr "Modified"
 
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1019
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1338
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1361
 #, elixir-autogen
 msgid "Actions"
 msgstr "Actions"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1336
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1359
 #, elixir-autogen
 msgid "Status"
 msgstr "Status"
@@ -373,51 +373,51 @@ msgid "deleted"
 msgstr "deleted"
 
 ## Status badges
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:221
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:281
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:223
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:302
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:938
 #, elixir-autogen
 msgid "Active"
 msgstr "Active"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:228
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:288
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:334
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:369
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:230
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:309
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:374
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:409
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:939
 #, elixir-autogen
 msgid "Trash"
 msgstr "Trash"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1240
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1374
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1261
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1399
 #, elixir-autogen
 msgid "lost"
 msgstr "lost"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1256
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1390
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1277
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1415
 #, elixir-autogen
 msgid "unfiled"
 msgstr "unfiled"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1458
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1459
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1483
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1484
 #, elixir-autogen
 msgid "root"
 msgstr "root"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1192
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1213
 #, elixir-autogen
 msgid "Trash is empty"
 msgstr "Trash is empty"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1195
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1216
 #, elixir-autogen
 msgid "No files yet"
 msgstr "No files yet"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1238
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1259
 #, elixir-autogen
 msgid "File not found in Google Drive"
 msgstr "File not found in Google Drive"
@@ -447,22 +447,22 @@ msgstr "Moved to deleted folder"
 msgid "Restored"
 msgstr "Restored"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1462
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1487
 #, elixir-autogen
 msgid "Moved to templates"
 msgstr "Moved to templates"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1463
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1488
 #, elixir-autogen
 msgid "Moved to documents"
 msgstr "Moved to documents"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1464
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1489
 #, elixir-autogen
 msgid "Saved current location"
 msgstr "Saved current location"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1465
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1490
 #, elixir-autogen
 msgid "Updated"
 msgstr "Updated"
@@ -666,15 +666,15 @@ msgid "Are you sure? This cannot be undone."
 msgstr "Are you sure? This cannot be undone."
 
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:22
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:200
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:208
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:202
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:210
 #, elixir-autogen, elixir-format
 msgid "Categories"
 msgstr "Categories"
 
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:24
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1548
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1566
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1578
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1596
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:180
 #, elixir-autogen, elixir-format
 msgid "Category"
@@ -722,7 +722,7 @@ msgstr "Could not create root folder \"%{name}\""
 msgid "Could not delete category."
 msgstr "Could not delete category."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:181
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:182
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:127
 #, elixir-autogen, elixir-format
 msgid "Could not delete type."
@@ -733,7 +733,7 @@ msgstr "Could not delete type."
 msgid "Could not restore category."
 msgstr "Could not restore category."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:165
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:166
 #, elixir-autogen, elixir-format
 msgid "Could not restore type."
 msgstr "Could not restore type."
@@ -743,12 +743,12 @@ msgstr "Could not restore type."
 msgid "Could not trash category."
 msgstr "Could not trash category."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:149
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:150
 #, elixir-autogen, elixir-format
 msgid "Could not trash type."
 msgstr "Could not trash type."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1656
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1686
 #, elixir-autogen, elixir-format
 msgid "Could not update category"
 msgstr "Could not update category"
@@ -765,8 +765,8 @@ msgstr "Danger Zone"
 msgid "Default width (px)"
 msgstr "Default width (px)"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:345
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:380
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:385
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:420
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:185
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:229
 #, elixir-autogen, elixir-format, fuzzy
@@ -806,8 +806,8 @@ msgstr "Failed to insert images into document"
 msgid "Failed to save variable configuration. Please try again."
 msgstr "Failed to save variable configuration. Please try again."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1251
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1385
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1272
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1410
 #, elixir-autogen, elixir-format
 msgid "File exists in Drive but is outside the configured Document Creator folders"
 msgstr "File exists in Drive but is outside the configured Document Creator folders"
@@ -857,7 +857,7 @@ msgstr "Move templates, documents, and deleted into \"%{name}\"?"
 msgid "Moving…"
 msgstr "Saving…"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:210
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:212
 #, elixir-autogen, elixir-format
 msgid "New"
 msgstr "New"
@@ -868,7 +868,7 @@ msgstr "New"
 msgid "New Category"
 msgstr "New Category"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:268
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:289
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:61
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:74
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:140
@@ -881,32 +881,32 @@ msgstr "New Type"
 msgid "New line"
 msgstr "New line"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:236
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:247
 #, elixir-autogen, elixir-format
 msgid "No categories yet."
 msgstr "No categories yet."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1568
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1598
 #, elixir-autogen, elixir-format
 msgid "No category"
 msgstr "No category"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:236
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:247
 #, elixir-autogen, elixir-format
 msgid "No trashed categories."
 msgstr "No trashed categories."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:295
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:325
 #, elixir-autogen, elixir-format
 msgid "No trashed types."
 msgstr "No trashed types."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1582
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1612
 #, elixir-autogen, elixir-format
 msgid "No type"
 msgstr "No type"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:295
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:325
 #, elixir-autogen, elixir-format
 msgid "No types yet."
 msgstr "No types yet."
@@ -958,7 +958,7 @@ msgstr "Save"
 msgid "Select a category"
 msgstr "Select a category"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:307
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:347
 #, elixir-autogen, elixir-format
 msgid "Select a category to see its types."
 msgstr "Select a category to see its types."
@@ -988,20 +988,20 @@ msgstr "Space"
 msgid "The Document Creator uses Google Docs for editing and Google Drive for storage. Connect a Google account in Settings to get started."
 msgstr "The Document Creator uses Google Docs for editing and Google Drive for storage. Connect a Google account in Settings to get started."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1555
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1580
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1585
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1610
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:25
 #, elixir-autogen, elixir-format
 msgid "Type"
 msgstr "Type"
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:176
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:177
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:122
 #, elixir-autogen, elixir-format
 msgid "Type permanently deleted."
 msgstr "Type permanently deleted."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:160
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:161
 #, elixir-autogen, elixir-format
 msgid "Type restored."
 msgstr "Type restored."
@@ -1011,12 +1011,12 @@ msgstr "Type restored."
 msgid "Type saved."
 msgstr "Type saved."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:143
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:144
 #, elixir-autogen, elixir-format
 msgid "Type trashed. Its templates have also been moved to trash."
 msgstr "Type trashed. Its templates have also been moved to trash."
 
-#: lib/phoenix_kit_document_creator/web/categories_live.ex:261
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:282
 #, elixir-autogen, elixir-format
 msgid "Types"
 msgstr "Types"
@@ -1025,3 +1025,9 @@ msgstr "Types"
 #, elixir-autogen, elixir-format, fuzzy
 msgid "selected"
 msgstr "deleted"
+
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:258
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:336
+#, elixir-autogen, elixir-format
+msgid "Drag to reorder"
+msgstr "Drag to reorder"
