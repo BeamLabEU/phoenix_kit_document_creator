@@ -26,6 +26,8 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   import Ecto.Query, warn: false
 
+  use Gettext, backend: PhoenixKitDocumentCreator.Gettext
+
   alias PhoenixKitDocumentCreator.Schemas.Category
   alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Schemas.Type
@@ -214,16 +216,15 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> repo().update_all(set: [status: "trashed", updated_at: now])
         end
 
-        category
-        |> Category.changeset(%{status: "deleted"})
-        |> repo().update!()
-        |> Map.put(:_cascade_template_uuids, template_uuids)
+        updated =
+          category
+          |> Category.changeset(%{status: "deleted"})
+          |> repo().update!()
+
+        {updated, template_uuids}
       end)
 
-    with {:ok, updated} <- result do
-      trashed_template_uuids = Map.get(updated, :_cascade_template_uuids, [])
-      updated = Map.delete(updated, :_cascade_template_uuids)
-
+    with {:ok, {updated, trashed_template_uuids}} <- result do
       log_activity(%{
         action: "doc_taxonomy.category.trashed",
         mode: "manual",
@@ -485,16 +486,15 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> repo().update_all(set: [status: "trashed", updated_at: now])
         end
 
-        type
-        |> Type.changeset(%{status: "deleted"})
-        |> repo().update!()
-        |> Map.put(:_cascade_template_uuids, template_uuids)
+        updated =
+          type
+          |> Type.changeset(%{status: "deleted"})
+          |> repo().update!()
+
+        {updated, template_uuids}
       end)
 
-    with {:ok, updated} <- result do
-      trashed_template_uuids = Map.get(updated, :_cascade_template_uuids, [])
-      updated = Map.delete(updated, :_cascade_template_uuids)
-
+    with {:ok, {updated, trashed_template_uuids}} <- result do
       log_activity(%{
         action: "doc_taxonomy.type.trashed",
         mode: "manual",
@@ -616,35 +616,6 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
     end
   end
 
-  @doc """
-  Moves a type to a different category.
-  """
-  @spec move_type(Type.t(), Ecto.UUID.t(), keyword()) ::
-          {:ok, Type.t()} | {:error, Ecto.Changeset.t(Type.t())}
-  def move_type(%Type{} = type, target_category_uuid, opts \\ []) do
-    case type |> Type.changeset(%{category_uuid: target_category_uuid}) |> repo().update() do
-      {:ok, updated} = ok ->
-        log_activity(%{
-          action: "doc_taxonomy.type.moved",
-          mode: "manual",
-          actor_uuid: opts[:actor_uuid],
-          resource_type: "doc_type",
-          resource_uuid: updated.uuid,
-          metadata: %{
-            "name" => updated.name,
-            "from_category_uuid" => type.category_uuid,
-            "to_category_uuid" => target_category_uuid
-          }
-        })
-
-        broadcast(:type, updated.uuid)
-        ok
-
-      error ->
-        error
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # Picker helpers
   # ---------------------------------------------------------------------------
@@ -698,7 +669,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   @spec category_options() :: [{String.t(), Ecto.UUID.t() | nil}]
   def category_options do
     entries = list_categories() |> Enum.map(fn c -> {c.name, c.uuid} end)
-    [{"No category", nil} | entries]
+    [{gettext("No category"), nil} | entries]
   end
 
   @doc """
@@ -711,11 +682,11 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   Suitable for `options_for_select/2`.
   """
   @spec type_options(Ecto.UUID.t() | nil) :: [{String.t(), Ecto.UUID.t() | nil}]
-  def type_options(nil), do: [{"No type", nil}]
+  def type_options(nil), do: [{gettext("No type"), nil}]
 
   def type_options(category_uuid) when is_binary(category_uuid) do
     entries = list_types_for_category(category_uuid) |> Enum.map(fn t -> {t.name, t.uuid} end)
-    [{"No type", nil} | entries]
+    [{gettext("No type"), nil} | entries]
   end
 
   # ---------------------------------------------------------------------------

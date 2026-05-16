@@ -17,6 +17,8 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    if connected?(socket), do: Taxonomy.subscribe()
+
     {:ok,
      assign(socket,
        page_title: gettext("Categories"),
@@ -126,7 +128,16 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
   def handle_event("reorder_categories", %{"ordered_ids" => uuids}, socket)
       when is_list(uuids) do
-    Taxonomy.reorder_categories(uuids, Helpers.actor_opts(socket))
+    socket =
+      case Taxonomy.reorder_categories(uuids, Helpers.actor_opts(socket)) do
+        :ok ->
+          socket
+
+        {:error, reason} ->
+          Logger.error("reorder_categories failed: #{inspect(reason)}")
+          put_flash(socket, :error, gettext("Could not reorder categories."))
+      end
+
     {:noreply, reload_categories(socket)}
   end
 
@@ -185,13 +196,33 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
   def handle_event("reorder_types", %{"ordered_ids" => uuids}, socket)
       when is_list(uuids) do
-    if socket.assigns.selected do
-      Taxonomy.reorder_types(socket.assigns.selected.uuid, uuids, Helpers.actor_opts(socket))
-    else
-      Logger.warning("reorder_types fired with no selected category — ignoring")
-    end
+    socket =
+      if socket.assigns.selected do
+        case Taxonomy.reorder_types(
+               socket.assigns.selected.uuid,
+               uuids,
+               Helpers.actor_opts(socket)
+             ) do
+          :ok ->
+            socket
+
+          {:error, reason} ->
+            Logger.error("reorder_types failed: #{inspect(reason)}")
+            put_flash(socket, :error, gettext("Could not reorder types."))
+        end
+      else
+        Logger.warning("reorder_types fired with no selected category — ignoring")
+        socket
+      end
 
     {:noreply, reload_types(socket)}
+  end
+
+  # ── Taxonomy broadcasts ────────────────────────────────────────────────────
+
+  @impl true
+  def handle_info({:doc_taxonomy_changed, _level, _uuid}, socket) do
+    {:noreply, reload_categories(socket)}
   end
 
   # ── Render ─────────────────────────────────────────────────────────────────
