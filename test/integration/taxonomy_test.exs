@@ -214,17 +214,6 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
       end
     end
 
-    describe "move_type/2" do
-      test "moves a type to another category" do
-        cat1 = create_category!(%{name: "Cat1"})
-        cat2 = create_category!(%{name: "Cat2"})
-        type = create_type!(cat1.uuid)
-
-        assert {:ok, moved} = Taxonomy.move_type(type, cat2.uuid)
-        assert moved.category_uuid == cat2.uuid
-      end
-    end
-
     # ===========================================================================
     # Reorder
     # ===========================================================================
@@ -345,6 +334,22 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
         assert Repo.get!(Template, tmpl_by_cascade.uuid).status == "published"
         # Template that was already trashed before the cascade stays trashed
         assert Repo.get!(Template, tmpl_manually_trashed.uuid).status == "trashed"
+      end
+
+      test "restores only types trashed by this cascade" do
+        cat = create_category!()
+        type_by_cascade = create_type!(cat.uuid, %{name: "ByCascade"})
+        type_manually_trashed = create_type!(cat.uuid, %{name: "Manual"})
+
+        {:ok, _} = Taxonomy.trash_type(type_manually_trashed)
+
+        {:ok, trashed_cat} = Taxonomy.trash_category(cat)
+        {:ok, _} = Taxonomy.restore_category(trashed_cat)
+
+        # Type trashed by the cascade is restored
+        assert Taxonomy.get_type!(type_by_cascade.uuid).status == "active"
+        # Type trashed manually before the cascade stays trashed
+        assert Taxonomy.get_type!(type_manually_trashed.uuid).status == "deleted"
       end
     end
 

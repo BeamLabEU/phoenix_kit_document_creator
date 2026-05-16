@@ -171,14 +171,15 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   **Cascades in one transaction:**
   1. Category `status → "deleted"`
-  2. All its types `status → "deleted"`
+  2. Its currently-active types `status → "deleted"`
   3. All templates reachable via `category_uuid` (directly) or via any of
      the category's `type_uuid` values → `status → "trashed"`
 
   Documents are NOT cascaded.
 
-  Affected template uuids are stored in the activity log payload so
-  `restore_category/1` can scope its restore precisely.
+  Affected type and template uuids are stored in the activity log payload
+  so `restore_category/1` restores only what this cascade trashed — types
+  the user had already trashed manually stay trashed.
   """
   @spec trash_category(Category.t(), keyword()) :: {:ok, Category.t()} | {:error, term()}
   def trash_category(%Category{} = category, opts \\ []) do
@@ -186,10 +187,20 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
       repo().transaction(fn ->
         now = DateTime.utc_now()
 
-        # Collect type uuids belonging to this category.
+        # All type uuids under this category — used to find templates via
+        # `type_uuid`, regardless of the type's own status.
         type_uuids =
           from(t in Type,
             where: t.category_uuid == ^category.uuid,
+            select: t.uuid
+          )
+          |> repo().all()
+
+        # Types still active — only these are trashed *by this cascade* and
+        # therefore the only ones `restore_category/1` should restore.
+        cascade_type_uuids =
+          from(t in Type,
+            where: t.category_uuid == ^category.uuid and t.status != "deleted",
             select: t.uuid
           )
           |> repo().all()
@@ -206,9 +217,11 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           )
           |> repo().all()
 
-        # Trash types.
-        from(t in Type, where: t.category_uuid == ^category.uuid)
-        |> repo().update_all(set: [status: "deleted", updated_at: now])
+        # Trash the types this cascade is responsible for.
+        unless cascade_type_uuids == [] do
+          from(t in Type, where: t.uuid in ^cascade_type_uuids)
+          |> repo().update_all(set: [status: "deleted", updated_at: now])
+        end
 
         # Trash templates via category_uuid or type_uuid.
         unless template_uuids == [] do
@@ -221,10 +234,10 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> Category.changeset(%{status: "deleted"})
           |> repo().update!()
 
-        {updated, template_uuids}
+        {updated, template_uuids, cascade_type_uuids}
       end)
 
-    with {:ok, {updated, trashed_template_uuids}} <- result do
+    with {:ok, {updated, trashed_template_uuids, trashed_type_uuids}} <- result do
       log_activity(%{
         action: "doc_taxonomy.category.trashed",
         mode: "manual",
@@ -233,7 +246,8 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
         resource_uuid: category.uuid,
         metadata: %{
           "name" => category.name,
-          "cascade_template_uuids" => trashed_template_uuids
+          "cascade_template_uuids" => trashed_template_uuids,
+          "cascade_type_uuids" => trashed_type_uuids
         }
       })
 
@@ -247,28 +261,36 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   **Cascades in one transaction:**
   1. Category `status → "active"`
-  2. All its deleted types `status → "active"`
+  2. Types whose uuids were recorded in the trash activity log
+     `status → "active"` (only those, so types the user had trashed
+     manually before the cascade stay trashed)
   3. Templates whose uuids were recorded in the trash activity log
      `status → "published"` (only those, to avoid restoring manually
      trashed templates)
 
   When `PhoenixKit.Activity` is not loaded (or no matching activity entry
-  exists), cascade-trashed templates are not restored — they must be
-  restored manually.
+  exists), cascade-trashed types and templates are not restored — they
+  must be restored manually.
   """
   @spec restore_category(Category.t(), keyword()) :: {:ok, Category.t()} | {:error, term()}
   def restore_category(%Category{} = category, opts \\ []) do
-    cascade_template_uuids = fetch_cascade_template_uuids(:category, category.uuid)
+    %{templates: cascade_template_uuids, types: cascade_type_uuids} =
+      fetch_cascade_uuids(:category, category.uuid)
 
     result =
       repo().transaction(fn ->
         now = DateTime.utc_now()
 
-        # Restore types.
-        from(t in Type,
-          where: t.category_uuid == ^category.uuid and t.status == "deleted"
-        )
-        |> repo().update_all(set: [status: "active", updated_at: now])
+        # Restore only the types this cascade trashed.
+        unless cascade_type_uuids == [] do
+          from(t in Type,
+            where:
+              t.category_uuid == ^category.uuid and
+                t.uuid in ^cascade_type_uuids and
+                t.status == "deleted"
+          )
+          |> repo().update_all(set: [status: "active", updated_at: now])
+        end
 
         # Restore only templates that were trashed by the cascade.
         unless cascade_template_uuids == [] do
@@ -517,7 +539,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   """
   @spec restore_type(Type.t(), keyword()) :: {:ok, Type.t()} | {:error, term()}
   def restore_type(%Type{} = type, opts \\ []) do
-    cascade_template_uuids = fetch_cascade_template_uuids(:type, type.uuid)
+    %{templates: cascade_template_uuids} = fetch_cascade_uuids(:type, type.uuid)
 
     result =
       repo().transaction(fn ->
@@ -694,9 +716,10 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   # ---------------------------------------------------------------------------
 
   # Reads the most recent trash activity log entry for the given level and uuid
-  # to retrieve the list of template uuids that were cascade-trashed at the time.
-  # Returns `[]` if no matching entry is found or the Activity schema isn't loaded.
-  defp fetch_cascade_template_uuids(level, resource_uuid) do
+  # and returns the type/template uuids that were cascade-trashed at the time as
+  # `%{types: [...], templates: [...]}`. Both lists are empty when no matching
+  # entry is found or the Activity schema isn't loaded.
+  defp fetch_cascade_uuids(level, resource_uuid) do
     action =
       case level do
         :category -> "doc_taxonomy.category.trashed"
@@ -706,7 +729,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
     if Code.ensure_loaded?(PhoenixKit.Activity.Entry) do
       fetch_cascade_uuids_from_activity(action, resource_uuid)
     else
-      []
+      %{types: [], templates: []}
     end
   end
 
@@ -719,9 +742,21 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
       )
       |> repo().one()
 
-    case entry do
-      nil -> []
-      %{metadata: %{"cascade_template_uuids" => uuids}} when is_list(uuids) -> uuids
+    metadata =
+      case entry do
+        %{metadata: %{} = metadata} -> metadata
+        _ -> %{}
+      end
+
+    %{
+      types: uuid_list(metadata, "cascade_type_uuids"),
+      templates: uuid_list(metadata, "cascade_template_uuids")
+    }
+  end
+
+  defp uuid_list(metadata, key) do
+    case Map.get(metadata, key) do
+      list when is_list(list) -> list
       _ -> []
     end
   end
