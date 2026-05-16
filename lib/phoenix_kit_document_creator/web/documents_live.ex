@@ -1589,6 +1589,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       <% else %>
         <%!-- Active view: interactive selects sourced from precomputed options --%>
         <select
+          name="value"
           class="select select-bordered select-xs"
           phx-change="set_taxonomy_category"
           phx-value-google_doc_id={@file["id"]}
@@ -1603,6 +1604,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <%!-- Type select — only shown when a category is chosen --%>
         <select
           :if={@file["category_uuid"]}
+          name="value"
           class="select select-bordered select-xs"
           phx-change="set_taxonomy_type"
           phx-value-google_doc_id={@file["id"]}
