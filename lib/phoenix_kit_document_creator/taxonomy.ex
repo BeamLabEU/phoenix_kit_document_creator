@@ -187,23 +187,19 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
       repo().transaction(fn ->
         now = DateTime.utc_now()
 
-        # All type uuids under this category — used to find templates via
-        # `type_uuid`, regardless of the type's own status.
-        type_uuids =
+        # Every type under this category, with its status. `type_uuids` (all)
+        # is used to find templates via `type_uuid`; `cascade_type_uuids` (the
+        # still-active ones) are the only types this cascade trashes — and so
+        # the only ones `restore_category/1` should restore.
+        types =
           from(t in Type,
             where: t.category_uuid == ^category.uuid,
-            select: t.uuid
+            select: {t.uuid, t.status}
           )
           |> repo().all()
 
-        # Types still active — only these are trashed *by this cascade* and
-        # therefore the only ones `restore_category/1` should restore.
-        cascade_type_uuids =
-          from(t in Type,
-            where: t.category_uuid == ^category.uuid and t.status != "deleted",
-            select: t.uuid
-          )
-          |> repo().all()
+        type_uuids = Enum.map(types, &elem(&1, 0))
+        cascade_type_uuids = for {uuid, status} <- types, status != "deleted", do: uuid
 
         # Collect template uuids to be trashed — only those currently active,
         # to avoid recording templates the user already trashed manually.
