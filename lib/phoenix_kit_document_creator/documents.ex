@@ -2066,6 +2066,37 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc """
+  Returns staleness info for a preset.
+
+  A section is "broken" when its `template_uuid` references a template that
+  no longer exists, or whose `status` is `trashed` or `lost`.
+
+  Returns `%{broken_count: non_neg_integer(), broken_template_uuids: [binary()]}`.
+  """
+  @spec preset_stale_info(TemplatePreset.t()) :: %{
+          broken_count: non_neg_integer(),
+          broken_template_uuids: [binary()]
+        }
+  def preset_stale_info(%TemplatePreset{sections: sections}) do
+    referenced =
+      sections
+      |> Enum.map(&Map.get(&1, "template_uuid"))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    healthy =
+      Template
+      |> where([t], t.uuid in ^referenced and t.status not in ["trashed", "lost"])
+      |> select([t], t.uuid)
+      |> repo().all()
+      |> MapSet.new()
+
+    broken = Enum.reject(referenced, &MapSet.member?(healthy, &1))
+
+    %{broken_count: length(broken), broken_template_uuids: broken}
+  end
+
+  @doc """
   Lists presets, optionally filtered by `:scope_type` and `:scope_id`.
   Results are ordered by name ascending.
   """

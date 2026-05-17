@@ -54,4 +54,35 @@ defmodule PhoenixKitDocumentCreator.Documents.PresetManagementTest do
       assert Repo.get(TemplatePreset, preset.uuid) == nil
     end
   end
+
+  describe "preset_stale_info/1" do
+    test "flags sections with missing or trashed templates" do
+      ok = insert_template!("published")
+      trashed = insert_template!("trashed")
+      missing_uuid = Ecto.UUID.generate()
+
+      preset =
+        insert_preset!(%{
+          sections: [
+            %{"template_uuid" => ok.uuid, "position" => 0},
+            %{"template_uuid" => trashed.uuid, "position" => 1},
+            %{"template_uuid" => missing_uuid, "position" => 2}
+          ]
+        })
+
+      info = Documents.preset_stale_info(preset)
+
+      assert info.broken_count == 2
+
+      assert MapSet.new(info.broken_template_uuids) ==
+               MapSet.new([trashed.uuid, missing_uuid])
+    end
+
+    test "reports zero for an all-published preset" do
+      ok = insert_template!("published")
+      preset = insert_preset!(%{sections: [%{"template_uuid" => ok.uuid, "position" => 0}]})
+
+      assert Documents.preset_stale_info(preset).broken_count == 0
+    end
+  end
 end
