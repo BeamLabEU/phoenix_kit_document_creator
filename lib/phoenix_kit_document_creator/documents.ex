@@ -269,6 +269,20 @@ defmodule PhoenixKitDocumentCreator.Documents do
     |> Enum.map(&schema_to_file_map/1)
   end
 
+  @doc """
+  Lists published `Template` structs for a category, ordered by name.
+
+  Returns full schema structs (not file maps) so callers get `variables`,
+  `status`, and atom-key access. Used by the preset section editor.
+  """
+  @spec list_templates_for_category(binary()) :: [Template.t()]
+  def list_templates_for_category(category_uuid) do
+    Template
+    |> where([t], t.category_uuid == ^category_uuid and t.status == "published")
+    |> order_by([t], asc: t.name)
+    |> repo().all()
+  end
+
   defp schema_to_file_map(record) do
     base = %{
       "id" => record.google_doc_id,

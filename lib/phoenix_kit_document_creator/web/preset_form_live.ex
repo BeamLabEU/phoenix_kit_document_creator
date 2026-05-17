@@ -180,10 +180,9 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
 
   defp editor_sections(_), do: []
 
-  # Templates selectable for this preset's category.
+  # Templates selectable for this preset's category (full schema structs).
   defp category_templates(category_uuid) do
-    Documents.list_templates_from_db()
-    |> Enum.filter(&(&1.category_uuid == category_uuid))
+    Documents.list_templates_for_category(category_uuid)
   end
 
   defp section_variables(section, templates) do
