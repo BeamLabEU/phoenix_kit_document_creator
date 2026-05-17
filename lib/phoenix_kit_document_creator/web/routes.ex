@@ -36,6 +36,20 @@ defmodule PhoenixKitDocumentCreator.Web.Routes do
         :edit,
         as: :doc_creator_type_edit_localized
       )
+
+      live(
+        "/admin/document-creator/categories/:category_uuid/presets/new",
+        PhoenixKitDocumentCreator.Web.PresetFormLive,
+        :new,
+        as: :doc_creator_preset_new_localized
+      )
+
+      live(
+        "/admin/document-creator/presets/:uuid/edit",
+        PhoenixKitDocumentCreator.Web.PresetFormLive,
+        :edit,
+        as: :doc_creator_preset_edit_localized
+      )
     end
   end
 
@@ -68,6 +82,20 @@ defmodule PhoenixKitDocumentCreator.Web.Routes do
         PhoenixKitDocumentCreator.Web.TypeFormLive,
         :edit,
         as: :doc_creator_type_edit
+      )
+
+      live(
+        "/admin/document-creator/categories/:category_uuid/presets/new",
+        PhoenixKitDocumentCreator.Web.PresetFormLive,
+        :new,
+        as: :doc_creator_preset_new
+      )
+
+      live(
+        "/admin/document-creator/presets/:uuid/edit",
+        PhoenixKitDocumentCreator.Web.PresetFormLive,
+        :edit,
+        as: :doc_creator_preset_edit
       )
     end
   end
