@@ -2096,6 +2096,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
     %{broken_count: length(broken), broken_template_uuids: broken}
   end
 
+  @doc "Fetches a preset by uuid, or `nil`."
+  @spec get_preset(binary()) :: TemplatePreset.t() | nil
+  def get_preset(uuid), do: repo().get(TemplatePreset, uuid)
+
   @doc """
   Lists presets, optionally filtered by `:scope_type` and `:scope_id`.
   Results are ordered by name ascending.
