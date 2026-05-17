@@ -2048,6 +2048,24 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc """
+  Updates an existing preset from `attrs`.
+  """
+  @spec update_preset(TemplatePreset.t(), map()) ::
+          {:ok, TemplatePreset.t()} | {:error, Ecto.Changeset.t()}
+  def update_preset(%TemplatePreset{} = preset, attrs) do
+    preset |> TemplatePreset.changeset(attrs) |> repo().update()
+  end
+
+  @doc """
+  Permanently deletes a preset (hard delete — no trash in Stage 1).
+  """
+  @spec delete_preset(TemplatePreset.t()) ::
+          {:ok, TemplatePreset.t()} | {:error, Ecto.Changeset.t()}
+  def delete_preset(%TemplatePreset{} = preset) do
+    repo().delete(preset)
+  end
+
+  @doc """
   Lists presets, optionally filtered by `:scope_type` and `:scope_id`.
   Results are ordered by name ascending.
   """
