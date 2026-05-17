@@ -410,7 +410,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
         </div>
       </div>
 
-      <%= if @selected and not @categories_trash do %>
+      <%= if @selected && not @categories_trash do %>
         <div class="card bg-base-100 shadow-sm border border-base-200">
           <div class="card-body p-4">
             <div class="flex items-center justify-between mb-3">
