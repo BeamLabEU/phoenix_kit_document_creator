@@ -306,6 +306,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
     |> maybe_put_field(record, :type_uuid, "type_uuid")
     |> maybe_put_field(record, :created_by_uuid, "created_by_uuid")
     |> maybe_put_field(record, :inserted_at, "inserted_at")
+    |> maybe_put_field(record, :data, "data")
   end
 
   defp maybe_put_field(map, record, field, key) do
