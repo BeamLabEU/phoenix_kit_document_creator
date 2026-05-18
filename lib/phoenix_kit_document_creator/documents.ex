@@ -2148,6 +2148,11 @@ defmodule PhoenixKitDocumentCreator.Documents do
   defp referenced_template_uuids(presets) do
     presets
     |> Enum.flat_map(fn %TemplatePreset{sections: sections} -> sections end)
+    |> section_template_uuids()
+  end
+
+  defp section_template_uuids(sections) do
+    sections
     |> Enum.map(&Map.get(&1, "template_uuid"))
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
@@ -2167,9 +2172,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   defp stale_info(%TemplatePreset{sections: sections}, healthy) do
     broken =
       sections
-      |> Enum.map(&Map.get(&1, "template_uuid"))
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
+      |> section_template_uuids()
       |> Enum.reject(&MapSet.member?(healthy, &1))
 
     %{broken_count: length(broken), broken_template_uuids: broken}
