@@ -119,11 +119,21 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
   def handle_event("reorder_sections", %{"ordered_ids" => ids}, socket) do
     by_index = Enum.with_index(socket.assigns.sections)
 
-    reordered =
-      Enum.map(ids, fn id ->
-        {section, _} = Enum.find(by_index, fn {_s, i} -> Integer.to_string(i) == id end)
-        section
+    # Match each client-supplied id to a section. Unknown/stale ids (e.g. a
+    # drag landing after a remove_section) are skipped rather than crashing.
+    matched =
+      Enum.flat_map(ids, fn id ->
+        case Enum.find(by_index, fn {_s, i} -> Integer.to_string(i) == id end) do
+          {_section, _i} = pair -> [pair]
+          nil -> []
+        end
       end)
+
+    # Append any sections the client never referenced so none are dropped.
+    used = MapSet.new(matched, fn {_s, i} -> i end)
+    leftover = Enum.reject(by_index, fn {_s, i} -> MapSet.member?(used, i) end)
+
+    reordered = Enum.map(matched ++ leftover, fn {section, _i} -> section end)
 
     {:noreply, assign(socket, sections: reordered)}
   end

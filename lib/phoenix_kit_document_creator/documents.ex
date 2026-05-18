@@ -2122,21 +2122,55 @@ defmodule PhoenixKitDocumentCreator.Documents do
           broken_count: non_neg_integer(),
           broken_template_uuids: [binary()]
         }
-  def preset_stale_info(%TemplatePreset{sections: sections}) do
-    referenced =
+  def preset_stale_info(%TemplatePreset{} = preset) do
+    healthy = healthy_template_uuids(referenced_template_uuids([preset]))
+    stale_info(preset, healthy)
+  end
+
+  @doc """
+  Batched `preset_stale_info/1` for a list of presets.
+
+  Runs a single `Template` query covering every referenced template uuid
+  and returns a map of `preset.uuid => stale_info`, avoiding the N+1 of
+  calling `preset_stale_info/1` once per preset.
+  """
+  @spec preset_stale_info_map([TemplatePreset.t()]) :: %{
+          binary() => %{
+            broken_count: non_neg_integer(),
+            broken_template_uuids: [binary()]
+          }
+        }
+  def preset_stale_info_map(presets) do
+    healthy = healthy_template_uuids(referenced_template_uuids(presets))
+    Map.new(presets, fn preset -> {preset.uuid, stale_info(preset, healthy)} end)
+  end
+
+  defp referenced_template_uuids(presets) do
+    presets
+    |> Enum.flat_map(fn %TemplatePreset{sections: sections} -> sections end)
+    |> Enum.map(&Map.get(&1, "template_uuid"))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  # No referenced templates → no query needed.
+  defp healthy_template_uuids([]), do: MapSet.new()
+
+  defp healthy_template_uuids(referenced) do
+    Template
+    |> where([t], t.uuid in ^referenced and t.status not in ["trashed", "lost"])
+    |> select([t], t.uuid)
+    |> repo().all()
+    |> MapSet.new()
+  end
+
+  defp stale_info(%TemplatePreset{sections: sections}, healthy) do
+    broken =
       sections
       |> Enum.map(&Map.get(&1, "template_uuid"))
       |> Enum.reject(&is_nil/1)
       |> Enum.uniq()
-
-    healthy =
-      Template
-      |> where([t], t.uuid in ^referenced and t.status not in ["trashed", "lost"])
-      |> select([t], t.uuid)
-      |> repo().all()
-      |> MapSet.new()
-
-    broken = Enum.reject(referenced, &MapSet.member?(healthy, &1))
+      |> Enum.reject(&MapSet.member?(healthy, &1))
 
     %{broken_count: length(broken), broken_template_uuids: broken}
   end

@@ -642,14 +642,15 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
         assign(socket, presets: [])
 
       category ->
-        presets =
-          %{scope_id: category.uuid}
-          |> Documents.list_presets()
-          |> Enum.map(fn preset ->
-            %{preset: preset, stale: Documents.preset_stale_info(preset)}
+        presets = Documents.list_presets(%{scope_id: category.uuid})
+        stale = Documents.preset_stale_info_map(presets)
+
+        rows =
+          Enum.map(presets, fn preset ->
+            %{preset: preset, stale: Map.fetch!(stale, preset.uuid)}
           end)
 
-        assign(socket, presets: presets)
+        assign(socket, presets: rows)
     end
   end
 
