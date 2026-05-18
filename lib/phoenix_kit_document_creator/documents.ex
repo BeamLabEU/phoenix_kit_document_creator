@@ -269,6 +269,20 @@ defmodule PhoenixKitDocumentCreator.Documents do
     |> Enum.map(&schema_to_file_map/1)
   end
 
+  @doc """
+  Lists published `Template` structs for a category, ordered by name.
+
+  Returns full schema structs (not file maps) so callers get `variables`,
+  `status`, and atom-key access. Used by the preset section editor.
+  """
+  @spec list_templates_for_category(binary()) :: [Template.t()]
+  def list_templates_for_category(category_uuid) do
+    Template
+    |> where([t], t.category_uuid == ^category_uuid and t.status == "published")
+    |> order_by([t], asc: t.name)
+    |> repo().all()
+  end
+
   defp schema_to_file_map(record) do
     base = %{
       "id" => record.google_doc_id,
@@ -290,6 +304,8 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end)
     |> maybe_put_field(record, :category_uuid, "category_uuid")
     |> maybe_put_field(record, :type_uuid, "type_uuid")
+    |> maybe_put_field(record, :created_by_uuid, "created_by_uuid")
+    |> maybe_put_field(record, :inserted_at, "inserted_at")
   end
 
   defp maybe_put_field(map, record, field, key) do
@@ -1784,6 +1800,35 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc """
+  Rename a document: updates its name in Google Drive and in the local DB.
+
+  Validates that `new_name` is non-blank (reuses `Document.changeset/2`'s
+  length validation). Returns `{:ok, %Document{}}` on success or
+  `{:error, term()}` on failure (including `{:error, :not_found}` and
+  `{:error, :blank_name}`).
+  """
+  @spec rename_document(binary(), String.t()) :: {:ok, Document.t()} | {:error, term()}
+  def rename_document(uuid, new_name) when is_binary(uuid) and is_binary(new_name) do
+    if String.trim(new_name) == "" do
+      {:error, :blank_name}
+    else
+      case repo().get(Document, uuid) do
+        nil ->
+          {:error, :not_found}
+
+        document ->
+          with :ok <- docs_client().rename_file(document.google_doc_id, new_name),
+               {:ok, updated} <-
+                 document
+                 |> Document.changeset(%{name: new_name})
+                 |> repo().update() do
+            {:ok, updated}
+          end
+      end
+    end
+  end
+
+  @doc """
   Returns the image variable slots defined in a template's Google Doc.
 
   Fetches the current document text via the Google Docs client and extracts
@@ -2046,6 +2091,59 @@ defmodule PhoenixKitDocumentCreator.Documents do
   def save_preset(attrs) do
     %TemplatePreset{} |> TemplatePreset.changeset(attrs) |> repo().insert()
   end
+
+  @doc """
+  Updates an existing preset from `attrs`.
+  """
+  @spec update_preset(TemplatePreset.t(), map()) ::
+          {:ok, TemplatePreset.t()} | {:error, Ecto.Changeset.t()}
+  def update_preset(%TemplatePreset{} = preset, attrs) do
+    preset |> TemplatePreset.changeset(attrs) |> repo().update()
+  end
+
+  @doc """
+  Permanently deletes a preset (hard delete — no trash in Stage 1).
+  """
+  @spec delete_preset(TemplatePreset.t()) ::
+          {:ok, TemplatePreset.t()} | {:error, Ecto.Changeset.t()}
+  def delete_preset(%TemplatePreset{} = preset) do
+    repo().delete(preset)
+  end
+
+  @doc """
+  Returns staleness info for a preset.
+
+  A section is "broken" when its `template_uuid` references a template that
+  no longer exists, or whose `status` is `trashed` or `lost`.
+
+  Returns `%{broken_count: non_neg_integer(), broken_template_uuids: [binary()]}`.
+  """
+  @spec preset_stale_info(TemplatePreset.t()) :: %{
+          broken_count: non_neg_integer(),
+          broken_template_uuids: [binary()]
+        }
+  def preset_stale_info(%TemplatePreset{sections: sections}) do
+    referenced =
+      sections
+      |> Enum.map(&Map.get(&1, "template_uuid"))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    healthy =
+      Template
+      |> where([t], t.uuid in ^referenced and t.status not in ["trashed", "lost"])
+      |> select([t], t.uuid)
+      |> repo().all()
+      |> MapSet.new()
+
+    broken = Enum.reject(referenced, &MapSet.member?(healthy, &1))
+
+    %{broken_count: length(broken), broken_template_uuids: broken}
+  end
+
+  @doc "Fetches a preset by uuid, or `nil`."
+  @spec get_preset(binary()) :: TemplatePreset.t() | nil
+  def get_preset(uuid), do: repo().get(TemplatePreset, uuid)
 
   @doc """
   Lists presets, optionally filtered by `:scope_type` and `:scope_id`.
