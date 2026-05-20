@@ -918,6 +918,56 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc """
+  Phase A — emits batchUpdate requests that delete the placeholder range and
+  create a Google Docs table at its start index. After a doc re-fetch,
+  `fill_table_cells/3` populates the table.
+  """
+  def table_image_inserts(%{start_index: s, end_index: e}, media, opts)
+      when is_list(media) do
+    cols = (opts[:columns] || 1) |> max(1) |> min(@max_columns)
+    rows = (length(media) / cols) |> Float.ceil() |> trunc() |> max(1)
+
+    [
+      %{"deleteContentRange" => %{"range" => %{"startIndex" => s, "endIndex" => e}}},
+      %{"insertTable" => %{"rows" => rows, "columns" => cols,
+                           "location" => %{"index" => s}}}
+    ]
+  end
+
+  @doc """
+  Phase B — emits insertInlineImage requests for each cell, last-first so
+  earlier inserts don't shift later indices. One image per cell; extra cells
+  beyond the media list are ignored.
+  """
+  def fill_table_cells(cells, media, %{image_width_pt: w_pt})
+      when is_list(cells) do
+    cells
+    |> Enum.zip(media)
+    |> Enum.reverse()
+    |> Enum.map(fn {%{insert_index: idx}, media_item} ->
+      uri = Map.get(media_item, :uri) || Map.get(media_item, "uri")
+      src_w = Map.get(media_item, :width_px) || Map.get(media_item, "width_px")
+      src_h = Map.get(media_item, :height_px) || Map.get(media_item, "height_px")
+
+      # scale_height works on any consistent unit; using PT values directly
+      # preserves the aspect ratio. When src dimensions are absent it falls
+      # back to w_pt (a square), which the API will then scale to fit.
+      scaled_h_pt = scale_height(w_pt, src_w, src_h) || w_pt
+
+      %{
+        "insertInlineImage" => %{
+          "location" => %{"index" => idx},
+          "uri" => uri,
+          "objectSize" => %{
+            "width" => %{"magnitude" => w_pt * 1.0, "unit" => "PT"},
+            "height" => %{"magnitude" => scaled_h_pt * 1.0, "unit" => "PT"}
+          }
+        }
+      }
+    end)
+  end
+
+  @doc """
   Builds the list of `batchUpdate` request maps to substitute image tags.
 
   `fills` is a map keyed by variable name; each value carries `kind`,
