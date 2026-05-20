@@ -1234,7 +1234,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     # Step 1: upload the binary via the Drive simple-upload endpoint.
     # The metadata and the file body are sent in a multipart/related request.
     boundary = "---pkdc_boundary_#{:erlang.unique_integer([:positive])}"
-    meta_json = Jason.encode!(%{name: name})
+    meta_json = "{\"name\":\"#{String.replace(name, "\"", "\\\"")}\"}"
 
     body =
       "--#{boundary}\r\n" <>
