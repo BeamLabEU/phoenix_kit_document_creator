@@ -27,8 +27,10 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
        selected: nil,
        types: [],
        presets: [],
-       categories_trash: false,
-       types_trash: false
+       categories_status_mode: "active",
+       types_status_mode: "active",
+       trashed_categories_count: 0,
+       trashed_types_count: 0
      )}
   end
 
@@ -51,27 +53,37 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     with_category(socket, uuid, fn category ->
       {:noreply,
        socket
-       |> assign(selected: category, types_trash: false)
+       |> assign(selected: category, types_status_mode: "active")
        |> reload_types()}
     end)
   end
 
-  def handle_event("toggle_categories_trash", _params, socket) do
-    trash = !socket.assigns.categories_trash
-
+  def handle_event(
+        "switch_status",
+        %{"target" => "categories", "mode" => mode},
+        socket
+      )
+      when mode in ["active", "trashed"] do
     {:noreply,
      socket
-     |> assign(categories_trash: trash, selected: nil, types: [])
+     |> assign(categories_status_mode: mode, selected: nil, types: [])
      |> reload_categories()}
   end
 
-  def handle_event("toggle_types_trash", _params, socket) do
-    trash = !socket.assigns.types_trash
-
+  def handle_event(
+        "switch_status",
+        %{"target" => "types", "mode" => mode},
+        socket
+      )
+      when mode in ["active", "trashed"] do
     {:noreply,
      socket
-     |> assign(types_trash: trash)
+     |> assign(types_status_mode: mode)
      |> reload_types()}
+  end
+
+  def handle_event("switch_status", _params, socket) do
+    {:noreply, socket}
   end
 
   def handle_event("trash_category", %{"uuid" => uuid}, socket) do
@@ -273,29 +285,18 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
             </div>
 
             <%!-- Active / Trash sub-tabs --%>
-            <div class="flex gap-1 mb-3 border-b border-base-200">
-              <button
-                type="button"
-                phx-click="toggle_categories_trash"
-                class={"btn btn-ghost btn-xs pb-2 rounded-none border-b-2 #{if not @categories_trash, do: "border-primary text-primary", else: "border-transparent"}"}
-              >
-                {gettext("Active")}
-              </button>
-              <button
-                type="button"
-                phx-click="toggle_categories_trash"
-                class={"btn btn-ghost btn-xs pb-2 rounded-none border-b-2 #{if @categories_trash, do: "border-primary text-primary", else: "border-transparent"}"}
-              >
-                {gettext("Trash")}
-              </button>
-            </div>
+            <.status_subtabs
+              target="categories"
+              status_mode={@categories_status_mode}
+              trashed_count={@trashed_categories_count}
+            />
 
             <%!-- Category list --%>
             <ul
-              id={"categories-sortable-#{@categories_trash}"}
+              id={"categories-sortable-#{@categories_status_mode}"}
               class="flex flex-col gap-1"
-              phx-hook={!@categories_trash && "SortableGrid"}
-              data-sortable={!@categories_trash && "true"}
+              phx-hook={@categories_status_mode == "active" && "SortableGrid"}
+              data-sortable={@categories_status_mode == "active" && "true"}
               data-sortable-event="reorder_categories"
               data-sortable-items=".sortable-item"
               data-sortable-handle=".pk-drag-handle"
@@ -303,7 +304,9 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
             >
               <%= if @categories == [] do %>
                 <li class="text-sm text-base-content/50 py-4 text-center">
-                  {if @categories_trash, do: gettext("No trashed categories."), else: gettext("No categories yet.")}
+                  {if @categories_status_mode == "trashed",
+                    do: gettext("No trashed categories."),
+                    else: gettext("No categories yet.")}
                 </li>
               <% end %>
               <%= for cat <- @categories do %>
@@ -312,7 +315,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                   data-id={cat.uuid}
                 >
                   <span
-                    :if={not @categories_trash}
+                    :if={@categories_status_mode == "active"}
                     class="pk-drag-handle cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/60 shrink-0"
                     title={gettext("Drag to reorder")}
                   >
@@ -326,7 +329,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                   >
                     {cat.name}
                   </button>
-                  <.category_row_menu category={cat} trash_view={@categories_trash} />
+                  <.category_row_menu category={cat} trash_view={@categories_status_mode == "trashed"} />
                 </li>
               <% end %>
             </ul>
@@ -340,7 +343,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
               <h2 class="card-title text-base">
                 {if @selected, do: @selected.name, else: gettext("Types")}
               </h2>
-              <%= if @selected && not @categories_trash do %>
+              <%= if @selected && @categories_status_mode == "active" do %>
                 <a
                   href={Routes.path("/admin/document-creator/categories/#{@selected.uuid}/types/new")}
                   class="btn btn-primary btn-xs"
@@ -352,28 +355,17 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
             <%= if @selected do %>
               <%!-- Active / Trash sub-tabs for types --%>
-              <div class="flex gap-1 mb-3 border-b border-base-200">
-                <button
-                  type="button"
-                  phx-click="toggle_types_trash"
-                  class={"btn btn-ghost btn-xs pb-2 rounded-none border-b-2 #{if not @types_trash, do: "border-primary text-primary", else: "border-transparent"}"}
-                >
-                  {gettext("Active")}
-                </button>
-                <button
-                  type="button"
-                  phx-click="toggle_types_trash"
-                  class={"btn btn-ghost btn-xs pb-2 rounded-none border-b-2 #{if @types_trash, do: "border-primary text-primary", else: "border-transparent"}"}
-                >
-                  {gettext("Trash")}
-                </button>
-              </div>
+              <.status_subtabs
+                target="types"
+                status_mode={@types_status_mode}
+                trashed_count={@trashed_types_count}
+              />
 
               <ul
-                id={"types-sortable-#{@types_trash}"}
+                id={"types-sortable-#{@types_status_mode}"}
                 class="flex flex-col gap-1"
-                phx-hook={!@types_trash && "SortableGrid"}
-                data-sortable={!@types_trash && "true"}
+                phx-hook={@types_status_mode == "active" && "SortableGrid"}
+                data-sortable={@types_status_mode == "active" && "true"}
                 data-sortable-event="reorder_types"
                 data-sortable-items=".sortable-item"
                 data-sortable-handle=".pk-drag-handle"
@@ -381,7 +373,9 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
               >
                 <%= if @types == [] do %>
                   <li class="text-sm text-base-content/50 py-4 text-center">
-                    {if @types_trash, do: gettext("No trashed types."), else: gettext("No types yet.")}
+                    {if @types_status_mode == "trashed",
+                      do: gettext("No trashed types."),
+                      else: gettext("No types yet.")}
                   </li>
                 <% end %>
                 <%= for type <- @types do %>
@@ -390,14 +384,14 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                     data-id={type.uuid}
                   >
                     <span
-                      :if={not @types_trash}
+                      :if={@types_status_mode == "active"}
                       class="pk-drag-handle cursor-grab active:cursor-grabbing text-base-content/30 hover:text-base-content/60 shrink-0"
                       title={gettext("Drag to reorder")}
                     >
                       <span class="hero-bars-3 w-4 h-4" />
                     </span>
                     <span class="flex-1 text-sm font-medium">{type.name}</span>
-                    <.type_row_menu type={type} trash_view={@types_trash} />
+                    <.type_row_menu type={type} trash_view={@types_status_mode == "trashed"} />
                   </li>
                 <% end %>
               </ul>
@@ -410,7 +404,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
         </div>
       </div>
 
-      <%= if @selected && not @categories_trash do %>
+      <%= if @selected && @categories_status_mode == "active" do %>
         <div class="card bg-base-100 shadow-sm border border-base-200">
           <div class="card-body p-4">
             <div class="flex items-center justify-between mb-3">
@@ -469,6 +463,35 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
   end
 
   # ── Private components ─────────────────────────────────────────────────────
+
+  attr(:target, :string, required: true)
+  attr(:status_mode, :string, required: true)
+  attr(:trashed_count, :integer, required: true)
+
+  defp status_subtabs(assigns) do
+    ~H"""
+    <div :if={@trashed_count > 0 or @status_mode == "trashed"} class="flex mb-3 border-b border-base-200">
+      <button
+        type="button"
+        phx-click="switch_status"
+        phx-value-target={@target}
+        phx-value-mode="active"
+        class={"px-3 py-1 text-xs font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer #{if @status_mode == "active", do: "border-primary text-primary", else: "border-transparent text-base-content/50 hover:text-base-content"}"}
+      >
+        {gettext("Active")}
+      </button>
+      <button
+        type="button"
+        phx-click="switch_status"
+        phx-value-target={@target}
+        phx-value-mode="trashed"
+        class={"px-3 py-1 text-xs font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer #{if @status_mode == "trashed", do: "border-error text-error", else: "border-transparent text-base-content/50 hover:text-base-content"}"}
+      >
+        {gettext("Trash")}
+      </button>
+    </div>
+    """
+  end
 
   defp category_row_menu(assigns) do
     ~H"""
@@ -606,8 +629,14 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
   end
 
   defp reload_categories(socket) do
-    opts = if socket.assigns.categories_trash, do: [status: "deleted"], else: []
+    status_mode = socket.assigns.categories_status_mode
+    opts = if status_mode == "trashed", do: [status: "deleted"], else: []
     categories = Taxonomy.list_categories(opts)
+
+    trashed_categories_count =
+      if status_mode == "trashed",
+        do: length(categories),
+        else: length(Taxonomy.list_categories(status: "deleted"))
 
     # Re-sync `selected` against the freshly-loaded list so the right-column
     # header does not drift after reorder, delete, or edit operations.
@@ -618,7 +647,11 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
       end
 
     socket
-    |> assign(categories: categories, selected: selected)
+    |> assign(
+      categories: categories,
+      selected: selected,
+      trashed_categories_count: trashed_categories_count
+    )
     |> reload_types()
   end
 
@@ -626,11 +659,19 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     socket =
       case socket.assigns.selected do
         nil ->
-          assign(socket, types: [])
+          assign(socket, types: [], trashed_types_count: 0)
 
         category ->
-          opts = if socket.assigns.types_trash, do: [status: "deleted"], else: []
-          assign(socket, types: Taxonomy.list_types_for_category(category.uuid, opts))
+          status_mode = socket.assigns.types_status_mode
+          opts = if status_mode == "trashed", do: [status: "deleted"], else: []
+          types = Taxonomy.list_types_for_category(category.uuid, opts)
+
+          trashed_types_count =
+            if status_mode == "trashed",
+              do: length(types),
+              else: length(Taxonomy.list_types_for_category(category.uuid, status: "deleted"))
+
+          assign(socket, types: types, trashed_types_count: trashed_types_count)
       end
 
     reload_presets(socket)
