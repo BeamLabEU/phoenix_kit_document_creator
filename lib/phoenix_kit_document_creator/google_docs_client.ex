@@ -1198,7 +1198,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Move a file to a different folder in Google Drive."
   @spec move_file(String.t(), String.t()) ::
-          :ok | {:error, :invalid_file_id | :move_failed | :get_file_parents_failed | term()}
+          :ok
+          | {:error,
+             :invalid_file_id
+             | :move_failed
+             | :get_file_parents_failed
+             | :drive_file_not_found
+             | term()}
   def move_file(file_id, to_folder_id) do
     with {:ok, fid} <- validate_file_id(file_id),
          {:ok, _tid} <- validate_file_id(to_folder_id) do
@@ -1220,6 +1226,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           {:ok, %{status: status}} when status in 200..299 ->
             :ok
 
+          {:ok, %{status: 404}} ->
+            {:error, :drive_file_not_found}
+
           {:ok, %{body: body}} ->
             log_drive_error("move failed", body)
             {:error, :move_failed}
@@ -1227,6 +1236,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           {:error, _} = err ->
             err
         end
+
+      {:ok, %{status: 404}} ->
+        {:error, :drive_file_not_found}
 
       {:ok, %{body: body}} ->
         log_drive_error("get file parents failed", body)

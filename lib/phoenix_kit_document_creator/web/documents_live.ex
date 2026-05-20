@@ -13,7 +13,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   import PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal
 
+  alias PhoenixKit.Users.Auth
   alias PhoenixKitDocumentCreator.Documents
+  alias PhoenixKitDocumentCreator.Errors
   alias PhoenixKitDocumentCreator.GoogleDocsClient
   alias PhoenixKitDocumentCreator.Taxonomy
   alias PhoenixKitDocumentCreator.Web.Helpers
@@ -58,6 +60,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        loading: true,
        last_loaded_at: nil,
        error: nil,
+       warning: nil,
        # Modal state
        modal_open: false,
        modal_step: "choose",
@@ -301,6 +304,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             socket
             |> apply_optimistic_move(file_id, spec)
             |> put_flash(:info, spec.success)
+
+          {:error, :drive_file_not_found} when action == :restore ->
+            Logger.warning("#{action} failed for #{file_id}: drive file not found (404)")
+            assign(socket, warning: Errors.message(:drive_file_not_found))
 
           {:error, reason} ->
             Logger.error("#{action} failed for #{file_id}: #{inspect(reason)}")
@@ -731,6 +738,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     {:noreply, assign(socket, error: nil)}
   end
 
+  def handle_event("dismiss_warning", _params, socket) do
+    {:noreply, assign(socket, warning: nil)}
+  end
+
   # ── Event helpers ──────────────────────────────────────────────────
 
   defp do_modal_select_template(socket, file_id, name) do
@@ -981,6 +992,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           </div>
         </div>
 
+        <%!-- Warning --%>
+        <div :if={@warning} class="alert alert-warning" phx-click="dismiss_warning">
+          <span class="hero-exclamation-triangle w-5 h-5" />
+          <span>{@warning}</span>
+        </div>
+
         <%!-- Error --%>
         <div :if={@error} class="alert alert-error" phx-click="dismiss_error">
           <span class="hero-x-circle w-5 h-5" />
@@ -1189,6 +1206,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       |> Enum.flat_map(fn {_cat_uuid, opts} -> opts end)
       |> Map.new()
 
+    deleted_by_names = build_deleted_by_names(files)
+
     %{
       files: files,
       view_mode: assigns.view_mode,
@@ -1200,9 +1219,44 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       category_names: cat_names,
       cat_options: cat_options,
       types_by_category: types_by_category,
-      type_names: type_names
+      type_names: type_names,
+      deleted_by_names: deleted_by_names
     }
   end
+
+  # Collect distinct by_uuid values from trashed files and resolve them to
+  # display names in one query. Returns a %{uuid => display_name} map.
+  defp build_deleted_by_names(files) do
+    files
+    |> extract_deleted_by_uuids()
+    |> Auth.get_users_by_uuids()
+    |> Map.new(&{&1.uuid, user_display_name(&1)})
+  end
+
+  defp extract_deleted_by_uuids(files) do
+    files
+    |> Enum.flat_map(fn file ->
+      case get_in(file, ["data", "deleted", "by_uuid"]) do
+        nil -> []
+        uuid -> [uuid]
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp user_display_name(%{first_name: first, last_name: last})
+       when is_binary(first) and first != "" and is_binary(last) and last != "",
+       do: "#{first} #{last}"
+
+  defp user_display_name(%{username: username})
+       when is_binary(username) and username != "",
+       do: username
+
+  defp user_display_name(%{email: email})
+       when is_binary(email) and email != "",
+       do: email
+
+  defp user_display_name(_), do: "unknown"
 
   defp render_file_grid(assigns) do
     ~H"""
@@ -1297,6 +1351,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             <p :if={file["modifiedTime"]} class="text-xs text-base-content/40 mt-auto pt-2">
               {format_time(file["modifiedTime"])}
             </p>
+            <p :if={@status_mode == "trashed"} class="text-xs text-base-content/40 pt-1">
+              <span class="hero-trash w-3 h-3 inline-block align-middle" />
+              {format_deleted_info(file["data"]["deleted"], @deleted_by_names)}
+            </p>
           </div>
 
           <%!-- Actions --%>
@@ -1357,6 +1415,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             <tr>
               <th>{gettext("Name")}</th>
               <th>{gettext("Status")}</th>
+              <th :if={@status_mode == "trashed"}>{gettext("Deleted")}</th>
               <th>{gettext("Modified")}</th>
               <th class="text-right">{gettext("Actions")}</th>
             </tr>
@@ -1364,7 +1423,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           <tbody>
             <tr :for={file <- @files} class="hover:bg-base-200/50">
               <%= if MapSet.member?(@pending_files, file["id"]) do %>
-                <td colspan="4" class="text-center py-6">
+                <td colspan={if @status_mode == "trashed", do: 5, else: 4} class="text-center py-6">
                   <span class="loading loading-spinner loading-sm text-base-content/40" />
                 </td>
               <% else %>
@@ -1414,6 +1473,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 >
                   {gettext("unfiled")}
                 </button>
+              </td>
+              <td :if={@status_mode == "trashed"} class="text-base-content/60 text-nowrap text-xs">
+                {format_deleted_info(file["data"]["deleted"], @deleted_by_names)}
               </td>
               <td class="text-base-content/60 text-nowrap">{format_time(file["modifiedTime"])}</td>
               <td class="text-right">
@@ -1652,6 +1714,25 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       _ -> iso_string
     end
   end
+
+  # Formats the "Deleted" display: "<date> · <display_name>" or "—" when
+  # no deletion metadata is present.
+  defp format_deleted_info(nil, _names), do: "—"
+
+  defp format_deleted_info(%{"at" => at_iso} = deleted, names) do
+    by_uuid = Map.get(deleted, "by_uuid")
+    name = if by_uuid, do: Map.get(names, by_uuid, gettext("unknown")), else: gettext("unknown")
+
+    formatted_at =
+      case DateTime.from_iso8601(at_iso) do
+        {:ok, dt, _} -> Calendar.strftime(dt, "%b %d, %Y")
+        _ -> at_iso
+      end
+
+    "#{formatted_at} · #{name}"
+  end
+
+  defp format_deleted_info(_deleted, _names), do: "—"
 
   defp sanitize_filename(name) do
     name

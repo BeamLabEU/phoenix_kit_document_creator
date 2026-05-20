@@ -12,6 +12,8 @@ defmodule PhoenixKitDocumentCreator.Integration.DriveBoundActionsTest do
   use PhoenixKitDocumentCreator.DataCase, async: false
 
   alias PhoenixKitDocumentCreator.Documents
+  alias PhoenixKitDocumentCreator.Schemas.Document
+  alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Test.Repo, as: TestRepo
   alias PhoenixKitDocumentCreator.Test.StubIntegrations
 
@@ -136,6 +138,78 @@ defmodule PhoenixKitDocumentCreator.Integration.DriveBoundActionsTest do
     end
   end
 
+  describe "delete_document/2 — data[\"deleted\"] stamping" do
+    test "stamps data[deleted] with at and by_uuid when a DB record exists" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "drv-doc-del-data-1"
+
+      {:ok, _} = Documents.register_existing_document(%{google_doc_id: file_id, name: "Doc"})
+
+      stub_folder_resolution!()
+      stub_drive_move!(file_id)
+
+      assert :ok = Documents.delete_document(file_id, actor_uuid: actor_uuid)
+
+      record = TestRepo.get_by!(Document, google_doc_id: file_id)
+      assert %{"deleted" => deleted} = record.data
+      assert deleted["by_uuid"] == actor_uuid
+      assert is_binary(deleted["at"])
+      assert {:ok, _dt, _} = DateTime.from_iso8601(deleted["at"])
+    end
+
+    test "stamps data[deleted] with nil by_uuid when no actor_uuid given" do
+      file_id = "drv-doc-del-data-2"
+
+      {:ok, _} = Documents.register_existing_document(%{google_doc_id: file_id, name: "Doc"})
+
+      stub_folder_resolution!()
+      stub_drive_move!(file_id)
+
+      assert :ok = Documents.delete_document(file_id)
+
+      record = TestRepo.get_by!(Document, google_doc_id: file_id)
+      assert %{"deleted" => deleted} = record.data
+      assert is_nil(deleted["by_uuid"])
+    end
+
+    test "preserves other data keys when stamping deleted" do
+      file_id = "drv-doc-del-data-3"
+      actor_uuid = Ecto.UUID.generate()
+
+      {:ok, doc} = Documents.register_existing_document(%{google_doc_id: file_id, name: "Doc"})
+      # Manually set an existing data key that must survive the delete stamp.
+      TestRepo.update!(Document.changeset(doc, %{data: %{"recipe" => "preserved"}}))
+
+      stub_folder_resolution!()
+      stub_drive_move!(file_id)
+
+      assert :ok = Documents.delete_document(file_id, actor_uuid: actor_uuid)
+
+      record = TestRepo.get_by!(Document, google_doc_id: file_id)
+      assert record.data["recipe"] == "preserved"
+      assert is_map(record.data["deleted"])
+    end
+  end
+
+  describe "delete_template/2 — data[\"deleted\"] stamping" do
+    test "stamps data[deleted] with at and by_uuid when a DB record exists" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "drv-tpl-del-data-1"
+
+      {:ok, _} = Documents.register_existing_template(%{google_doc_id: file_id, name: "Tpl"})
+
+      stub_folder_resolution!()
+      stub_drive_move!(file_id)
+
+      assert :ok = Documents.delete_template(file_id, actor_uuid: actor_uuid)
+
+      record = TestRepo.get_by!(Template, google_doc_id: file_id)
+      assert %{"deleted" => deleted} = record.data
+      assert deleted["by_uuid"] == actor_uuid
+      assert is_binary(deleted["at"])
+    end
+  end
+
   describe "restore_document/2 — happy path" do
     test "logs document.restored on :ok" do
       actor_uuid = Ecto.UUID.generate()
@@ -165,6 +239,52 @@ defmodule PhoenixKitDocumentCreator.Integration.DriveBoundActionsTest do
         actor_uuid: actor_uuid,
         metadata_has: %{"google_doc_id" => "drv-tpl-3"}
       )
+    end
+  end
+
+  describe "restore_document/2 — data[\"deleted\"] clearing" do
+    test "clears data[deleted] on restore when DB record exists" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "drv-doc-restore-data-1"
+
+      {:ok, doc} = Documents.register_existing_document(%{google_doc_id: file_id, name: "Doc"})
+
+      TestRepo.update!(
+        Document.changeset(doc, %{
+          data: %{"deleted" => %{"at" => "2025-01-01T00:00:00Z", "by_uuid" => actor_uuid}}
+        })
+      )
+
+      stub_folder_resolution!()
+      stub_drive_move!(file_id)
+
+      assert :ok = Documents.restore_document(file_id, actor_uuid: actor_uuid)
+
+      record = TestRepo.get_by!(Document, google_doc_id: file_id)
+      refute Map.has_key?(record.data, "deleted")
+    end
+  end
+
+  describe "restore_template/2 — data[\"deleted\"] clearing" do
+    test "clears data[deleted] on restore when DB record exists" do
+      actor_uuid = Ecto.UUID.generate()
+      file_id = "drv-tpl-restore-data-1"
+
+      {:ok, tpl} = Documents.register_existing_template(%{google_doc_id: file_id, name: "Tpl"})
+
+      TestRepo.update!(
+        Template.changeset(tpl, %{
+          data: %{"deleted" => %{"at" => "2025-01-01T00:00:00Z", "by_uuid" => actor_uuid}}
+        })
+      )
+
+      stub_folder_resolution!()
+      stub_drive_move!(file_id)
+
+      assert :ok = Documents.restore_template(file_id, actor_uuid: actor_uuid)
+
+      record = TestRepo.get_by!(Template, google_doc_id: file_id)
+      refute Map.has_key?(record.data, "deleted")
     end
   end
 
@@ -272,6 +392,63 @@ defmodule PhoenixKitDocumentCreator.Integration.DriveBoundActionsTest do
         actor_uuid: actor_uuid,
         metadata_has: %{"google_doc_id" => file_id, "folder_id" => "root"}
       )
+    end
+  end
+
+  # ── Drive 404 handling ─────────────────────────────────────────────────
+
+  describe "restore_document/2 — Drive 404 (file deleted from Drive)" do
+    test "returns {:error, :drive_file_not_found} when GET parents returns 404" do
+      file_id = "drv-doc-404-get"
+      stub_folder_resolution!()
+
+      StubIntegrations.stub_request(
+        :get,
+        ~r{/drive/v3/files/#{Regex.escape(file_id)}(\?|$)},
+        {:ok,
+         %{status: 404, body: %{"error" => %{"code" => 404, "message" => "File not found."}}}}
+      )
+
+      assert {:error, :drive_file_not_found} =
+               Documents.restore_document(file_id, actor_uuid: Ecto.UUID.generate())
+    end
+
+    test "returns {:error, :drive_file_not_found} when PATCH move returns 404" do
+      file_id = "drv-doc-404-patch"
+      stub_folder_resolution!()
+
+      StubIntegrations.stub_request(
+        :get,
+        ~r{/drive/v3/files/#{Regex.escape(file_id)}(\?|$)},
+        {:ok, %{status: 200, body: %{"id" => file_id, "parents" => ["old-parent"]}}}
+      )
+
+      StubIntegrations.stub_request(
+        :patch,
+        "/drive/v3/files/#{file_id}",
+        {:ok,
+         %{status: 404, body: %{"error" => %{"code" => 404, "message" => "File not found."}}}}
+      )
+
+      assert {:error, :drive_file_not_found} =
+               Documents.restore_document(file_id, actor_uuid: Ecto.UUID.generate())
+    end
+  end
+
+  describe "restore_template/2 — Drive 404 (file deleted from Drive)" do
+    test "returns {:error, :drive_file_not_found} when Drive returns 404" do
+      file_id = "drv-tpl-404"
+      stub_folder_resolution!()
+
+      StubIntegrations.stub_request(
+        :get,
+        ~r{/drive/v3/files/#{Regex.escape(file_id)}(\?|$)},
+        {:ok,
+         %{status: 404, body: %{"error" => %{"code" => 404, "message" => "File not found."}}}}
+      )
+
+      assert {:error, :drive_file_not_found} =
+               Documents.restore_template(file_id, actor_uuid: Ecto.UUID.generate())
     end
   end
 
