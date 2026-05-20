@@ -1204,6 +1204,94 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # Google Drive API
   # ===========================================================================
 
+  @drive_upload_base "https://www.googleapis.com/upload/drive/v3"
+
+  @doc """
+  Upload a raw image binary to Google Drive and make it link-shareable so that
+  Google's servers (e.g. the Docs API `insertInlineImage` endpoint) can fetch
+  it.
+
+  Returns `{:ok, drive_url}` where `drive_url` is a publicly-accessible
+  `https://drive.google.com/uc?export=view&id=<file_id>` URL that the Google
+  Docs API accepts for inline-image insertion.
+
+  The uploaded file is created in the authenticated account's root Drive
+  folder. Callers should delete it after the document is composed if
+  persistence is undesirable (use `delete_document/1` passing the file_id).
+
+  ## Parameters
+    - `data` — raw image binary
+    - `mime_type` — MIME type string, e.g. `"image/jpeg"`
+    - `opts` — optional keyword list; supports `:name` (file name, defaults to
+      `"embed-image"`)
+  """
+  @spec upload_image_for_embedding(binary(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def upload_image_for_embedding(data, mime_type, opts \\ [])
+      when is_binary(data) and is_binary(mime_type) do
+    name = Keyword.get(opts, :name, "embed-image")
+
+    # Step 1: upload the binary via the Drive simple-upload endpoint.
+    # The metadata and the file body are sent in a multipart/related request.
+    boundary = "---pkdc_boundary_#{:erlang.unique_integer([:positive])}"
+    meta_json = Jason.encode!(%{name: name})
+
+    body =
+      "--#{boundary}\r\n" <>
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" <>
+        meta_json <>
+        "\r\n--#{boundary}\r\n" <>
+        "Content-Type: #{mime_type}\r\n\r\n" <>
+        data <>
+        "\r\n--#{boundary}--"
+
+    upload_opts = [
+      headers: [{"content-type", "multipart/related; boundary=#{boundary}"}],
+      body: body,
+      params: [uploadType: "multipart", fields: "id"]
+    ]
+
+    case authenticated_request(:post, "#{@drive_upload_base}/files", upload_opts) do
+      {:ok, %{status: status, body: %{"id" => file_id}}} when status in 200..299 ->
+        case set_anyone_reader_permission(file_id) do
+          :ok ->
+            {:ok, "https://drive.google.com/uc?export=view&id=#{file_id}"}
+
+          {:error, _} = err ->
+            err
+        end
+
+      {:ok, %{body: body}} ->
+        log_drive_error("upload image for embedding failed", body)
+        {:error, :upload_failed}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # Grant anyone-with-link read access to a Drive file so Google's servers
+  # can fetch it when embedding via insertInlineImage.
+  defp set_anyone_reader_permission(file_id) do
+    body = %{type: "anyone", role: "reader"}
+
+    case authenticated_request(
+           :post,
+           "#{@drive_base}/files/#{file_id}/permissions",
+           json: body
+         ) do
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %{body: body}} ->
+        log_drive_error("set anyone reader permission failed", body)
+        {:error, :permission_failed}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   @doc "Move a file to a different folder in Google Drive."
   @spec move_file(String.t(), String.t()) ::
           :ok
@@ -1571,6 +1659,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   defp substitute_all_images(doc_id, doc2, sections, ranges) do
+    # Build a flat list of {name, fill, range} tuples — one per slot per section.
+    # Preserving duplicates is intentional: two sections may share the same slot
+    # name (e.g. both have `{{ images: sub_order_photos }}`). We resolve which
+    # fill belongs to which in-document tag by matching the tag's start_index
+    # against the section's allocated range, not just by slot name.
     all_image_fills =
       sections
       |> Enum.flat_map(fn s ->
@@ -1582,21 +1675,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     if all_image_fills == [] do
       :ok
     else
-      fills_map = Map.new(all_image_fills, fn {name, fill, _} -> {name, fill} end)
-      range_by_name = Map.new(all_image_fills, fn {name, _, range} -> {name, range} end)
+      all_slot_names = Enum.map(all_image_fills, fn {name, _, _} -> name end) |> Enum.uniq()
       content_width_pt = content_width_pt(doc2)
 
+      # For each image tag found in the document, find the section-scoped fill
+      # whose name matches AND whose allocated range contains the tag's position.
+      # This correctly handles duplicate slot names across sections.
       filtered_ranges =
         doc2
-        |> find_image_tag_ranges(Map.keys(fills_map))
-        |> Enum.filter(fn %{name: name, start_index: s} ->
-          in_section_range?(range_by_name, name, s)
-        end)
+        |> find_image_tag_ranges(all_slot_names)
+        |> Enum.flat_map(&resolve_image_tag_fill(all_image_fills, &1))
 
       # Partition into table slots (image_list + columns >= 2) and inline slots.
       {table_ranges, inline_ranges} =
-        Enum.split_with(filtered_ranges, fn %{name: name} ->
-          fill = Map.fetch!(fills_map, name)
+        Enum.split_with(filtered_ranges, fn %{fill: fill} ->
           fill.kind == :image_list and Map.get(fill, :columns, 1) >= 2
         end)
 
@@ -1604,7 +1696,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       # Sort all requests descending by start_index so earlier inserts don't shift later ones.
       phase1_requests =
         (table_ranges ++ inline_ranges)
-        |> build_image_batch_requests(fills_map, content_width_pt)
+        |> build_image_batch_requests_with_embedded_fills(content_width_pt)
 
       # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
       # Phase 2 can identify the newly inserted tables by set-difference.
@@ -1618,13 +1710,31 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           do_fill_table_cells(
             doc_id,
             table_ranges,
-            fills_map,
             content_width_pt,
             pre_existing_table_starts
           )
         end
       end
     end
+  end
+
+  # Variant of build_image_batch_requests/3 for ranges that already carry an
+  # embedded :fill key (as produced by substitute_all_images/4). Falls back to
+  # the public fill-map variant for callers that supply a separate fills map.
+  defp build_image_batch_requests_with_embedded_fills(ranges, content_width_pt) do
+    ranges
+    |> Enum.sort_by(& &1.start_index, :desc)
+    |> Enum.flat_map(fn %{fill: fill, start_index: s, end_index: e} ->
+      delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
+
+      inserts =
+        case fill.kind do
+          :image -> single_image_inserts(fill, s)
+          :image_list -> list_image_inserts(fill, s, content_width_pt)
+        end
+
+      [delete | inserts]
+    end)
   end
 
   # Phase 2: re-fetch the doc after table creation, locate the new tables by
@@ -1637,7 +1747,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp do_fill_table_cells(
          doc_id,
          table_ranges,
-         fills_map,
          content_width_pt,
          pre_existing_table_starts
        ) do
@@ -1664,8 +1773,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       else
         phase2_requests =
           Enum.zip(table_slots_asc, new_tables)
-          |> Enum.flat_map(fn {%{name: name}, table_el} ->
-            fill = Map.fetch!(fills_map, name)
+          |> Enum.flat_map(fn {%{fill: fill}, table_el} ->
             cols = Map.get(fill, :columns, 1)
             image_width_pt = image_width_for_columns(content_width_pt, cols)
             cells = extract_table_cells(table_el)
@@ -1700,10 +1808,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp extract_table_cells(_), do: []
 
-  defp in_section_range?(range_by_name, name, s) do
-    case Map.get(range_by_name, name) do
-      nil -> false
-      {rs, re} -> s >= rs and s < re
+  # Check whether document index `s` falls within the given range tuple.
+  # Used by substitute_all_images/4 when matching image tags to section fills.
+  defp in_section_range_tuple?(nil, _s), do: false
+  defp in_section_range_tuple?({rs, re}, s), do: s >= rs and s < re
+
+  # For an image tag found in the document, look up the section-scoped fill
+  # whose slot name matches AND whose allocated range contains the tag's position.
+  # Returns `[tag_with_fill]` when found, `[]` when no section owns this tag.
+  defp resolve_image_tag_fill(all_image_fills, %{name: name, start_index: s} = tag) do
+    case Enum.find(all_image_fills, fn {n, _fill, range} ->
+           n == name and in_section_range_tuple?(range, s)
+         end) do
+      nil -> []
+      {_name, fill, _range} -> [Map.put(tag, :fill, fill)]
     end
   end
 
@@ -1826,7 +1944,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp build_media_items(%{"media" => media}) when is_list(media) do
     Enum.map(media, fn m ->
-      %{uri: Map.get(m, "uri", ""), width_px: Map.get(m, "width_px"), height_px: nil}
+      %{
+        uri: Map.get(m, "uri", ""),
+        width_px: Map.get(m, "width_px"),
+        height_px: Map.get(m, "height_px")
+      }
     end)
   end
 

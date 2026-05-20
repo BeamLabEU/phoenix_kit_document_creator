@@ -256,4 +256,156 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientPhaseTest do
       assert Enum.any?(requests, &Map.has_key?(&1, :insertInlineImage))
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Bug 3 regression: duplicate slot names across sections must not collide
+  # ---------------------------------------------------------------------------
+
+  describe "duplicate slot names across sections" do
+    # Helper that replicates the fill-resolution logic from substitute_all_images/4.
+    # We test this logic in isolation (no Drive API calls) so the test is fast and
+    # deterministic. The algorithm:
+    #   1. Build (name, fill, range) tuples — one per slot per section.
+    #   2. find_image_tag_ranges/2 locates all {{ image/images: name }} tags in the doc.
+    #   3. For each tag, find the first (name, fill, range) tuple whose name matches AND
+    #      whose range contains the tag's start_index.
+    defp resolve_tagged_ranges(all_image_fills, doc, all_slot_names) do
+      GoogleDocsClient.find_image_tag_ranges(doc, all_slot_names)
+      |> Enum.flat_map(&resolve_tag(all_image_fills, &1))
+    end
+
+    defp resolve_tag(all_image_fills, %{name: name, start_index: s} = tag) do
+      case Enum.find(all_image_fills, fn {n, _fill, range} ->
+             n == name and range_contains?(range, s)
+           end) do
+        nil -> []
+        {_name, fill, _range} -> [Map.put(tag, :fill, fill)]
+      end
+    end
+
+    defp range_contains?(nil, _s), do: false
+    defp range_contains?({rs, re}, s), do: s >= rs and s < re
+
+    # Builds a minimal Google Docs API document body with two paragraphs, each
+    # containing one image tag occurrence of `slot_name`.
+    # section_a_start: start of first tag in the doc (e.g. 1)
+    # section_b_start: start of second tag (e.g. 100)
+    defp fake_doc_with_duplicate_image_slot(slot_name) do
+      tag_text = "{{ image: #{slot_name} }}"
+
+      %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "textRun" => %{"content" => tag_text}
+                  }
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 100,
+                    "textRun" => %{"content" => tag_text}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    end
+
+    test "both section fills are resolved correctly when slot name is shared" do
+      slot_name = "sub_order_photos"
+      doc = fake_doc_with_duplicate_image_slot(slot_name)
+
+      fill_a = %{
+        kind: :image,
+        columns: 1,
+        default_width_px: 400,
+        opacity: 1.0,
+        z_index: 0,
+        separator: :newline,
+        media: [%{uri: "section-a-image.jpg", width_px: 800, height_px: 600}]
+      }
+
+      fill_b = %{
+        kind: :image,
+        columns: 1,
+        default_width_px: 400,
+        opacity: 1.0,
+        z_index: 0,
+        separator: :newline,
+        media: [%{uri: "section-b-image.jpg", width_px: 1200, height_px: 900}]
+      }
+
+      # Section A occupies doc range [0, 50); section B occupies [50, 200).
+      # The first tag at index 1 belongs to section A; the second at index 100 to B.
+      all_image_fills = [
+        {slot_name, fill_a, {0, 50}},
+        {slot_name, fill_b, {50, 200}}
+      ]
+
+      tagged = resolve_tagged_ranges(all_image_fills, doc, [slot_name])
+
+      assert length(tagged) == 2,
+             "expected both image slots to be resolved, got #{length(tagged)}"
+
+      [tag_a, tag_b] = Enum.sort_by(tagged, & &1.start_index)
+
+      assert tag_a.start_index == 1
+
+      assert tag_a.fill == fill_a,
+             "section A tag should get fill_a (section-a-image.jpg), got #{inspect(tag_a.fill)}"
+
+      assert tag_b.start_index == 100
+
+      assert tag_b.fill == fill_b,
+             "section B tag should get fill_b (section-b-image.jpg), got #{inspect(tag_b.fill)}"
+    end
+
+    test "old collision behaviour: Map.new/2 with duplicate keys loses section A fill" do
+      # This documents the old broken behaviour to ensure we do NOT regress.
+      slot_name = "slot"
+
+      fill_a = %{kind: :image, media: [%{uri: "a.jpg"}]}
+      fill_b = %{kind: :image, media: [%{uri: "b.jpg"}]}
+
+      # With the old Map.new approach, section B's fill overwrites section A's:
+      all_image_fills = [
+        {slot_name, fill_a, {0, 50}},
+        {slot_name, fill_b, {50, 200}}
+      ]
+
+      old_fills_map = Map.new(all_image_fills, fn {name, fill, _} -> {name, fill} end)
+      old_range_by_name = Map.new(all_image_fills, fn {name, _, range} -> {name, range} end)
+
+      # Old fills_map: only section B's fill survives (last-write wins).
+      assert old_fills_map[slot_name] == fill_b,
+             "old Map.new collides: fill_a is lost, only fill_b survives"
+
+      # Old range_by_name: only section B's range survives.
+      assert old_range_by_name[slot_name] == {50, 200},
+             "old Map.new collides: section A range is lost"
+
+      # New approach correctly assigns both:
+      doc = fake_doc_with_duplicate_image_slot(slot_name)
+      tagged = resolve_tagged_ranges(all_image_fills, doc, [slot_name])
+
+      assert length(tagged) == 2
+
+      uris =
+        tagged
+        |> Enum.sort_by(& &1.start_index)
+        |> Enum.map(&(&1.fill.media |> hd() |> Map.get(:uri)))
+
+      assert uris == ["a.jpg", "b.jpg"]
+    end
+  end
 end
