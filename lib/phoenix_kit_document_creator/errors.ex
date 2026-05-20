@@ -28,6 +28,7 @@ defmodule PhoenixKitDocumentCreator.Errors do
           | :create_folder_failed
           | :deleted_folder_not_found
           | :documents_folder_not_found
+          | :drive_file_not_found
           | :file_trashed
           | :folder_not_found
           | :folder_search_failed
@@ -66,6 +67,13 @@ defmodule PhoenixKitDocumentCreator.Errors do
   def message(:create_folder_failed), do: gettext("Failed to create the Drive folder")
   def message(:deleted_folder_not_found), do: gettext("Deleted folder not found")
   def message(:documents_folder_not_found), do: gettext("Documents folder not found")
+
+  def message(:drive_file_not_found),
+    do:
+      gettext(
+        "File is missing in Google Drive — it cannot be restored. You can permanently delete this record."
+      )
+
   def message(:file_trashed), do: gettext("File is in the Drive trash")
   def message(:folder_not_found), do: gettext("Folder not found")
   def message(:folder_search_failed), do: gettext("Failed to search Drive for the folder")

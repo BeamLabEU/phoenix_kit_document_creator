@@ -885,6 +885,88 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # Google rejects with `INVALID_ARGUMENT` (`google.apps.docs.v1.Unit`), so every
   # `insertInlineImage` batch failed.
   @px_to_pt 0.75
+  @image_gap_pt 8.0
+  @default_content_width_pt 468.0
+  @max_columns 4
+
+  @doc """
+  Page content width in points = pageSize.width − marginLeft − marginRight.
+  Falls back to 468pt (US Letter with 1" margins) if anything is missing.
+  """
+  def content_width_pt(document) when is_map(document) do
+    ds = Map.get(document, "documentStyle") || %{}
+    width = magnitude(get_in(ds, ["pageSize", "width"]))
+    margin_l = magnitude(Map.get(ds, "marginLeft")) || 72.0
+    margin_r = magnitude(Map.get(ds, "marginRight")) || 72.0
+
+    case width do
+      nil -> @default_content_width_pt
+      w -> w - margin_l - margin_r
+    end
+  end
+
+  defp magnitude(%{"magnitude" => m}) when is_number(m), do: m * 1.0
+  defp magnitude(_), do: nil
+
+  @doc """
+  Per-image width in points for N columns sharing `content_width_pt`.
+  """
+  def image_width_for_columns(content_width_pt, columns)
+      when is_number(content_width_pt) do
+    n = columns |> max(1) |> min(@max_columns)
+    (content_width_pt - @image_gap_pt * (n - 1)) / n
+  end
+
+  @doc """
+  Phase A — emits batchUpdate requests that delete the placeholder range and
+  create a Google Docs table at its start index. After a doc re-fetch,
+  `fill_table_cells/3` populates the table.
+  """
+  def table_image_inserts(%{start_index: s, end_index: e}, media, opts)
+      when is_list(media) do
+    cols = (opts[:columns] || 1) |> max(1) |> min(@max_columns)
+    rows = (length(media) / cols) |> Float.ceil() |> trunc() |> max(1)
+
+    [
+      %{"deleteContentRange" => %{"range" => %{"startIndex" => s, "endIndex" => e}}},
+      %{"insertTable" => %{"rows" => rows, "columns" => cols, "location" => %{"index" => s}}}
+    ]
+  end
+
+  @doc """
+  Phase B — emits insertInlineImage requests for each cell, last-first so
+  earlier inserts don't shift later indices. One image per cell; extra cells
+  beyond the media list are ignored.
+  """
+  def fill_table_cells(cells, media, %{image_width_pt: w_pt})
+      when is_list(cells) do
+    cells
+    |> Enum.zip(media)
+    |> Enum.reverse()
+    |> Enum.map(fn {%{insert_index: idx}, media_item} ->
+      uri = Map.get(media_item, :uri) || Map.get(media_item, "uri")
+      src_w = Map.get(media_item, :width_px) || Map.get(media_item, "width_px")
+      src_h = Map.get(media_item, :height_px) || Map.get(media_item, "height_px")
+
+      # scale_height mixes units here: target is PT, src dims are PX. The
+      # resulting height is w_pt * (h_px / w_px), which is numerically in PT
+      # because the PX ratio cancels. Google Docs renders the correct aspect;
+      # absolute height value is not in PT when src dims are absent (falls back
+      # to w_pt, a square).
+      scaled_h_pt = scale_height(w_pt, src_w, src_h) || w_pt
+
+      %{
+        "insertInlineImage" => %{
+          "location" => %{"index" => idx},
+          "uri" => uri,
+          "objectSize" => %{
+            "width" => %{"magnitude" => w_pt * 1.0, "unit" => "PT"},
+            "height" => %{"magnitude" => scaled_h_pt * 1.0, "unit" => "PT"}
+          }
+        }
+      }
+    end)
+  end
 
   @doc """
   Builds the list of `batchUpdate` request maps to substitute image tags.
@@ -897,6 +979,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   """
   @spec build_image_batch_requests([map()], map()) :: [map()]
   def build_image_batch_requests(ranges, fills) do
+    build_image_batch_requests(ranges, fills, @default_content_width_pt)
+  end
+
+  @spec build_image_batch_requests([map()], map(), number()) :: [map()]
+  def build_image_batch_requests(ranges, fills, content_width_pt) do
     ranges
     |> Enum.sort_by(& &1.start_index, :desc)
     |> Enum.flat_map(fn %{name: name, start_index: s, end_index: e} ->
@@ -906,7 +993,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       inserts =
         case fill.kind do
           :image -> single_image_inserts(fill, s)
-          :image_list -> list_image_inserts(fill, s)
+          :image_list -> list_image_inserts(fill, s, content_width_pt)
         end
 
       [delete | inserts]
@@ -945,17 +1032,45 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     [image_request(media, w, index, fill, media[:uri])]
   end
 
-  defp list_image_inserts(%{media: []}, _index), do: []
+  defp list_image_inserts(%{media: []}, _index, _content_width_pt), do: []
 
-  defp list_image_inserts(fill, index) do
-    %{media: media, default_width_px: w, separator: sep} = fill
+  # Column-aware path: dispatch on columns count.
+  # columns >= 2 → insertTable only. The outer build_image_batch_requests/3
+  #   already emits the deleteContentRange for the placeholder; emitting
+  #   another one here would produce a zero-width (invalid) delete that the
+  #   Google Docs API rejects with INVALID_ARGUMENT.
+  # columns == 1 → inline inserts using content-width-based PT width.
+  defp list_image_inserts(fill, index, content_width_pt) do
+    cols = Map.get(fill, :columns, 1)
+
+    if cols >= 2 do
+      rows = (length(fill.media) / cols) |> Float.ceil() |> trunc() |> max(1)
+
+      [
+        %{
+          "insertTable" => %{
+            "rows" => rows,
+            "columns" => cols,
+            "location" => %{"index" => index}
+          }
+        }
+      ]
+    else
+      w_pt = image_width_for_columns(content_width_pt, 1)
+      inline_image_inserts_pt(fill, index, w_pt)
+    end
+  end
+
+  # Inline inserts using PT width directly (for image_list columns=1 path)
+  defp inline_image_inserts_pt(fill, index, w_pt) do
+    %{media: media, separator: sep} = fill
     reversed = Enum.reverse(media)
     last_idx = length(reversed) - 1
 
     reversed
     |> Enum.with_index()
     |> Enum.flat_map(fn {m, i} ->
-      img = image_request(m, w, index, fill, m[:uri])
+      img = insert_inline_image_request_pt(m, w_pt, index)
       if i < last_idx, do: [img, separator_request(sep, index)], else: [img]
     end)
     |> Enum.reject(&is_nil/1)
@@ -1007,6 +1122,28 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
             magnitude: (scaled_height_px || default_width_px || 400) * @px_to_pt,
             unit: "PT"
           }
+        }
+      }
+    }
+  end
+
+  # Like insert_inline_image_request/3 but takes width in PT directly (no px→pt conversion).
+  # Used for image_list slots where width comes from image_width_for_columns/2.
+  defp insert_inline_image_request_pt(media, width_pt, index) when is_map(media) do
+    uri = Map.get(media, :uri) || Map.get(media, "uri")
+    w_px = Map.get(media, :width_px) || Map.get(media, "width_px")
+    h_px = Map.get(media, :height_px) || Map.get(media, "height_px")
+
+    # scale_height mixes units here: target is PT, src dims are PX; the ratio cancels
+    scaled_height_pt = scale_height(width_pt, w_px, h_px) || width_pt
+
+    %{
+      insertInlineImage: %{
+        location: %{index: index},
+        uri: uri,
+        objectSize: %{
+          width: %{magnitude: width_pt * 1.0, unit: "PT"},
+          height: %{magnitude: scaled_height_pt * 1.0, unit: "PT"}
         }
       }
     }
@@ -1069,7 +1206,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc "Move a file to a different folder in Google Drive."
   @spec move_file(String.t(), String.t()) ::
-          :ok | {:error, :invalid_file_id | :move_failed | :get_file_parents_failed | term()}
+          :ok
+          | {:error,
+             :invalid_file_id
+             | :move_failed
+             | :get_file_parents_failed
+             | :drive_file_not_found
+             | term()}
   def move_file(file_id, to_folder_id) do
     with {:ok, fid} <- validate_file_id(file_id),
          {:ok, _tid} <- validate_file_id(to_folder_id) do
@@ -1091,6 +1234,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           {:ok, %{status: status}} when status in 200..299 ->
             :ok
 
+          {:ok, %{status: 404}} ->
+            {:error, :drive_file_not_found}
+
           {:ok, %{body: body}} ->
             log_drive_error("move failed", body)
             {:error, :move_failed}
@@ -1098,6 +1244,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           {:error, _} = err ->
             err
         end
+
+      {:ok, %{status: 404}} ->
+        {:error, :drive_file_not_found}
 
       {:ok, %{body: body}} ->
         log_drive_error("get file parents failed", body)
@@ -1433,25 +1582,123 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     if all_image_fills == [] do
       :ok
     else
-      # Build a flat fills map for find_image_tag_ranges, then filter each result
-      # to its section's range before building the batch.
       fills_map = Map.new(all_image_fills, fn {name, fill, _} -> {name, fill} end)
       range_by_name = Map.new(all_image_fills, fn {name, _, range} -> {name, range} end)
+      content_width_pt = content_width_pt(doc2)
 
-      requests =
+      filtered_ranges =
         doc2
         |> find_image_tag_ranges(Map.keys(fills_map))
         |> Enum.filter(fn %{name: name, start_index: s} ->
           in_section_range?(range_by_name, name, s)
         end)
-        |> build_image_batch_requests(fills_map)
 
-      case maybe_batch(&batch_update/2, doc_id, requests) do
-        {:ok, _} -> :ok
-        {:error, _} = err -> err
+      # Partition into table slots (image_list + columns >= 2) and inline slots.
+      {table_ranges, inline_ranges} =
+        Enum.split_with(filtered_ranges, fn %{name: name} ->
+          fill = Map.fetch!(fills_map, name)
+          fill.kind == :image_list and Map.get(fill, :columns, 1) >= 2
+        end)
+
+      # Phase 1 batch: inline slot deletes+inserts + table slot delete+insertTable.
+      # Sort all requests descending by start_index so earlier inserts don't shift later ones.
+      phase1_requests =
+        (table_ranges ++ inline_ranges)
+        |> build_image_batch_requests(fills_map, content_width_pt)
+
+      # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
+      # Phase 2 can identify the newly inserted tables by set-difference.
+      pre_existing_table_starts =
+        doc2 |> collect_tables() |> MapSet.new(& &1["table"]["startIndex"])
+
+      with {:ok, _} <- maybe_batch(&batch_update/2, doc_id, phase1_requests) do
+        if table_ranges == [] do
+          :ok
+        else
+          do_fill_table_cells(
+            doc_id,
+            table_ranges,
+            fills_map,
+            content_width_pt,
+            pre_existing_table_starts
+          )
+        end
       end
     end
   end
+
+  # Phase 2: re-fetch the doc after table creation, locate the new tables by
+  # set-difference against pre-existing table start_indices, and fill cells.
+  #
+  # Using "last K tables" would fail when the document has pre-existing tables
+  # at indices below the placeholder positions — Phase 1 inserts shift those
+  # pre-existing tables to higher indices, making them the "last K" instead of
+  # the newly created ones.
+  defp do_fill_table_cells(
+         doc_id,
+         table_ranges,
+         fills_map,
+         content_width_pt,
+         pre_existing_table_starts
+       ) do
+    with {:ok, %{body: doc3}} <- get_document(doc_id) do
+      table_slots_asc = Enum.sort_by(table_ranges, & &1.start_index, :asc)
+
+      # Newly inserted tables are those whose start_index was not present in
+      # doc2, sorted ascending so they match table_slots_asc in document order.
+      new_tables =
+        doc3
+        |> collect_tables()
+        |> Enum.reject(fn el ->
+          MapSet.member?(pre_existing_table_starts, el["table"]["startIndex"])
+        end)
+        |> Enum.sort_by(fn el -> el["table"]["startIndex"] end, :asc)
+
+      if length(new_tables) != length(table_slots_asc) do
+        Logger.warning(
+          "substitute_all_images: expected #{length(table_slots_asc)} new tables " <>
+            "but found #{length(new_tables)} in doc #{doc_id}; skipping Phase 2"
+        )
+
+        :ok
+      else
+        phase2_requests =
+          Enum.zip(table_slots_asc, new_tables)
+          |> Enum.flat_map(fn {%{name: name}, table_el} ->
+            fill = Map.fetch!(fills_map, name)
+            cols = Map.get(fill, :columns, 1)
+            image_width_pt = image_width_for_columns(content_width_pt, cols)
+            cells = extract_table_cells(table_el)
+            fill_table_cells(cells, fill.media, %{image_width_pt: image_width_pt})
+          end)
+
+        case maybe_batch(&batch_update/2, doc_id, phase2_requests) do
+          {:ok, _} -> :ok
+          {:error, _} = err -> err
+        end
+      end
+    end
+  end
+
+  # Walk doc body content and collect all table elements in document order.
+  defp collect_tables(doc) do
+    (get_in(doc, ["body", "content"]) || [])
+    |> Enum.filter(&Map.has_key?(&1, "table"))
+  end
+
+  # Extract cell insert indices from a table element returned by the Docs API.
+  # Each cell's first paragraph provides the startIndex; we insert at startIndex + 1
+  # (one position inside the paragraph, before any existing content).
+  defp extract_table_cells(%{"table" => %{"tableRows" => rows}}) do
+    for row <- rows,
+        %{"tableCells" => cells} = row,
+        cell <- cells do
+      cell_start = get_in(cell, ["startIndex"]) || 0
+      %{insert_index: cell_start + 1}
+    end
+  end
+
+  defp extract_table_cells(_), do: []
 
   defp in_section_range?(range_by_name, name, s) do
     case Map.get(range_by_name, name) do
@@ -1554,6 +1801,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
       fill = %{
         kind: kind,
+        columns: normalize_columns(Map.get(params, "columns")),
         default_width_px: Map.get(params, "width_px") || 400,
         opacity: Map.get(params, "opacity") || 1.0,
         z_index: Map.get(params, "z_index") || 0,
@@ -1564,6 +1812,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       {name, fill}
     end)
   end
+
+  defp normalize_columns(n) when is_integer(n), do: n |> max(1) |> min(@max_columns)
+
+  defp normalize_columns(n) when is_binary(n) do
+    case Integer.parse(n) do
+      {i, _} -> normalize_columns(i)
+      :error -> 1
+    end
+  end
+
+  defp normalize_columns(_), do: 1
 
   defp build_media_items(%{"media" => media}) when is_list(media) do
     Enum.map(media, fn m ->

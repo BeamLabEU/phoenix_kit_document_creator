@@ -306,6 +306,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
     |> maybe_put_field(record, :type_uuid, "type_uuid")
     |> maybe_put_field(record, :created_by_uuid, "created_by_uuid")
     |> maybe_put_field(record, :inserted_at, "inserted_at")
+    |> maybe_put_field(record, :data, "data")
   end
 
   defp maybe_put_field(map, record, field, key) do
@@ -1630,7 +1631,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   """
   @spec delete_document(String.t(), keyword()) :: :ok | {:error, term()}
   def delete_document(file_id, opts \\ []) when is_binary(file_id) do
-    case move_to_deleted_folder(file_id, :deleted_documents_folder_id) do
+    case move_to_deleted_folder(file_id, :deleted_documents_folder_id, opts[:actor_uuid]) do
       :ok ->
         log_activity(%{
           action: "document.deleted",
@@ -1657,7 +1658,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   """
   @spec delete_template(String.t(), keyword()) :: :ok | {:error, term()}
   def delete_template(file_id, opts \\ []) when is_binary(file_id) do
-    case move_to_deleted_folder(file_id, :deleted_templates_folder_id) do
+    case move_to_deleted_folder(file_id, :deleted_templates_folder_id, opts[:actor_uuid]) do
       :ok ->
         log_activity(%{
           action: "template.deleted",
@@ -1675,7 +1676,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
-  defp move_to_deleted_folder(file_id, folder_key) do
+  defp move_to_deleted_folder(file_id, folder_key, actor_uuid) do
     with {:ok, folder_id} <- resolve_deleted_folder_id(folder_key),
          :ok <- GoogleDocsClient.move_file(file_id, folder_id) do
       update_file_by_google_doc_id(file_id, %{
@@ -1684,8 +1685,43 @@ defmodule PhoenixKitDocumentCreator.Documents do
         path: deleted_folder_path(folder_key)
       })
 
+      stamp_deleted_data(file_id, actor_uuid)
+
       :ok
     end
+  end
+
+  defp stamp_deleted_data(google_doc_id, actor_uuid) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    deleted_entry = %{"at" => DateTime.to_iso8601(now), "by_uuid" => actor_uuid}
+
+    from(t in Template,
+      where: t.google_doc_id == ^google_doc_id,
+      update: [
+        set: [
+          data:
+            fragment(
+              "COALESCE(data, '{}'::jsonb) || jsonb_build_object('deleted', ?::jsonb)",
+              ^deleted_entry
+            )
+        ]
+      ]
+    )
+    |> repo().update_all([])
+
+    from(d in Document,
+      where: d.google_doc_id == ^google_doc_id,
+      update: [
+        set: [
+          data:
+            fragment(
+              "COALESCE(data, '{}'::jsonb) || jsonb_build_object('deleted', ?::jsonb)",
+              ^deleted_entry
+            )
+        ]
+      ]
+    )
+    |> repo().update_all([])
   end
 
   defp resolve_deleted_folder_id(folder_key) do
@@ -1758,12 +1794,28 @@ defmodule PhoenixKitDocumentCreator.Documents do
         path: location.path
       })
 
+      clear_deleted_data(file_id)
+
       :ok
     else
       %{folder_id: nil} -> {:error, :live_folder_not_found}
       %{} -> {:error, :live_folder_not_found}
       error -> error
     end
+  end
+
+  defp clear_deleted_data(google_doc_id) do
+    from(t in Template,
+      where: t.google_doc_id == ^google_doc_id,
+      update: [set: [data: fragment("COALESCE(data, '{}'::jsonb) - 'deleted'")]]
+    )
+    |> repo().update_all([])
+
+    from(d in Document,
+      where: d.google_doc_id == ^google_doc_id,
+      update: [set: [data: fragment("COALESCE(data, '{}'::jsonb) - 'deleted'")]]
+    )
+    |> repo().update_all([])
   end
 
   # ===========================================================================
