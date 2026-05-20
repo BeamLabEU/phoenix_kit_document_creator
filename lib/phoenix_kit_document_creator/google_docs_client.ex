@@ -1200,6 +1200,29 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp maybe_batch(_fn, _id, []), do: {:ok, %{}}
   defp maybe_batch(fn_, id, requests), do: fn_.(id, requests)
 
+  # Req returns {:ok, %Req.Response{status: 400, ...}} for HTTP errors — a
+  # plain `with {:ok, _}` match would treat a 400 as success and silently
+  # drop the entire batch. Surface non-2xx responses as {:error, _}.
+  defp ensure_batch_success(%{} = resp, doc_id, label) do
+    case Map.get(resp, :status) do
+      nil ->
+        :ok
+
+      s when s in 200..299 ->
+        :ok
+
+      s ->
+        Logger.error(
+          "[GoogleDocsClient] #{label} batchUpdate on doc #{doc_id} failed " <>
+            "with HTTP #{s}: #{inspect(Map.get(resp, :body))}"
+        )
+
+        {:error, {:google_api, s, Map.get(resp, :body)}}
+    end
+  end
+
+  defp ensure_batch_success(_other, _doc_id, _label), do: :ok
+
   # ===========================================================================
   # Google Drive API
   # ===========================================================================
@@ -1211,9 +1234,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Google's servers (e.g. the Docs API `insertInlineImage` endpoint) can fetch
   it.
 
-  Returns `{:ok, drive_url}` where `drive_url` is a publicly-accessible
-  `https://drive.google.com/uc?export=view&id=<file_id>` URL that the Google
-  Docs API accepts for inline-image insertion.
+  Returns `{:ok, image_url}` where `image_url` is
+  `https://lh3.googleusercontent.com/d/<file_id>` — Google's image-serving
+  host that returns the raw binary directly (no redirect) and is accepted
+  by `insertInlineImage`.
 
   The uploaded file is created in the authenticated account's root Drive
   folder. Callers should delete it after the document is composed if
@@ -1255,7 +1279,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       {:ok, %{status: status, body: %{"id" => file_id}}} when status in 200..299 ->
         case set_anyone_reader_permission(file_id) do
           :ok ->
-            {:ok, "https://drive.google.com/uc?export=view&id=#{file_id}"}
+            # lh3.googleusercontent.com/d/<file_id> serves the raw image binary
+            # (HTTP 200, no redirect). drive.google.com/uc?export=view returns a
+            # 303 the Docs insertInlineImage fetcher does not follow → 400
+            # INVALID_ARGUMENT.
+            {:ok, "https://lh3.googleusercontent.com/d/#{file_id}"}
 
           {:error, _} = err ->
             err
@@ -1703,7 +1731,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       pre_existing_table_starts =
         doc2 |> collect_tables() |> MapSet.new(& &1["startIndex"])
 
-      with {:ok, _} <- maybe_batch(&batch_update/2, doc_id, phase1_requests) do
+      with {:ok, resp} <- maybe_batch(&batch_update/2, doc_id, phase1_requests),
+           :ok <- ensure_batch_success(resp, doc_id, "Phase 1") do
         if table_ranges == [] do
           :ok
         else
