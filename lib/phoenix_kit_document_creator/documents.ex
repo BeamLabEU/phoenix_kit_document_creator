@@ -1701,40 +1701,34 @@ defmodule PhoenixKitDocumentCreator.Documents do
         path: deleted_folder_path(folder_key)
       })
 
-      stamp_deleted_data(file_id, actor_uuid)
+      stamp_deleted_data(deleted_schema(folder_key), file_id, actor_uuid)
 
       :ok
     end
   end
 
-  defp stamp_deleted_data(google_doc_id, actor_uuid) do
+  # A given google_doc_id lives in exactly one of these tables, so we stamp /
+  # clear only the schema that matches the operation rather than running an
+  # update against both.
+  defp deleted_schema(:deleted_documents_folder_id), do: Document
+  defp deleted_schema(:deleted_templates_folder_id), do: Template
+
+  defp restored_schema(:document), do: Document
+  defp restored_schema(:template), do: Template
+
+  defp stamp_deleted_data(schema, google_doc_id, actor_uuid) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     deleted_entry = %{"at" => DateTime.to_iso8601(now), "by_uuid" => actor_uuid}
 
-    from(t in Template,
-      where: t.google_doc_id == ^google_doc_id,
-      update: [
-        set: [
-          data:
-            fragment(
-              "COALESCE(data, '{}'::jsonb) || jsonb_build_object('deleted', ?::jsonb)",
-              ^deleted_entry
-            )
-        ]
-      ]
-    )
-    |> repo().update_all([])
-
-    from(d in Document,
-      where: d.google_doc_id == ^google_doc_id,
-      update: [
-        set: [
-          data:
-            fragment(
-              "COALESCE(data, '{}'::jsonb) || jsonb_build_object('deleted', ?::jsonb)",
-              ^deleted_entry
-            )
-        ]
+    schema
+    |> where([r], r.google_doc_id == ^google_doc_id)
+    |> update([r],
+      set: [
+        data:
+          fragment(
+            "COALESCE(data, '{}'::jsonb) || jsonb_build_object('deleted', ?::jsonb)",
+            ^deleted_entry
+          )
       ]
     )
     |> repo().update_all([])
@@ -1810,7 +1804,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         path: location.path
       })
 
-      clear_deleted_data(file_id)
+      clear_deleted_data(restored_schema(type), file_id)
 
       :ok
     else
@@ -1820,17 +1814,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
-  defp clear_deleted_data(google_doc_id) do
-    from(t in Template,
-      where: t.google_doc_id == ^google_doc_id,
-      update: [set: [data: fragment("COALESCE(data, '{}'::jsonb) - 'deleted'")]]
-    )
-    |> repo().update_all([])
-
-    from(d in Document,
-      where: d.google_doc_id == ^google_doc_id,
-      update: [set: [data: fragment("COALESCE(data, '{}'::jsonb) - 'deleted'")]]
-    )
+  defp clear_deleted_data(schema, google_doc_id) do
+    schema
+    |> where([r], r.google_doc_id == ^google_doc_id)
+    |> update([r], set: [data: fragment("COALESCE(data, '{}'::jsonb) - 'deleted'")])
     |> repo().update_all([])
   end
 

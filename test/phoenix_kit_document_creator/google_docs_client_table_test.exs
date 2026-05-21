@@ -94,4 +94,52 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientTableTest do
       assert get_in(req, ["insertInlineImage", "objectSize", "width", "magnitude"]) == 230.0
     end
   end
+
+  describe "match_new_tables/3 — phase 2 table identification" do
+    # Helper: a doc3 table element tagged with an id so we can assert which one
+    # was picked. The startIndex models the table's post-Phase-1 position.
+    defp table(id, start_index),
+      do: %{"id" => id, "table" => %{"startIndex" => start_index}}
+
+    test "no pre-existing tables: every doc3 table is new, in order" do
+      tables_asc = [table("a", 110), table("b", 220)]
+      # Two slots whose placeholders were at 100 and 200 in doc2.
+      assert {:ok, [%{"id" => "a"}, %{"id" => "b"}]} =
+               GoogleDocsClient.match_new_tables(tables_asc, [], [100, 200])
+    end
+
+    test "pre-existing table BEFORE the placeholders is excluded" do
+      # doc2: pre-existing table at 40, slots at 100/200. Pattern [:pre,:new,:new].
+      # doc3 (pre-existing at 40 unaffected, new ones shifted): 40, 110, 220.
+      tables_asc = [table("pre", 40), table("a", 110), table("b", 220)]
+
+      assert {:ok, [%{"id" => "a"}, %{"id" => "b"}]} =
+               GoogleDocsClient.match_new_tables(tables_asc, [40], [100, 200])
+    end
+
+    test "pre-existing table AFTER a placeholder is excluded (the drift case)" do
+      # doc2: slots at 100/200, pre-existing table at 300. Pattern [:new,:new,:pre].
+      # Phase 1 shifts the pre-existing table to 360 in doc3. The old
+      # set-difference (300 in snapshot, 360 in doc3) would have flagged it as
+      # "new" and tripped the count guard; order-based matching gets it right.
+      tables_asc = [table("a", 110), table("b", 210), table("pre", 360)]
+
+      assert {:ok, [%{"id" => "a"}, %{"id" => "b"}]} =
+               GoogleDocsClient.match_new_tables(tables_asc, [300], [100, 200])
+    end
+
+    test "pre-existing table BETWEEN two placeholders is excluded" do
+      # doc2 order: slot@100, pre@150, slot@200 → pattern [:new,:pre,:new].
+      tables_asc = [table("a", 110), table("pre", 165), table("b", 230)]
+
+      assert {:ok, [%{"id" => "a"}, %{"id" => "b"}]} =
+               GoogleDocsClient.match_new_tables(tables_asc, [150], [100, 200])
+    end
+
+    test "count mismatch returns :mismatch so the caller skips Phase 2" do
+      # Expected 1 pre-existing + 2 new = 3 tables, but only 2 are present.
+      tables_asc = [table("a", 110), table("b", 220)]
+      assert :mismatch = GoogleDocsClient.match_new_tables(tables_asc, [40], [100, 200])
+    end
+  end
 end

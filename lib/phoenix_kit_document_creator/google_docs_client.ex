@@ -969,6 +969,46 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc """
+  Identifies which of `tables_asc` (table elements from the re-fetched document,
+  ascending by start index) are the tables Phase 1 just inserted, returning them
+  in slot order.
+
+  `pre_existing_starts` and `new_slot_starts` are start indices captured from the
+  *pre-Phase-1* document. Phase 1's deletes/inserts shift the absolute indices of
+  everything after a placeholder, so a startIndex set-difference misclassifies a
+  pre-existing table located after a placeholder (its index moves and no longer
+  matches the snapshot). Table *order* is never changed by inserts, though, so we
+  reconstruct the pre/new interleaving from the original indices and read it off
+  the post-Phase-1 tables positionally — robust regardless of where pre-existing
+  tables sit relative to the placeholders.
+
+  Returns `{:ok, new_tables}` aligned with `new_slot_starts` sorted ascending, or
+  `:mismatch` when the table count doesn't line up (e.g. Phase 1 partially
+  failed) so the caller can skip filling rather than fill the wrong tables.
+  """
+  @spec match_new_tables([map()], [non_neg_integer()], [non_neg_integer()]) ::
+          {:ok, [map()]} | :mismatch
+  def match_new_tables(tables_asc, pre_existing_starts, new_slot_starts) do
+    pattern =
+      (Enum.map(pre_existing_starts, &{&1, :pre}) ++
+         Enum.map(new_slot_starts, &{&1, :new}))
+      |> Enum.sort_by(fn {idx, _tag} -> idx end)
+      |> Enum.map(fn {_idx, tag} -> tag end)
+
+    if length(tables_asc) != length(pattern) do
+      :mismatch
+    else
+      new_tables =
+        tables_asc
+        |> Enum.zip(pattern)
+        |> Enum.filter(fn {_table, tag} -> tag == :new end)
+        |> Enum.map(fn {table, _tag} -> table end)
+
+      {:ok, new_tables}
+    end
+  end
+
+  @doc """
   Builds the list of `batchUpdate` request maps to substitute image tags.
 
   `fills` is a map keyed by variable name; each value carries `kind`,
@@ -1607,7 +1647,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         |> build_image_batch_requests(fills_map, content_width_pt)
 
       # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
-      # Phase 2 can identify the newly inserted tables by set-difference.
+      # Phase 2 can reconstruct the pre/new table interleaving (see
+      # match_new_tables/3) and identify the newly inserted tables.
       pre_existing_table_starts =
         doc2 |> collect_tables() |> MapSet.new(& &1["table"]["startIndex"])
 
@@ -1627,13 +1668,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
-  # Phase 2: re-fetch the doc after table creation, locate the new tables by
-  # set-difference against pre-existing table start_indices, and fill cells.
-  #
-  # Using "last K tables" would fail when the document has pre-existing tables
-  # at indices below the placeholder positions — Phase 1 inserts shift those
-  # pre-existing tables to higher indices, making them the "last K" instead of
-  # the newly created ones.
+  # Phase 2: re-fetch the doc after table creation, locate the newly inserted
+  # tables via `match_new_tables/3` (order-based, drift-proof — see its docs),
+  # and fill their cells.
   defp do_fill_table_cells(
          doc_id,
          table_ranges,
@@ -1643,40 +1680,47 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
        ) do
     with {:ok, %{body: doc3}} <- get_document(doc_id) do
       table_slots_asc = Enum.sort_by(table_ranges, & &1.start_index, :asc)
+      slot_starts = Enum.map(table_slots_asc, & &1.start_index)
+      pre_starts = MapSet.to_list(pre_existing_table_starts)
 
-      # Newly inserted tables are those whose start_index was not present in
-      # doc2, sorted ascending so they match table_slots_asc in document order.
-      new_tables =
+      tables_asc =
         doc3
         |> collect_tables()
-        |> Enum.reject(fn el ->
-          MapSet.member?(pre_existing_table_starts, el["table"]["startIndex"])
-        end)
         |> Enum.sort_by(fn el -> el["table"]["startIndex"] end, :asc)
 
-      if length(new_tables) != length(table_slots_asc) do
-        Logger.warning(
-          "substitute_all_images: expected #{length(table_slots_asc)} new tables " <>
-            "but found #{length(new_tables)} in doc #{doc_id}; skipping Phase 2"
-        )
+      case match_new_tables(tables_asc, pre_starts, slot_starts) do
+        :mismatch ->
+          Logger.warning(
+            "substitute_all_images: table count mismatch in doc #{doc_id} " <>
+              "(found #{length(tables_asc)} tables; expected #{length(pre_starts)} " <>
+              "pre-existing + #{length(table_slots_asc)} new); skipping Phase 2"
+          )
 
-        :ok
-      else
-        phase2_requests =
-          Enum.zip(table_slots_asc, new_tables)
-          |> Enum.flat_map(fn {%{name: name}, table_el} ->
-            fill = Map.fetch!(fills_map, name)
-            cols = Map.get(fill, :columns, 1)
-            image_width_pt = image_width_for_columns(content_width_pt, cols)
-            cells = extract_table_cells(table_el)
-            fill_table_cells(cells, fill.media, %{image_width_pt: image_width_pt})
-          end)
+          :ok
 
-        case maybe_batch(&batch_update/2, doc_id, phase2_requests) do
-          {:ok, _} -> :ok
-          {:error, _} = err -> err
-        end
+        {:ok, new_tables} ->
+          fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, content_width_pt)
       end
+    end
+  end
+
+  # Build and run the Phase 2 batch: one insertInlineImage per cell across all
+  # matched tables, paired with their slots in document order.
+  defp fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, content_width_pt) do
+    phase2_requests =
+      table_slots_asc
+      |> Enum.zip(new_tables)
+      |> Enum.flat_map(fn {%{name: name}, table_el} ->
+        fill = Map.fetch!(fills_map, name)
+        cols = Map.get(fill, :columns, 1)
+        image_width_pt = image_width_for_columns(content_width_pt, cols)
+        cells = extract_table_cells(table_el)
+        fill_table_cells(cells, fill.media, %{image_width_pt: image_width_pt})
+      end)
+
+    case maybe_batch(&batch_update/2, doc_id, phase2_requests) do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
     end
   end
 

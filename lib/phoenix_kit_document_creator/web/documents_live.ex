@@ -54,6 +54,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        trashed_documents: [],
        known_file_ids: MapSet.new(),
        status_mode: "active",
+       # %{uuid => display_name} for the user who trashed each file. Resolved
+       # when the trashed lists load/change (not in render) — see
+       # assign_deleted_by_names/1.
+       deleted_by_names: %{},
        pending_files: MapSet.new(),
        thumbnails: %{},
        enabled_languages: [],
@@ -190,25 +194,29 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       :timer.send_interval(:timer.minutes(2), self(), :poll_for_changes)
     end
 
-    {:noreply,
-     assign(socket,
-       loaded: true,
-       google_connected: google_connected,
-       templates: initial.templates,
-       documents: initial.documents,
-       trashed_templates: initial.trashed_templates,
-       trashed_documents: initial.trashed_documents,
-       known_file_ids:
-         build_known_file_ids(
-           initial.templates,
-           initial.documents,
-           initial.trashed_templates,
-           initial.trashed_documents
-         ),
-       thumbnails: initial.cached_thumbnails,
-       enabled_languages: Documents.list_enabled_languages(),
-       loading: google_connected and initial.db_empty
-     )}
+    socket =
+      socket
+      |> assign(
+        loaded: true,
+        google_connected: google_connected,
+        templates: initial.templates,
+        documents: initial.documents,
+        trashed_templates: initial.trashed_templates,
+        trashed_documents: initial.trashed_documents,
+        known_file_ids:
+          build_known_file_ids(
+            initial.templates,
+            initial.documents,
+            initial.trashed_templates,
+            initial.trashed_documents
+          ),
+        thumbnails: initial.cached_thumbnails,
+        enabled_languages: Documents.list_enabled_languages(),
+        loading: google_connected and initial.db_empty
+      )
+      |> assign_deleted_by_names()
+
+    {:noreply, socket}
   end
 
   def handle_info(:sync_from_drive, socket) do
@@ -252,18 +260,22 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
     if missing_thumb_files != [], do: load_thumbnails_async(missing_thumb_files)
 
-    {:noreply,
-     assign(socket,
-       templates: templates,
-       documents: documents,
-       trashed_templates: trashed_templates,
-       trashed_documents: trashed_documents,
-       known_file_ids:
-         build_known_file_ids(templates, documents, trashed_templates, trashed_documents),
-       thumbnails: Map.merge(socket.assigns.thumbnails, cached_thumbnails),
-       loading: false,
-       last_loaded_at: now_ms()
-     )}
+    socket =
+      socket
+      |> assign(
+        templates: templates,
+        documents: documents,
+        trashed_templates: trashed_templates,
+        trashed_documents: trashed_documents,
+        known_file_ids:
+          build_known_file_ids(templates, documents, trashed_templates, trashed_documents),
+        thumbnails: Map.merge(socket.assigns.thumbnails, cached_thumbnails),
+        loading: false,
+        last_loaded_at: now_ms()
+      )
+      |> assign_deleted_by_names()
+
+    {:noreply, socket}
   end
 
   def handle_info(:load_thumbnails, socket) do
@@ -1206,8 +1218,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       |> Enum.flat_map(fn {_cat_uuid, opts} -> opts end)
       |> Map.new()
 
-    deleted_by_names = build_deleted_by_names(files)
-
     %{
       files: files,
       view_mode: assigns.view_mode,
@@ -1220,8 +1230,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       cat_options: cat_options,
       types_by_category: types_by_category,
       type_names: type_names,
-      deleted_by_names: deleted_by_names
+      # Resolved off the render path when the trashed lists change; read here.
+      deleted_by_names: assigns.deleted_by_names
     }
+  end
+
+  # Resolves the display names for everyone who trashed a currently-loaded file
+  # and stashes them in assigns. Runs only when the trashed lists change (load,
+  # sync, optimistic move) — never per render — so the user lookup is not
+  # repeated on every LiveView update. Resolves both trashed lists at once so
+  # the map is correct regardless of which trash tab is shown.
+  defp assign_deleted_by_names(socket) do
+    files = socket.assigns.trashed_templates ++ socket.assigns.trashed_documents
+    assign(socket, deleted_by_names: build_deleted_by_names(files))
   end
 
   # Collect distinct by_uuid values from trashed files and resolve them to
@@ -1791,12 +1812,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     trashed_templates = patch_file_list(assigns.trashed_templates, file_id, file_map)
     trashed_documents = patch_file_list(assigns.trashed_documents, file_id, file_map)
 
-    assign(socket,
+    socket
+    |> assign(
       templates: templates,
       documents: documents,
       trashed_templates: trashed_templates,
       trashed_documents: trashed_documents
     )
+    |> assign_deleted_by_names()
   end
 
   defp patch_file_list(files, file_id, replacement) do

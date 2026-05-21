@@ -97,6 +97,22 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
     repo().all(query)
   end
 
+  @doc """
+  Counts categories, applying the same `:status` filter semantics as
+  `list_categories/1`. Counts in SQL instead of loading rows — use when only
+  the number is needed (e.g. a "Trash (N)" badge).
+  """
+  @spec count_categories(keyword()) :: non_neg_integer()
+  def count_categories(opts \\ []) do
+    query =
+      case Keyword.get(opts, :status) do
+        nil -> where(Category, [c], c.status != "deleted")
+        status -> where(Category, [c], c.status == ^status)
+      end
+
+    repo().aggregate(query, :count)
+  end
+
   @doc "Fetches a category by UUID. Returns `nil` if not found."
   @spec get_category(Ecto.UUID.t()) :: Category.t() | nil
   def get_category(uuid), do: repo().get(Category, uuid)
@@ -409,6 +425,23 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
       end
 
     repo().all(query)
+  end
+
+  @doc """
+  Counts types for a category, applying the same `:status` filter semantics as
+  `list_types_for_category/2`. Counts in SQL instead of loading rows.
+  """
+  @spec count_types_for_category(Ecto.UUID.t(), keyword()) :: non_neg_integer()
+  def count_types_for_category(category_uuid, opts \\ []) do
+    query = from(t in Type, where: t.category_uuid == ^category_uuid)
+
+    query =
+      case Keyword.get(opts, :status) do
+        nil -> where(query, [t], t.status != "deleted")
+        status -> where(query, [t], t.status == ^status)
+      end
+
+    repo().aggregate(query, :count)
   end
 
   @doc "Fetches a type by UUID. Returns `nil` if not found."

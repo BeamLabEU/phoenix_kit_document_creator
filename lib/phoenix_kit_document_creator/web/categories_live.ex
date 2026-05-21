@@ -636,7 +636,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     trashed_categories_count =
       if status_mode == "trashed",
         do: length(categories),
-        else: length(Taxonomy.list_categories(status: "deleted"))
+        else: Taxonomy.count_categories(status: "deleted")
 
     # Re-sync `selected` against the freshly-loaded list so the right-column
     # header does not drift after reorder, delete, or edit operations.
@@ -669,7 +669,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
           trashed_types_count =
             if status_mode == "trashed",
               do: length(types),
-              else: length(Taxonomy.list_types_for_category(category.uuid, status: "deleted"))
+              else: Taxonomy.count_types_for_category(category.uuid, status: "deleted")
 
           assign(socket, types: types, trashed_types_count: trashed_types_count)
       end
