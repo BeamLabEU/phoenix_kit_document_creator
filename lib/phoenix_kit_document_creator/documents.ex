@@ -23,6 +23,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   require Logger
 
+  alias Ecto.Adapters.SQL
   alias PhoenixKit.Modules.Languages
   alias PhoenixKitDocumentCreator.Documents.Composer
   alias PhoenixKitDocumentCreator.GoogleDocsClient
@@ -147,47 +148,45 @@ defmodule PhoenixKitDocumentCreator.Documents do
           {:ok, Template.t()} | {:error, :not_found | :unknown_variable}
   def update_template_variable_config(template_file_id, var_name, new_config)
       when is_binary(template_file_id) and is_binary(var_name) and is_map(new_config) do
-    case repo().get_by(Template, google_doc_id: template_file_id) do
-      nil ->
-        {:error, :not_found}
-
-      template ->
-        merged_config =
-          case Enum.find(template.variables || [], &(&1["name"] == var_name)) do
-            nil -> nil
-            existing_var -> Map.merge(existing_var["config"] || %{}, coerce_config(new_config))
-          end
-
-        case merged_config do
-          nil ->
-            {:error, :unknown_variable}
-
-          config_to_write ->
-            sql = """
-            UPDATE phoenix_kit_doc_templates
-            SET variables = (
-              SELECT jsonb_agg(
-                CASE
-                  WHEN elem->>'name' = $2
-                  THEN jsonb_set(elem, '{config}', $3::jsonb, true)
-                  ELSE elem
-                END
-              )
-              FROM jsonb_array_elements(variables) AS elem
-            ),
-                updated_at = NOW()
-            WHERE uuid = $1
-            """
-
-            Ecto.Adapters.SQL.query!(
-              repo(),
-              sql,
-              [template.uuid, var_name, config_to_write]
-            )
-
-            {:ok, repo().get!(Template, template.uuid)}
-        end
+    with {:ok, template} <- fetch_template_by_file_id(template_file_id),
+         {:ok, config} <- merge_variable_config(template, var_name, new_config) do
+      write_variable_config!(template, var_name, config)
+      {:ok, repo().get!(Template, template.uuid)}
     end
+  end
+
+  defp fetch_template_by_file_id(template_file_id) do
+    case get_template_by_google_doc_id(template_file_id) do
+      nil -> {:error, :not_found}
+      template -> {:ok, template}
+    end
+  end
+
+  defp merge_variable_config(template, var_name, new_config) do
+    case Enum.find(template.variables || [], &(&1["name"] == var_name)) do
+      nil -> {:error, :unknown_variable}
+      existing_var -> {:ok, Map.merge(existing_var["config"] || %{}, coerce_config(new_config))}
+    end
+  end
+
+  defp write_variable_config!(template, var_name, config) do
+    sql = """
+    UPDATE phoenix_kit_doc_templates
+    SET variables = (
+      SELECT jsonb_agg(
+        CASE
+          WHEN elem->>'name' = $2
+          THEN jsonb_set(elem, '{config}', $3::jsonb, true)
+          ELSE elem
+        END
+      )
+      FROM jsonb_array_elements(variables) AS elem
+    ),
+        updated_at = NOW()
+    WHERE uuid = $1
+    """
+
+    SQL.query!(repo(), sql, [template.uuid, var_name, config])
   end
 
   defp coerce_config(config) do
@@ -1701,40 +1700,34 @@ defmodule PhoenixKitDocumentCreator.Documents do
         path: deleted_folder_path(folder_key)
       })
 
-      stamp_deleted_data(file_id, actor_uuid)
+      stamp_deleted_data(deleted_schema(folder_key), file_id, actor_uuid)
 
       :ok
     end
   end
 
-  defp stamp_deleted_data(google_doc_id, actor_uuid) do
+  # A given google_doc_id lives in exactly one of these tables, so we stamp /
+  # clear only the schema that matches the operation rather than running an
+  # update against both.
+  defp deleted_schema(:deleted_documents_folder_id), do: Document
+  defp deleted_schema(:deleted_templates_folder_id), do: Template
+
+  defp restored_schema(:document), do: Document
+  defp restored_schema(:template), do: Template
+
+  defp stamp_deleted_data(schema, google_doc_id, actor_uuid) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     deleted_entry = %{"at" => DateTime.to_iso8601(now), "by_uuid" => actor_uuid}
 
-    from(t in Template,
-      where: t.google_doc_id == ^google_doc_id,
-      update: [
-        set: [
-          data:
-            fragment(
-              "COALESCE(data, '{}'::jsonb) || jsonb_build_object('deleted', ?::jsonb)",
-              ^deleted_entry
-            )
-        ]
-      ]
-    )
-    |> repo().update_all([])
-
-    from(d in Document,
-      where: d.google_doc_id == ^google_doc_id,
-      update: [
-        set: [
-          data:
-            fragment(
-              "COALESCE(data, '{}'::jsonb) || jsonb_build_object('deleted', ?::jsonb)",
-              ^deleted_entry
-            )
-        ]
+    schema
+    |> where([r], r.google_doc_id == ^google_doc_id)
+    |> update([r],
+      set: [
+        data:
+          fragment(
+            "COALESCE(data, '{}'::jsonb) || jsonb_build_object('deleted', ?::jsonb)",
+            ^deleted_entry
+          )
       ]
     )
     |> repo().update_all([])
@@ -1810,7 +1803,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         path: location.path
       })
 
-      clear_deleted_data(file_id)
+      clear_deleted_data(restored_schema(type), file_id)
 
       :ok
     else
@@ -1820,17 +1813,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
-  defp clear_deleted_data(google_doc_id) do
-    from(t in Template,
-      where: t.google_doc_id == ^google_doc_id,
-      update: [set: [data: fragment("COALESCE(data, '{}'::jsonb) - 'deleted'")]]
-    )
-    |> repo().update_all([])
-
-    from(d in Document,
-      where: d.google_doc_id == ^google_doc_id,
-      update: [set: [data: fragment("COALESCE(data, '{}'::jsonb) - 'deleted'")]]
-    )
+  defp clear_deleted_data(schema, google_doc_id) do
+    schema
+    |> where([r], r.google_doc_id == ^google_doc_id)
+    |> update([r], set: [data: fragment("COALESCE(data, '{}'::jsonb) - 'deleted'")])
     |> repo().update_all([])
   end
 
@@ -1877,22 +1863,23 @@ defmodule PhoenixKitDocumentCreator.Documents do
   """
   @spec rename_document(binary(), String.t()) :: {:ok, Document.t()} | {:error, term()}
   def rename_document(uuid, new_name) when is_binary(uuid) and is_binary(new_name) do
-    if String.trim(new_name) == "" do
-      {:error, :blank_name}
-    else
-      case repo().get(Document, uuid) do
-        nil ->
-          {:error, :not_found}
+    with :ok <- reject_blank_name(new_name),
+         {:ok, document} <- get_document_record(uuid),
+         :ok <- docs_client().rename_file(document.google_doc_id, new_name) do
+      document
+      |> Document.changeset(%{name: new_name})
+      |> repo().update()
+    end
+  end
 
-        document ->
-          with :ok <- docs_client().rename_file(document.google_doc_id, new_name),
-               {:ok, updated} <-
-                 document
-                 |> Document.changeset(%{name: new_name})
-                 |> repo().update() do
-            {:ok, updated}
-          end
-      end
+  defp reject_blank_name(name) do
+    if String.trim(name) == "", do: {:error, :blank_name}, else: :ok
+  end
+
+  defp get_document_record(uuid) do
+    case repo().get(Document, uuid) do
+      nil -> {:error, :not_found}
+      document -> {:ok, document}
     end
   end
 

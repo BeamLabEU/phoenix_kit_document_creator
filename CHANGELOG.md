@@ -1,3 +1,32 @@
+## 0.4.1 - 2026-05-21
+
+### Added
+
+- **Category → Type taxonomy.** Replaces the hard-coded category strings with a managed two-level **Category → Type** hierarchy. New `Category` / `Type` schemas (UUIDv7, soft-delete via `status`) and a `PhoenixKitDocumentCreator.Taxonomy` context — CRUD, cascade trash/restore in one transaction, reorder, and picker helpers. Templates and documents gain nullable `category_uuid` / `type_uuid` FKs; a document inherits its taxonomy from the source template. Admin UI at `/admin/document-creator/categories`: two-column `CategoriesLive` (categories | types of the selected category), `CategoryFormLive` / `TypeFormLive` create-edit pages, row menus (Edit / Trash / Restore / Delete Forever), and drag-to-reorder via the `SortableGrid` hook. Category + Type `<select>` pickers appear on template/document cards (read-only badges in the trash view). Requires the **V120** migration from `phoenix_kit` core. UI localized for `en` / `et` / `ru`.
+- **Preset management UI.** An admin surface for the composition presets introduced in 0.4.0. `PresetFormLive` — a name / description / type form with a section editor and per-variable defaults — plus a presets panel in `CategoriesLive` for managing presets per category. New API: `Documents.update_preset/2`, `delete_preset/1`, and `preset_stale_info/1` (flags sections that point at deleted templates). The section editor operates on `Template` structs, preserves the original author on edit, and keeps sections referencing non-published templates. Strings localized for `en` / `et` / `ru`.
+- **Multi-column images.** `{{ images: name }}` (`image_list`) slots can render as an N-column grid (1–4) instead of a vertical stack. Authors set the default column count per variable in the template editor (a Columns `<select>` alongside `separator`/`max_count`); the value rides through to `image_params[slot]["columns"]`. Rendering uses a two-phase Google Docs `batchUpdate`: Phase 1 deletes the placeholder and inserts a table (`rows = ceil(n / cols)`); Phase 2 re-fetches the doc and fills each cell with `insertInlineImage`, sized via `image_width_for_columns/2` and inserted last-first to avoid index drift. `columns == 1` keeps the inline path. New public `GoogleDocsClient` helpers: `content_width_pt/1`, `image_width_for_columns/2`, `table_image_inserts/3`, `fill_table_cells/3`, `match_new_tables/3`.
+- **Composed-document recipe persistence.** `Documents.create_composed_document/2` accepts a `:data` map persisted on `Document.data`, so the host app can store the template/image selection ("recipe") that produced a document and re-create it later.
+- **Trash provenance.** Trashing a document/template stamps `data["deleted"]` with `at` + `by_uuid` (NULL-safe jsonb merge that preserves sibling keys); restoring clears it. The Documents trash view shows "&lt;date&gt; · &lt;who&gt;" (display name resolved from the actor uuid). Restoring a file that was deleted from Drive surfaces `:drive_file_not_found` with a dismissible warning banner instead of a hard error.
+- **`Taxonomy.count_categories/1` and `count_types_for_category/2`** — SQL `COUNT` helpers used for the Active/Trash badge counts.
+- **`Documents.image_slots_for_template/1`** now returns `%{name, kind, config}` so consumers (e.g. the order-document picker) can read `columns`/`max_count`/etc. without re-querying the template. The merged config is normalised to string keys.
+
+### Changed
+
+- **Categories Active/Trash sub-tabs** unified with the Documents page style — string `status_mode` assigns, a shared `status_subtabs` component, and auto-hide of the sub-tab row when Trash is empty. The Categories sidebar tab now sorts last (`priority` 647 → 651, after Documents/Templates).
+- **Trashed-by name resolution moved off the LiveView render path.** Names are resolved once when the trashed lists load/sync and read from assigns, rather than querying `Auth.get_users_by_uuids/1` on every render.
+
+### Fixed
+
+- **Drift-proof multi-column table identification.** Phase 2 now matches newly-inserted tables by document order (`match_new_tables/3`) instead of a `startIndex` set-difference. The old approach misclassified any pre-existing table located *after* a multi-column placeholder (Phase 1's inserts shift its index), tripped the count guard, and left every grid in the document empty.
+- **Trash badge counts** use SQL `COUNT` instead of loading every soft-deleted row just to take its length.
+- **Deletion metadata** is stamped/cleared only on the table that owns the `google_doc_id` (derived from the folder key / restore type), instead of running an `update_all` against both `Document` and `Template`.
+- **Stale tests** brought in line with shipped behaviour: `insertInlineImage` object sizes are asserted in `PT` (not `EMU`); `image_slots_for_template/1`'s config-bearing return shape is covered. Both were assertions against already-correct code that only ran with a database.
+
+### Internal
+
+- **`mix precommit` is green** end-to-end (`compile --warnings-as-errors`, `deps.unlock --check-unused`, `format`, `credo --strict`, `dialyzer`). Resolved pre-existing `credo --strict` complexity/nesting findings via pure extractions in `documents.ex`, `google_docs_client.ex`, `google_oauth_settings_live.ex`, and `preset_form_live.ex`; added `.dialyzer_ignore.exs` for `call_without_opaque` false positives on opaque external types (`Gettext.Plural`, `MapSet`, `Ecto.Multi`).
+- Duplication removed via shared helpers: `Taxonomy.apply_status_filter/2` (list/count) and `GoogleDocsClient.cached_folder_id_keys/0`.
+
 ## 0.4.0 - 2026-05-13
 
 ### Added

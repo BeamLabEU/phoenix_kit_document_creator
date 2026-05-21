@@ -285,13 +285,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.ImageSubstitutionTest do
                deleteContentRange: %{range: %{startIndex: 10, endIndex: 27}}
              }
 
+      # Google's Unit enum only accepts PT (1px = 0.75pt); EMU is rejected.
+      # 800x400 source scaled to a 400px display width → 200px tall.
       assert insert == %{
                insertInlineImage: %{
                  location: %{index: 10},
                  uri: "https://x/a.png",
                  objectSize: %{
-                   width: %{magnitude: 400 * 9525, unit: "EMU"},
-                   height: %{magnitude: 200 * 9525, unit: "EMU"}
+                   width: %{magnitude: 400 * 0.75, unit: "PT"},
+                   height: %{magnitude: 200 * 0.75, unit: "PT"}
                  }
                }
              }
@@ -378,13 +380,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.ImageSubstitutionTest do
 
       [_delete, insert] = GoogleDocsClient.build_image_batch_requests(ranges, fills)
 
+      # nil src dims → square fallback at default_width_px, in PT (1px = 0.75pt).
       assert insert == %{
                insertInlineImage: %{
                  location: %{index: 10},
                  uri: "https://x/a.png",
                  objectSize: %{
-                   width: %{magnitude: 400 * 9525, unit: "EMU"},
-                   height: %{magnitude: 400 * 9525, unit: "EMU"}
+                   width: %{magnitude: 400 * 0.75, unit: "PT"},
+                   height: %{magnitude: 400 * 0.75, unit: "PT"}
                  }
                }
              }

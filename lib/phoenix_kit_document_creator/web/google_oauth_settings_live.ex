@@ -151,76 +151,25 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
   def handle_event("save_folders", params, socket) do
     folder_data = Settings.get_json_setting(GoogleDocsClient.folder_settings_key(), %{})
+    new = folder_params(params)
+    changed = Map.take(folder_data, Map.keys(new)) != new
 
-    new = %{
-      "folder_path_root" => String.trim(params["root_path"] || ""),
-      "folder_name_root" => String.trim(params["root_name"] || ""),
-      "folder_path_templates" => String.trim(params["templates_path"] || ""),
-      "folder_name_templates" => String.trim(params["templates_name"] || ""),
-      "folder_path_documents" => String.trim(params["documents_path"] || ""),
-      "folder_name_documents" => String.trim(params["documents_name"] || ""),
-      "folder_path_deleted" => String.trim(params["deleted_path"] || ""),
-      "folder_name_deleted" => String.trim(params["deleted_name"] || "")
-    }
-
-    old_keys = Map.take(folder_data, Map.keys(new))
-    changed = old_keys != new
-
-    updated = Map.merge(folder_data, new)
-
-    # If anything changed, clear cached folder IDs so discovery uses the new config
-    updated =
-      if changed do
-        Map.drop(updated, [
-          "templates_folder_id",
-          "documents_folder_id",
-          "deleted_templates_folder_id",
-          "deleted_documents_folder_id"
-        ])
-      else
-        updated
-      end
-
-    Settings.update_json_setting_with_module(
-      GoogleDocsClient.folder_settings_key(),
-      updated,
-      "document_creator"
-    )
+    folder_data
+    |> Map.merge(new)
+    |> maybe_drop_cached_folder_ids(changed)
+    |> persist_folder_settings()
 
     if changed do
       Documents.log_manual_action("settings.folders_changed", [
         {:actor_uuid, actor_uuid(socket)},
         {:metadata, new}
       ])
+
+      maybe_ensure_root_folder(new)
     end
 
-    old_root_name = socket.assigns.root_name || ""
-    new_root_name = new["folder_name_root"]
-    root_changed = changed and new_root_name != "" and new_root_name != old_root_name
-
-    if changed and new_root_name != "" do
-      root_abs =
-        if new["folder_path_root"] != "",
-          do: "#{new["folder_path_root"]}/#{new_root_name}",
-          else: new_root_name
-
-      Task.start(fn -> GoogleDocsClient.ensure_folder_path(root_abs) end)
-    end
-
-    {:noreply,
-     assign(socket,
-       root_path: new["folder_path_root"],
-       root_name: new["folder_name_root"],
-       templates_path: new["folder_path_templates"],
-       templates_name: new["folder_name_templates"],
-       documents_path: new["folder_path_documents"],
-       documents_name: new["folder_name_documents"],
-       deleted_path: new["folder_path_deleted"],
-       deleted_name: new["folder_name_deleted"],
-       migration_needed: root_changed,
-       success: gettext("Folder settings saved"),
-       error: nil
-     )}
+    root_changed = changed and root_name_changed?(new, socket)
+    {:noreply, assign_folder_settings(socket, new, root_changed)}
   end
 
   def handle_event("skip_migration", _params, socket) do
@@ -234,29 +183,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
     case GoogleDocsClient.ensure_folder_path(root_abs) do
       {:ok, root_folder_id} ->
-        case GoogleDocsClient.migrate_folders_to_root(root_folder_id) do
-          {:ok, %{moved: moved}} ->
-            Documents.log_manual_action("settings.folders_migrated", [
-              {:actor_uuid, actor_uuid(socket)},
-              {:metadata, %{"root_name" => root_name, "moved" => moved}}
-            ])
-
-            {:noreply,
-             assign(socket,
-               migration_needed: false,
-               success: gettext("Folders moved to \"%{name}\"", name: root_name),
-               error: nil
-             )}
-
-          {:error, failures} ->
-            labels = Enum.map_join(failures, ", ", fn {label, _} -> label end)
-
-            {:noreply,
-             assign(socket,
-               error: gettext("Migration failed for: %{folders}", folders: labels),
-               success: nil
-             )}
-        end
+        run_folder_migration(socket, root_folder_id, root_name)
 
       {:error, _reason} ->
         {:noreply,
@@ -641,6 +568,97 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
       <div class="modal-backdrop" phx-click="browser_close"></div>
     </div>
     """
+  end
+
+  # ── save_folders / migrate_folders helpers ───────────────────────────────
+
+  defp folder_params(params) do
+    %{
+      "folder_path_root" => String.trim(params["root_path"] || ""),
+      "folder_name_root" => String.trim(params["root_name"] || ""),
+      "folder_path_templates" => String.trim(params["templates_path"] || ""),
+      "folder_name_templates" => String.trim(params["templates_name"] || ""),
+      "folder_path_documents" => String.trim(params["documents_path"] || ""),
+      "folder_name_documents" => String.trim(params["documents_name"] || ""),
+      "folder_path_deleted" => String.trim(params["deleted_path"] || ""),
+      "folder_name_deleted" => String.trim(params["deleted_name"] || "")
+    }
+  end
+
+  # When anything changed, clear cached folder IDs so discovery uses the new config.
+  defp maybe_drop_cached_folder_ids(data, false), do: data
+
+  defp maybe_drop_cached_folder_ids(data, true) do
+    Map.drop(data, GoogleDocsClient.cached_folder_id_keys())
+  end
+
+  defp persist_folder_settings(data) do
+    Settings.update_json_setting_with_module(
+      GoogleDocsClient.folder_settings_key(),
+      data,
+      "document_creator"
+    )
+  end
+
+  defp root_name_changed?(new, socket) do
+    new_root_name = new["folder_name_root"]
+    new_root_name != "" and new_root_name != (socket.assigns.root_name || "")
+  end
+
+  defp maybe_ensure_root_folder(%{"folder_name_root" => ""}), do: :ok
+
+  defp maybe_ensure_root_folder(new) do
+    root_name = new["folder_name_root"]
+
+    root_abs =
+      if new["folder_path_root"] != "",
+        do: "#{new["folder_path_root"]}/#{root_name}",
+        else: root_name
+
+    Task.start(fn -> GoogleDocsClient.ensure_folder_path(root_abs) end)
+    :ok
+  end
+
+  defp assign_folder_settings(socket, new, root_changed) do
+    assign(socket,
+      root_path: new["folder_path_root"],
+      root_name: new["folder_name_root"],
+      templates_path: new["folder_path_templates"],
+      templates_name: new["folder_name_templates"],
+      documents_path: new["folder_path_documents"],
+      documents_name: new["folder_name_documents"],
+      deleted_path: new["folder_path_deleted"],
+      deleted_name: new["folder_name_deleted"],
+      migration_needed: root_changed,
+      success: gettext("Folder settings saved"),
+      error: nil
+    )
+  end
+
+  defp run_folder_migration(socket, root_folder_id, root_name) do
+    case GoogleDocsClient.migrate_folders_to_root(root_folder_id) do
+      {:ok, %{moved: moved}} ->
+        Documents.log_manual_action("settings.folders_migrated", [
+          {:actor_uuid, actor_uuid(socket)},
+          {:metadata, %{"root_name" => root_name, "moved" => moved}}
+        ])
+
+        {:noreply,
+         assign(socket,
+           migration_needed: false,
+           success: gettext("Folders moved to \"%{name}\"", name: root_name),
+           error: nil
+         )}
+
+      {:error, failures} ->
+        labels = Enum.map_join(failures, ", ", fn {label, _} -> label end)
+
+        {:noreply,
+         assign(socket,
+           error: gettext("Migration failed for: %{folders}", folders: labels),
+           success: nil
+         )}
+    end
   end
 
   defp actor_uuid(socket), do: Helpers.actor_uuid(socket)

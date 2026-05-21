@@ -121,13 +121,7 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
 
     # Match each client-supplied id to a section. Unknown/stale ids (e.g. a
     # drag landing after a remove_section) are skipped rather than crashing.
-    matched =
-      Enum.flat_map(ids, fn id ->
-        case Enum.find(by_index, fn {_s, i} -> Integer.to_string(i) == id end) do
-          {_section, _i} = pair -> [pair]
-          nil -> []
-        end
-      end)
+    matched = Enum.flat_map(ids, &match_section_by_id(by_index, &1))
 
     # Append any sections the client never referenced so none are dropped.
     used = MapSet.new(matched, fn {_s, i} -> i end)
@@ -136,6 +130,15 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
     reordered = Enum.map(matched ++ leftover, fn {section, _i} -> section end)
 
     {:noreply, assign(socket, sections: reordered)}
+  end
+
+  # Match a client-supplied id to a {section, index} pair. Unknown/stale ids
+  # (e.g. a drag landing after a remove_section) yield [] rather than crashing.
+  defp match_section_by_id(by_index, id) do
+    case Enum.find(by_index, fn {_s, i} -> Integer.to_string(i) == id end) do
+      {_section, _i} = pair -> [pair]
+      nil -> []
+    end
   end
 
   # Forces the scoping + actor fields the form must not control directly.

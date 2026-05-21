@@ -50,10 +50,18 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
 
         assert {:ok, slots} = Documents.image_slots_for_template(template.uuid)
 
-        assert Enum.sort_by(slots, & &1.name) == [
+        # Slots now expose the resolved variable config alongside name/kind.
+        assert slots
+               |> Enum.sort_by(& &1.name)
+               |> Enum.map(&Map.take(&1, [:name, :kind])) == [
                  %{name: "logo", kind: :image},
                  %{name: "photos", kind: :image_list}
                ]
+
+        # image_list slots carry the column config (default 1) consumed by the
+        # multi-column Google Docs renderer.
+        photos = Enum.find(slots, &(&1.name == "photos"))
+        assert photos.config["columns"] == 1
       end
 
       test "returns {:error, :not_found} for unknown template uuid" do

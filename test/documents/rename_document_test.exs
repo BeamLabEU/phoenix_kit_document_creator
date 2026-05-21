@@ -3,6 +3,7 @@ defmodule PhoenixKitDocumentCreator.Documents.RenameDocumentTest do
 
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.Schemas.Document
+  alias PhoenixKitDocumentCreator.Test.StubDocsClient
   alias PhoenixKitDocumentCreator.Test.StubDocsClientHelpers
 
   import StubDocsClientHelpers
@@ -45,7 +46,7 @@ defmodule PhoenixKitDocumentCreator.Documents.RenameDocumentTest do
       assert {:ok, _updated} = Documents.rename_document(doc.uuid, "Renamed")
 
       assert Enum.any?(
-               PhoenixKitDocumentCreator.Test.StubDocsClient.calls(),
+               StubDocsClient.calls(),
                fn
                  {:rename_file, "gdoc-xyz"} -> true
                  _ -> false

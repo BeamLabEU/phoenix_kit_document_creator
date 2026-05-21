@@ -38,6 +38,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @folder_settings_key "document_creator_folders"
   @settings_key "document_creator_settings"
 
+  # Discovered-folder-ID cache keys inside the folder settings map. Dropped
+  # whenever the folder config changes so IDs are re-discovered from the new
+  # location. Exposed so callers (e.g. the settings LiveView) don't duplicate
+  # this list.
+  @cached_folder_id_keys ~w(
+    templates_folder_id documents_folder_id
+    deleted_templates_folder_id deleted_documents_folder_id
+  )
+
   # Matches an RFC 4122-shaped UUID string (the storage row identifier
   # used by PhoenixKit.Integrations — currently UUIDv7, but this guard
   # only needs to discriminate "promoted to uuid" from legacy
@@ -48,6 +57,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @docs_base "https://docs.googleapis.com/v1"
   @drive_base "https://www.googleapis.com/drive/v3"
+  @drive_upload_base "https://www.googleapis.com/upload/drive/v3"
 
   # All access to `PhoenixKit.Integrations` flows through this resolver so
   # tests can route the three call sites (get_credentials/1,
@@ -518,6 +528,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @spec folder_settings_key() :: String.t()
   def folder_settings_key, do: @folder_settings_key
 
+  @doc "Folder-settings keys holding discovered folder IDs (cleared on config change)."
+  @spec cached_folder_id_keys() :: [String.t()]
+  def cached_folder_id_keys, do: @cached_folder_id_keys
+
   @doc """
   Move the top-level Drive folders (templates, documents, deleted) into
   `root_folder_id`. For each folder the cached ID is tried first; when absent,
@@ -537,53 +551,53 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     config = get_folder_config()
     folder_data = Settings.get_json_setting(@folder_settings_key, %{})
 
-    resolve_id = fn name, cached_id ->
-      cond do
-        is_binary(cached_id) and cached_id != "" -> {:ok, cached_id}
-        name != "" -> find_folder_by_name(name, parent: "root")
-        true -> {:error, :not_found}
-      end
-    end
-
     candidates = [
       {"templates", config.templates_name, folder_data["templates_folder_id"]},
       {"documents", config.documents_name, folder_data["documents_folder_id"]},
       {"deleted", config.deleted_name, nil}
     ]
 
-    results =
-      Enum.map(candidates, fn {label, name, cached_id} ->
-        case resolve_id.(name, cached_id) do
-          {:ok, folder_id} ->
-            case move_file(folder_id, root_folder_id) do
-              :ok -> {:ok, label}
-              {:error, reason} -> {:error, {label, reason}}
-            end
-
-          {:error, :not_found} ->
-            {:skip, label}
-
-          {:error, reason} ->
-            {:error, {label, reason}}
-        end
-      end)
+    results = Enum.map(candidates, &migrate_folder_candidate(&1, root_folder_id))
 
     failures = for {:error, f} <- results, do: f
     moved = for {:ok, label} <- results, do: label
     skipped = for {:skip, label} <- results, do: label
 
     if failures == [] do
-      cache_keys = ~w(
-        templates_folder_id documents_folder_id
-        deleted_templates_folder_id deleted_documents_folder_id
-      )
-      updated = Map.drop(folder_data, cache_keys)
-      Settings.update_json_setting_with_module(@folder_settings_key, updated, "document_creator")
+      clear_cached_folder_ids(folder_data)
       {:ok, %{moved: moved, skipped: skipped}}
     else
       Logger.error("Document Creator folder migration failed: #{inspect(failures)}")
       {:error, failures}
     end
+  end
+
+  defp migrate_folder_candidate({label, name, cached_id}, root_folder_id) do
+    case resolve_migration_folder_id(name, cached_id) do
+      {:ok, folder_id} -> move_migration_folder(folder_id, root_folder_id, label)
+      {:error, :not_found} -> {:skip, label}
+      {:error, reason} -> {:error, {label, reason}}
+    end
+  end
+
+  defp resolve_migration_folder_id(name, cached_id) do
+    cond do
+      is_binary(cached_id) and cached_id != "" -> {:ok, cached_id}
+      name != "" -> find_folder_by_name(name, parent: "root")
+      true -> {:error, :not_found}
+    end
+  end
+
+  defp move_migration_folder(folder_id, root_folder_id, label) do
+    case move_file(folder_id, root_folder_id) do
+      :ok -> {:ok, label}
+      {:error, reason} -> {:error, {label, reason}}
+    end
+  end
+
+  defp clear_cached_folder_ids(folder_data) do
+    updated = Map.drop(folder_data, @cached_folder_id_keys)
+    Settings.update_json_setting_with_module(@folder_settings_key, updated, "document_creator")
   end
 
   @doc """
@@ -969,6 +983,46 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   @doc """
+  Identifies which of `tables_asc` (table elements from the re-fetched document,
+  ascending by start index) are the tables Phase 1 just inserted, returning them
+  in slot order.
+
+  `pre_existing_starts` and `new_slot_starts` are start indices captured from the
+  *pre-Phase-1* document. Phase 1's deletes/inserts shift the absolute indices of
+  everything after a placeholder, so a startIndex set-difference misclassifies a
+  pre-existing table located after a placeholder (its index moves and no longer
+  matches the snapshot). Table *order* is never changed by inserts, though, so we
+  reconstruct the pre/new interleaving from the original indices and read it off
+  the post-Phase-1 tables positionally — robust regardless of where pre-existing
+  tables sit relative to the placeholders.
+
+  Returns `{:ok, new_tables}` aligned with `new_slot_starts` sorted ascending, or
+  `:mismatch` when the table count doesn't line up (e.g. Phase 1 partially
+  failed) so the caller can skip filling rather than fill the wrong tables.
+  """
+  @spec match_new_tables([map()], [non_neg_integer()], [non_neg_integer()]) ::
+          {:ok, [map()]} | :mismatch
+  def match_new_tables(tables_asc, pre_existing_starts, new_slot_starts) do
+    pattern =
+      (Enum.map(pre_existing_starts, &{&1, :pre}) ++
+         Enum.map(new_slot_starts, &{&1, :new}))
+      |> Enum.sort_by(fn {idx, _tag} -> idx end)
+      |> Enum.map(fn {_idx, tag} -> tag end)
+
+    if length(tables_asc) != length(pattern) do
+      :mismatch
+    else
+      new_tables =
+        tables_asc
+        |> Enum.zip(pattern)
+        |> Enum.filter(fn {_table, tag} -> tag == :new end)
+        |> Enum.map(fn {table, _tag} -> table end)
+
+      {:ok, new_tables}
+    end
+  end
+
+  @doc """
   Builds the list of `batchUpdate` request maps to substitute image tags.
 
   `fills` is a map keyed by variable name; each value carries `kind`,
@@ -1200,51 +1254,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp maybe_batch(_fn, _id, []), do: {:ok, %{}}
   defp maybe_batch(fn_, id, requests), do: fn_.(id, requests)
 
-  # Req returns {:ok, %Req.Response{status: 400, ...}} for HTTP errors — a
-  # plain `with {:ok, _}` match would treat a 400 as success and silently
-  # drop the entire batch. Surface non-2xx responses as {:error, _}.
-  defp ensure_batch_success(%{} = resp, doc_id, label) do
-    case Map.get(resp, :status) do
-      nil ->
-        :ok
-
-      s when s in 200..299 ->
-        :ok
-
-      s ->
-        Logger.error(
-          "[GoogleDocsClient] #{label} batchUpdate on doc #{doc_id} failed " <>
-            "with HTTP #{s}: #{inspect(Map.get(resp, :body))}"
-        )
-
-        {:error, {:google_api, s, Map.get(resp, :body)}}
-    end
-  end
-
-  defp ensure_batch_success(_other, _doc_id, _label), do: :ok
-
   # ===========================================================================
   # Google Drive API
   # ===========================================================================
 
-  @drive_upload_base "https://www.googleapis.com/upload/drive/v3"
-
   @doc """
-  Upload a raw image binary to Google Drive and make it link-shareable so that
-  Google's servers (e.g. the Docs API `insertInlineImage` endpoint) can fetch
-  it.
+  Upload a raw image binary to Drive and return a public, embeddable URL.
 
-  Returns `{:ok, image_url}` where `image_url` is
-  `https://lh3.googleusercontent.com/d/<file_id>` — Google's image-serving
-  host that returns the raw binary directly (no redirect) and is accepted
-  by `insertInlineImage`.
+  Used when inserting an image into a Google Doc via `insertInlineImage`,
+  which requires a fetchable URL (not raw bytes). Uploads the binary to
+  Drive, grants anyone-with-link read access, and returns an
+  `lh3.googleusercontent.com/d/<id>` URL that Google's image fetcher can
+  read without following a redirect.
 
-  The uploaded file is created in the authenticated account's root Drive
-  folder. Callers should delete it after the document is composed if
-  persistence is undesirable (use `delete_document/1` passing the file_id).
-
-  ## Parameters
-    - `data` — raw image binary
+    - `data` — raw image bytes
     - `mime_type` — MIME type string, e.g. `"image/jpeg"`
     - `opts` — optional keyword list; supports `:name` (file name, defaults to
       `"embed-image"`)
@@ -1687,11 +1710,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   defp substitute_all_images(doc_id, doc2, sections, ranges) do
-    # Build a flat list of {name, fill, range} tuples — one per slot per section.
-    # Preserving duplicates is intentional: two sections may share the same slot
-    # name (e.g. both have `{{ images: sub_order_photos }}`). We resolve which
-    # fill belongs to which in-document tag by matching the tag's start_index
-    # against the section's allocated range, not just by slot name.
     all_image_fills =
       sections
       |> Enum.flat_map(fn s ->
@@ -1703,117 +1721,111 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     if all_image_fills == [] do
       :ok
     else
-      all_slot_names = Enum.map(all_image_fills, fn {name, _, _} -> name end) |> Enum.uniq()
-      content_width_pt = content_width_pt(doc2)
+      apply_image_fills(doc_id, doc2, all_image_fills)
+    end
+  end
 
-      # For each image tag found in the document, find the section-scoped fill
-      # whose name matches AND whose allocated range contains the tag's position.
-      # This correctly handles duplicate slot names across sections.
-      filtered_ranges =
-        doc2
-        |> find_image_tag_ranges(all_slot_names)
-        |> Enum.flat_map(&resolve_image_tag_fill(all_image_fills, &1))
+  # Runs the actual substitution for a non-empty set of `{name, fill, range}`
+  # tuples: build the Phase 1 batch (inline deletes/inserts + table creation),
+  # then, if any multi-column table slots exist, fill their cells in Phase 2.
+  defp apply_image_fills(doc_id, doc2, all_image_fills) do
+    fills_map = Map.new(all_image_fills, fn {name, fill, _} -> {name, fill} end)
+    range_by_name = Map.new(all_image_fills, fn {name, _, range} -> {name, range} end)
+    content_width_pt = content_width_pt(doc2)
 
-      # Partition into table slots (image_list + columns >= 2) and inline slots.
-      {table_ranges, inline_ranges} =
-        Enum.split_with(filtered_ranges, fn %{fill: fill} ->
-          fill.kind == :image_list and Map.get(fill, :columns, 1) >= 2
-        end)
+    filtered_ranges =
+      doc2
+      |> find_image_tag_ranges(Map.keys(fills_map))
+      |> Enum.filter(fn %{name: name, start_index: s} ->
+        in_section_range?(range_by_name, name, s)
+      end)
 
-      # Phase 1 batch: inline slot deletes+inserts + table slot delete+insertTable.
-      # Sort all requests descending by start_index so earlier inserts don't shift later ones.
-      phase1_requests =
-        (table_ranges ++ inline_ranges)
-        |> build_image_batch_requests_with_embedded_fills(content_width_pt)
+    # Partition into table slots (image_list + columns >= 2) and inline slots.
+    {table_ranges, inline_ranges} =
+      Enum.split_with(filtered_ranges, fn %{name: name} ->
+        fill = Map.fetch!(fills_map, name)
+        fill.kind == :image_list and Map.get(fill, :columns, 1) >= 2
+      end)
 
-      # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
-      # Phase 2 can identify the newly inserted tables by set-difference.
-      pre_existing_table_starts =
-        doc2 |> collect_tables() |> MapSet.new(& &1["startIndex"])
+    # Phase 1 batch: inline slot deletes+inserts + table slot delete+insertTable.
+    # Sort all requests descending by start_index so earlier inserts don't shift later ones.
+    phase1_requests =
+      (table_ranges ++ inline_ranges)
+      |> build_image_batch_requests(fills_map, content_width_pt)
 
-      with {:ok, resp} <- maybe_batch(&batch_update/2, doc_id, phase1_requests),
-           :ok <- ensure_batch_success(resp, doc_id, "Phase 1") do
-        if table_ranges == [] do
-          :ok
-        else
-          do_fill_table_cells(
-            doc_id,
-            table_ranges,
-            content_width_pt,
-            pre_existing_table_starts
-          )
-        end
+    # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
+    # Phase 2 can reconstruct the pre/new table interleaving (see
+    # match_new_tables/3) and identify the newly inserted tables.
+    pre_existing_table_starts =
+      doc2 |> collect_tables() |> Enum.map(& &1["table"]["startIndex"])
+
+    with {:ok, _} <- maybe_batch(&batch_update/2, doc_id, phase1_requests) do
+      if table_ranges == [] do
+        :ok
+      else
+        do_fill_table_cells(
+          doc_id,
+          table_ranges,
+          fills_map,
+          content_width_pt,
+          pre_existing_table_starts
+        )
       end
     end
   end
 
-  # Variant of build_image_batch_requests/3 for ranges that already carry an
-  # embedded :fill key (as produced by substitute_all_images/4). Falls back to
-  # the public fill-map variant for callers that supply a separate fills map.
-  defp build_image_batch_requests_with_embedded_fills(ranges, content_width_pt) do
-    ranges
-    |> Enum.sort_by(& &1.start_index, :desc)
-    |> Enum.flat_map(fn %{fill: fill, start_index: s, end_index: e} ->
-      delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
-
-      inserts =
-        case fill.kind do
-          :image -> single_image_inserts(fill, s)
-          :image_list -> list_image_inserts(fill, s, content_width_pt)
-        end
-
-      [delete | inserts]
-    end)
-  end
-
-  # Phase 2: re-fetch the doc after table creation, locate the new tables by
-  # set-difference against pre-existing table start_indices, and fill cells.
-  #
-  # Using "last K tables" would fail when the document has pre-existing tables
-  # at indices below the placeholder positions — Phase 1 inserts shift those
-  # pre-existing tables to higher indices, making them the "last K" instead of
-  # the newly created ones.
+  # Phase 2: re-fetch the doc after table creation, locate the newly inserted
+  # tables via `match_new_tables/3` (order-based, drift-proof — see its docs),
+  # and fill their cells.
   defp do_fill_table_cells(
          doc_id,
          table_ranges,
+         fills_map,
          content_width_pt,
          pre_existing_table_starts
        ) do
     with {:ok, %{body: doc3}} <- get_document(doc_id) do
       table_slots_asc = Enum.sort_by(table_ranges, & &1.start_index, :asc)
+      slot_starts = Enum.map(table_slots_asc, & &1.start_index)
 
-      # Newly inserted tables are those whose start_index was not present in
-      # doc2, sorted ascending so they match table_slots_asc in document order.
-      new_tables =
+      tables_asc =
         doc3
         |> collect_tables()
-        |> Enum.reject(fn el ->
-          MapSet.member?(pre_existing_table_starts, el["startIndex"])
-        end)
-        |> Enum.sort_by(fn el -> el["startIndex"] end, :asc)
+        |> Enum.sort_by(fn el -> el["table"]["startIndex"] end, :asc)
 
-      if length(new_tables) != length(table_slots_asc) do
-        Logger.warning(
-          "substitute_all_images: expected #{length(table_slots_asc)} new tables " <>
-            "but found #{length(new_tables)} in doc #{doc_id}; skipping Phase 2"
-        )
+      case match_new_tables(tables_asc, pre_existing_table_starts, slot_starts) do
+        :mismatch ->
+          Logger.warning(
+            "substitute_all_images: table count mismatch in doc #{doc_id} " <>
+              "(found #{length(tables_asc)} tables; expected #{length(pre_existing_table_starts)} " <>
+              "pre-existing + #{length(table_slots_asc)} new); skipping Phase 2"
+          )
 
-        :ok
-      else
-        phase2_requests =
-          Enum.zip(table_slots_asc, new_tables)
-          |> Enum.flat_map(fn {%{fill: fill}, table_el} ->
-            cols = Map.get(fill, :columns, 1)
-            image_width_pt = image_width_for_columns(content_width_pt, cols)
-            cells = extract_table_cells(table_el)
-            fill_table_cells(cells, fill.media, %{image_width_pt: image_width_pt})
-          end)
+          :ok
 
-        case maybe_batch(&batch_update/2, doc_id, phase2_requests) do
-          {:ok, _} -> :ok
-          {:error, _} = err -> err
-        end
+        {:ok, new_tables} ->
+          fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, content_width_pt)
       end
+    end
+  end
+
+  # Build and run the Phase 2 batch: one insertInlineImage per cell across all
+  # matched tables, paired with their slots in document order.
+  defp fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, content_width_pt) do
+    phase2_requests =
+      table_slots_asc
+      |> Enum.zip(new_tables)
+      |> Enum.flat_map(fn {%{name: name}, table_el} ->
+        fill = Map.fetch!(fills_map, name)
+        cols = Map.get(fill, :columns, 1)
+        image_width_pt = image_width_for_columns(content_width_pt, cols)
+        cells = extract_table_cells(table_el)
+        fill_table_cells(cells, fill.media, %{image_width_pt: image_width_pt})
+      end)
+
+    case maybe_batch(&batch_update/2, doc_id, phase2_requests) do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
     end
   end
 
@@ -1837,20 +1849,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp extract_table_cells(_), do: []
 
-  # Check whether document index `s` falls within the given range tuple.
-  # Used by substitute_all_images/4 when matching image tags to section fills.
-  defp in_section_range_tuple?(nil, _s), do: false
-  defp in_section_range_tuple?({rs, re}, s), do: s >= rs and s < re
-
-  # For an image tag found in the document, look up the section-scoped fill
-  # whose slot name matches AND whose allocated range contains the tag's position.
-  # Returns `[tag_with_fill]` when found, `[]` when no section owns this tag.
-  defp resolve_image_tag_fill(all_image_fills, %{name: name, start_index: s} = tag) do
-    case Enum.find(all_image_fills, fn {n, _fill, range} ->
-           n == name and in_section_range_tuple?(range, s)
-         end) do
-      nil -> []
-      {_name, fill, _range} -> [Map.put(tag, :fill, fill)]
+  defp in_section_range?(range_by_name, name, s) do
+    case Map.get(range_by_name, name) do
+      nil -> false
+      {rs, re} -> s >= rs and s < re
     end
   end
 
@@ -1973,11 +1975,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp build_media_items(%{"media" => media}) when is_list(media) do
     Enum.map(media, fn m ->
-      %{
-        uri: Map.get(m, "uri", ""),
-        width_px: Map.get(m, "width_px"),
-        height_px: Map.get(m, "height_px")
-      }
+      %{uri: Map.get(m, "uri", ""), width_px: Map.get(m, "width_px"), height_px: nil}
     end)
   end
 
