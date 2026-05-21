@@ -17,6 +17,8 @@ defmodule PhoenixKitDocumentCreator.ErrorsTest do
       {:create_folder_failed, "Failed to create the Drive folder"},
       {:deleted_folder_not_found, "Deleted folder not found"},
       {:documents_folder_not_found, "Documents folder not found"},
+      {:drive_file_not_found,
+       "File is missing in Google Drive — it cannot be restored. You can permanently delete this record."},
       {:file_trashed, "File is in the Drive trash"},
       {:folder_not_found, "Folder not found"},
       {:folder_search_failed, "Failed to search Drive for the folder"},

@@ -162,6 +162,8 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
   defp insert_document_and_sections(gdoc_id, sorted_sections, created_by, name, opts, repo) do
     category_uuid = Keyword.get(opts, :category_uuid)
 
+    data = Keyword.get(opts, :data, %{})
+
     Multi.new()
     |> Multi.insert(:document, fn _ ->
       Document.changeset(%Document{}, %{
@@ -170,7 +172,8 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
         # legacy column not used for composed docs; nullable in DB
         template_uuid: nil,
         created_by_uuid: created_by,
-        category_uuid: category_uuid
+        category_uuid: category_uuid,
+        data: data
       })
     end)
     |> Multi.run(:sections, fn _, %{document: doc} ->

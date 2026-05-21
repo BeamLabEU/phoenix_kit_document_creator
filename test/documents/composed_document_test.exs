@@ -134,6 +134,36 @@ defmodule PhoenixKitDocumentCreator.Documents.ComposedDocumentTest do
     end
   end
 
+  describe "create_composed_document/2 — data field" do
+    test "data: opt is stored on the created Document" do
+      t1 = insert_template!(google_doc_id: "tmpl-data1", published: true)
+      section = %{template_uuid: t1.uuid, position: 0, variable_values: %{}, image_params: %{}}
+      recipe = %{"category_uuid" => "cat-1", "template_uuids" => [t1.uuid]}
+
+      assert {:ok, %Document{} = doc} =
+               Documents.create_composed_document([section],
+                 created_by_uuid: Ecto.UUID.generate(),
+                 name: "With data",
+                 data: %{"recreate_recipe" => recipe}
+               )
+
+      assert doc.data == %{"recreate_recipe" => recipe}
+    end
+
+    test "data defaults to empty map when opt is omitted" do
+      t1 = insert_template!(google_doc_id: "tmpl-nodata1", published: true)
+      section = %{template_uuid: t1.uuid, position: 0, variable_values: %{}, image_params: %{}}
+
+      assert {:ok, %Document{} = doc} =
+               Documents.create_composed_document([section],
+                 created_by_uuid: Ecto.UUID.generate(),
+                 name: "No data"
+               )
+
+      assert doc.data == %{}
+    end
+  end
+
   describe "create_composed_document/2 — validation" do
     test "returns error for empty sections" do
       assert {:error, :empty_sections} =
