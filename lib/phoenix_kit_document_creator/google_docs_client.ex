@@ -537,53 +537,58 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     config = get_folder_config()
     folder_data = Settings.get_json_setting(@folder_settings_key, %{})
 
-    resolve_id = fn name, cached_id ->
-      cond do
-        is_binary(cached_id) and cached_id != "" -> {:ok, cached_id}
-        name != "" -> find_folder_by_name(name, parent: "root")
-        true -> {:error, :not_found}
-      end
-    end
-
     candidates = [
       {"templates", config.templates_name, folder_data["templates_folder_id"]},
       {"documents", config.documents_name, folder_data["documents_folder_id"]},
       {"deleted", config.deleted_name, nil}
     ]
 
-    results =
-      Enum.map(candidates, fn {label, name, cached_id} ->
-        case resolve_id.(name, cached_id) do
-          {:ok, folder_id} ->
-            case move_file(folder_id, root_folder_id) do
-              :ok -> {:ok, label}
-              {:error, reason} -> {:error, {label, reason}}
-            end
-
-          {:error, :not_found} ->
-            {:skip, label}
-
-          {:error, reason} ->
-            {:error, {label, reason}}
-        end
-      end)
+    results = Enum.map(candidates, &migrate_folder_candidate(&1, root_folder_id))
 
     failures = for {:error, f} <- results, do: f
     moved = for {:ok, label} <- results, do: label
     skipped = for {:skip, label} <- results, do: label
 
     if failures == [] do
-      cache_keys = ~w(
-        templates_folder_id documents_folder_id
-        deleted_templates_folder_id deleted_documents_folder_id
-      )
-      updated = Map.drop(folder_data, cache_keys)
-      Settings.update_json_setting_with_module(@folder_settings_key, updated, "document_creator")
+      clear_cached_folder_ids(folder_data)
       {:ok, %{moved: moved, skipped: skipped}}
     else
       Logger.error("Document Creator folder migration failed: #{inspect(failures)}")
       {:error, failures}
     end
+  end
+
+  defp migrate_folder_candidate({label, name, cached_id}, root_folder_id) do
+    case resolve_migration_folder_id(name, cached_id) do
+      {:ok, folder_id} -> move_migration_folder(folder_id, root_folder_id, label)
+      {:error, :not_found} -> {:skip, label}
+      {:error, reason} -> {:error, {label, reason}}
+    end
+  end
+
+  defp resolve_migration_folder_id(name, cached_id) do
+    cond do
+      is_binary(cached_id) and cached_id != "" -> {:ok, cached_id}
+      name != "" -> find_folder_by_name(name, parent: "root")
+      true -> {:error, :not_found}
+    end
+  end
+
+  defp move_migration_folder(folder_id, root_folder_id, label) do
+    case move_file(folder_id, root_folder_id) do
+      :ok -> {:ok, label}
+      {:error, reason} -> {:error, {label, reason}}
+    end
+  end
+
+  defp clear_cached_folder_ids(folder_data) do
+    cache_keys = ~w(
+      templates_folder_id documents_folder_id
+      deleted_templates_folder_id deleted_documents_folder_id
+    )
+
+    updated = Map.drop(folder_data, cache_keys)
+    Settings.update_json_setting_with_module(@folder_settings_key, updated, "document_creator")
   end
 
   @doc """

@@ -20,7 +20,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       package: package(),
 
       # Dialyzer
-      dialyzer: [plt_add_apps: [:phoenix_kit]],
+      dialyzer: [plt_add_apps: [:phoenix_kit], ignore_warnings: ".dialyzer_ignore.exs"],
 
       # Coverage — exclude test-support modules (DataCase, TestRepo,
       # Test.Endpoint, Test.Router, etc.) so the percentage reflects
