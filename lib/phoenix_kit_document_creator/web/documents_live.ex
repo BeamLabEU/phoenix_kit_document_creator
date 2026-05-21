@@ -920,7 +920,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex flex-col mx-auto max-w-6xl px-4 py-6 gap-6">
+    <div class="flex flex-col w-full px-4 py-6 gap-6">
       <%!-- Not connected banner --%>
       <%= if not @google_connected do %>
         <div class="card bg-base-100 shadow-sm border border-warning/30">
@@ -1047,14 +1047,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 |> Enum.map(&{&1.uuid, &1.name})
             end %>
           <form phx-change="filter" class="flex items-center gap-2 flex-shrink-0">
-            <input
-              type="search"
-              name="q"
-              value={@filters["q"] || ""}
-              phx-debounce="300"
-              class="input input-sm input-bordered"
-              placeholder={gettext("Search by name…")}
-            />
+            <label class="input input-sm input-bordered w-80 shrink-0">
+              <span class="hero-magnifying-glass w-4 h-4 opacity-60" />
+              <input
+                type="search"
+                name="q"
+                value={@filters["q"] || ""}
+                phx-debounce="300"
+                class="grow"
+                placeholder={gettext("Search by name…")}
+              />
+            </label>
             <select name="category" class="select select-sm">
               <option value="">{gettext("All Categories")}</option>
               <%= for cat <- filter_cats do %>
@@ -1138,7 +1141,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   <div class="skeleton h-4 rounded w-3/4" />
                   <div class="skeleton h-3 rounded w-1/2 mt-auto" />
                 </div>
-                <div class="flex gap-1 px-2 pb-2 pt-1">
+                <div class="flex gap-1 px-2 pb-2">
                   <div class="skeleton flex-1 h-6 rounded" />
                   <div class="skeleton flex-1 h-6 rounded" />
                 </div>
@@ -1441,9 +1444,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       }
       item_id={& &1["id"]}
       class="table-sm"
+      card_grid_class="gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
     >
-      <%!-- Card-grid sizing: doc_creator uses 2/3/4/5-col grid (denser than the core
-           default 1/2/3/4). Override via Tailwind utility wrapper around the grid. --%>
       <:card_media :let={file}>
         <div
           :if={MapSet.member?(@pending_files, file["id"])}
@@ -1454,13 +1456,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <a
           href={GoogleDocsClient.get_edit_url(file["id"])}
           target="_blank"
-          style="display:flex;justify-content:center;padding:16px 16px 24px 16px;background:oklch(var(--color-base-200));"
+          style="display:flex;justify-content:center;padding:8px 8px 8px 8px;background:oklch(var(--color-base-200));"
         >
           {render_thumbnail(%{thumbnail: @thumbnails[file["id"]]})}
         </a>
       </:card_media>
       <:card_body :let={file}>
-        <div class="p-3 flex-1 flex flex-col">
+        <div class="px-3 pt-2 pb-1 flex-1 flex flex-col">
           <div class="flex items-center gap-1.5">
             <a
               href={GoogleDocsClient.get_edit_url(file["id"])}
@@ -1519,7 +1521,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             {format_deleted_info(file["data"]["deleted"], @deleted_by_names)}
           </p>
         </div>
-        <div class="flex gap-1 px-2 pb-2 pt-1">
+        <div class="flex gap-1 px-2 pb-2">
           <%= if @status_mode == "trashed" do %>
             <a
               href={GoogleDocsClient.get_edit_url(file["id"])}
