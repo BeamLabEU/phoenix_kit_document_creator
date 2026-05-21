@@ -1622,48 +1622,55 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     if all_image_fills == [] do
       :ok
     else
-      fills_map = Map.new(all_image_fills, fn {name, fill, _} -> {name, fill} end)
-      range_by_name = Map.new(all_image_fills, fn {name, _, range} -> {name, range} end)
-      content_width_pt = content_width_pt(doc2)
+      apply_image_fills(doc_id, doc2, all_image_fills)
+    end
+  end
 
-      filtered_ranges =
-        doc2
-        |> find_image_tag_ranges(Map.keys(fills_map))
-        |> Enum.filter(fn %{name: name, start_index: s} ->
-          in_section_range?(range_by_name, name, s)
-        end)
+  # Runs the actual substitution for a non-empty set of `{name, fill, range}`
+  # tuples: build the Phase 1 batch (inline deletes/inserts + table creation),
+  # then, if any multi-column table slots exist, fill their cells in Phase 2.
+  defp apply_image_fills(doc_id, doc2, all_image_fills) do
+    fills_map = Map.new(all_image_fills, fn {name, fill, _} -> {name, fill} end)
+    range_by_name = Map.new(all_image_fills, fn {name, _, range} -> {name, range} end)
+    content_width_pt = content_width_pt(doc2)
 
-      # Partition into table slots (image_list + columns >= 2) and inline slots.
-      {table_ranges, inline_ranges} =
-        Enum.split_with(filtered_ranges, fn %{name: name} ->
-          fill = Map.fetch!(fills_map, name)
-          fill.kind == :image_list and Map.get(fill, :columns, 1) >= 2
-        end)
+    filtered_ranges =
+      doc2
+      |> find_image_tag_ranges(Map.keys(fills_map))
+      |> Enum.filter(fn %{name: name, start_index: s} ->
+        in_section_range?(range_by_name, name, s)
+      end)
 
-      # Phase 1 batch: inline slot deletes+inserts + table slot delete+insertTable.
-      # Sort all requests descending by start_index so earlier inserts don't shift later ones.
-      phase1_requests =
-        (table_ranges ++ inline_ranges)
-        |> build_image_batch_requests(fills_map, content_width_pt)
+    # Partition into table slots (image_list + columns >= 2) and inline slots.
+    {table_ranges, inline_ranges} =
+      Enum.split_with(filtered_ranges, fn %{name: name} ->
+        fill = Map.fetch!(fills_map, name)
+        fill.kind == :image_list and Map.get(fill, :columns, 1) >= 2
+      end)
 
-      # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
-      # Phase 2 can reconstruct the pre/new table interleaving (see
-      # match_new_tables/3) and identify the newly inserted tables.
-      pre_existing_table_starts =
-        doc2 |> collect_tables() |> MapSet.new(& &1["table"]["startIndex"])
+    # Phase 1 batch: inline slot deletes+inserts + table slot delete+insertTable.
+    # Sort all requests descending by start_index so earlier inserts don't shift later ones.
+    phase1_requests =
+      (table_ranges ++ inline_ranges)
+      |> build_image_batch_requests(fills_map, content_width_pt)
 
-      with {:ok, _} <- maybe_batch(&batch_update/2, doc_id, phase1_requests) do
-        if table_ranges == [] do
-          :ok
-        else
-          do_fill_table_cells(
-            doc_id,
-            table_ranges,
-            fills_map,
-            content_width_pt,
-            pre_existing_table_starts
-          )
-        end
+    # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
+    # Phase 2 can reconstruct the pre/new table interleaving (see
+    # match_new_tables/3) and identify the newly inserted tables.
+    pre_existing_table_starts =
+      doc2 |> collect_tables() |> MapSet.new(& &1["table"]["startIndex"])
+
+    with {:ok, _} <- maybe_batch(&batch_update/2, doc_id, phase1_requests) do
+      if table_ranges == [] do
+        :ok
+      else
+        do_fill_table_cells(
+          doc_id,
+          table_ranges,
+          fills_map,
+          content_width_pt,
+          pre_existing_table_starts
+        )
       end
     end
   end
