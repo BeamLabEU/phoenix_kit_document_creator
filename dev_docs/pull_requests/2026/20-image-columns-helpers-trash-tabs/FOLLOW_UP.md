@@ -61,11 +61,21 @@ would have failed under PostgreSQL once `:config` was added.
 single-image tests still asserted EMU object sizes; the code has emitted PT since
 `fae10c8` (predates #20), so they were failing on `main`. Updated to PT (`px * 0.75`).
 
+## 7. Readability: extract `apply_image_fills/3`
+
+`lib/phoenix_kit_document_creator/google_docs_client.ex` — pulled the non-empty-fills
+branch of `substitute_all_images` into `apply_image_fills/3`, leaving a clear
+gather-then-apply shape and clearing that function's Credo nesting finding. Pure
+extraction, no behavior change.
+
 ## Not done (out of scope / deferred)
 
-- End-to-end test of the `substitute_all_images` Phase 1/2 orchestration (needs a
-  stubbed Docs `get_document`).
-- Pre-existing Credo complexity/nesting findings in `substitute_all_images`,
-  `migrate_folders_to_root`, `rename_document`, and the OAuth/preset LiveViews — left at
-  the repo's existing baseline.
+- End-to-end test of the `substitute_all_images` Phase 1/2 orchestration. `get_document`
+  and `batch_update` go through `authenticated_request` (real OAuth HTTP), so this needs
+  full integration setup (DataCase + stubbed Drive/Docs requests) and would be DB-gated
+  — i.e. it would not run in the sandbox. Deferred; the pure helpers it delegates to are
+  covered.
+- Pre-existing Credo complexity/nesting findings in `migrate_folders_to_root`,
+  `rename_document`, `update_template_variable_config`, and the OAuth/preset LiveViews —
+  unrelated to the image-columns work; left at the repo's existing baseline.
 - Empty trailing grid cells when `media` doesn't fill the last row (cosmetic).
