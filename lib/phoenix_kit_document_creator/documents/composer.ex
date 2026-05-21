@@ -108,10 +108,27 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
       sorted = Enum.sort_by(sections, & &1.position)
       templates_by_uuid = Map.new(templates, &{&1.uuid, &1})
 
+      # If every selected template shares the same non-nil type_uuid, propagate
+      # it to the composed document so the documents UI can show the type
+      # alongside the category. Mixed-type compositions → nil.
+      opts = Keyword.put_new(opts, :type_uuid, common_type_uuid(templates_by_uuid, sorted))
+
       case run_multi(sorted, templates_by_uuid, created_by, name, opts) do
         {:ok, %{document: doc}} -> {:ok, doc}
         {:error, _} = err -> err
       end
+    end
+  end
+
+  defp common_type_uuid(templates_by_uuid, sorted_sections) do
+    sorted_sections
+    |> Enum.map(&Map.get(templates_by_uuid, &1.template_uuid))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(& &1.type_uuid)
+    |> Enum.uniq()
+    |> case do
+      [single] when not is_nil(single) -> single
+      _ -> nil
     end
   end
 
@@ -137,30 +154,41 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
         folder_id -> [destination_folder_id: folder_id]
       end
 
-    with {:ok, gdoc_id} <- client.copy_document(first_template.google_doc_id, copy_opts),
-         # Capture section 0's range before any appends — indices shift after each append.
-         {:ok, base_range} <- client.document_content_range(gdoc_id),
-         {:ok, appended} <- append_sections(gdoc_id, rest, by_uuid, client),
-         ranges = Map.put(appended, first.position, base_range),
-         {:ok, _} <- apply_substitutions(gdoc_id, sorted_sections, ranges, client) do
-      insert_result =
-        insert_document_and_sections(gdoc_id, sorted_sections, created_by, name, opts, repo)
+    # Track gdoc_id across the with-chain so a failure AFTER copy_document but
+    # BEFORE/AT apply_substitutions can clean up the orphan Drive file.
+    case client.copy_document(first_template.google_doc_id, copy_opts) do
+      {:ok, gdoc_id} ->
+        with {:ok, base_range} <- client.document_content_range(gdoc_id),
+             {:ok, appended} <- append_sections(gdoc_id, rest, by_uuid, client),
+             ranges = Map.put(appended, first.position, base_range),
+             {:ok, _} <- apply_substitutions(gdoc_id, sorted_sections, ranges, client) do
+          insert_result =
+            insert_document_and_sections(gdoc_id, sorted_sections, created_by, name, opts, repo)
 
-      case insert_result do
-        {:ok, doc} ->
-          {:ok, %{document: doc}}
+          case insert_result do
+            {:ok, doc} ->
+              {:ok, %{document: doc}}
 
-        {:error, reason} ->
-          best_effort_delete(gdoc_id, client)
-          {:error, reason}
-      end
-    else
-      {:error, reason} -> {:error, reason}
+            {:error, reason} ->
+              best_effort_delete(gdoc_id, client)
+              {:error, reason}
+          end
+        else
+          {:error, reason} ->
+            # Compose pipeline failed AFTER the Drive copy was created — delete
+            # the orphan so it doesn't linger with the temp "composed-doc-*" name.
+            best_effort_delete(gdoc_id, client)
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   defp insert_document_and_sections(gdoc_id, sorted_sections, created_by, name, opts, repo) do
     category_uuid = Keyword.get(opts, :category_uuid)
+    type_uuid = Keyword.get(opts, :type_uuid)
 
     data = Keyword.get(opts, :data, %{})
 
@@ -173,6 +201,7 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
         template_uuid: nil,
         created_by_uuid: created_by,
         category_uuid: category_uuid,
+        type_uuid: type_uuid,
         data: data
       })
     end)

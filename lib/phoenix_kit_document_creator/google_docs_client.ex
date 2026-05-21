@@ -57,6 +57,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @docs_base "https://docs.googleapis.com/v1"
   @drive_base "https://www.googleapis.com/drive/v3"
+  @drive_upload_base "https://www.googleapis.com/upload/drive/v3"
 
   # All access to `PhoenixKit.Integrations` flows through this resolver so
   # tests can route the three call sites (get_credentials/1,
@@ -1256,6 +1257,91 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # ===========================================================================
   # Google Drive API
   # ===========================================================================
+
+  @doc """
+  Upload a raw image binary to Drive and return a public, embeddable URL.
+
+  Used when inserting an image into a Google Doc via `insertInlineImage`,
+  which requires a fetchable URL (not raw bytes). Uploads the binary to
+  Drive, grants anyone-with-link read access, and returns an
+  `lh3.googleusercontent.com/d/<id>` URL that Google's image fetcher can
+  read without following a redirect.
+
+    - `data` — raw image bytes
+    - `mime_type` — MIME type string, e.g. `"image/jpeg"`
+    - `opts` — optional keyword list; supports `:name` (file name, defaults to
+      `"embed-image"`)
+  """
+  @spec upload_image_for_embedding(binary(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, term()}
+  def upload_image_for_embedding(data, mime_type, opts \\ [])
+      when is_binary(data) and is_binary(mime_type) do
+    name = Keyword.get(opts, :name, "embed-image")
+
+    # Step 1: upload the binary via the Drive simple-upload endpoint.
+    # The metadata and the file body are sent in a multipart/related request.
+    boundary = "---pkdc_boundary_#{:erlang.unique_integer([:positive])}"
+    meta_json = "{\"name\":\"#{String.replace(name, "\"", "\\\"")}\"}"
+
+    body =
+      "--#{boundary}\r\n" <>
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" <>
+        meta_json <>
+        "\r\n--#{boundary}\r\n" <>
+        "Content-Type: #{mime_type}\r\n\r\n" <>
+        data <>
+        "\r\n--#{boundary}--"
+
+    upload_opts = [
+      headers: [{"content-type", "multipart/related; boundary=#{boundary}"}],
+      body: body,
+      params: [uploadType: "multipart", fields: "id"]
+    ]
+
+    case authenticated_request(:post, "#{@drive_upload_base}/files", upload_opts) do
+      {:ok, %{status: status, body: %{"id" => file_id}}} when status in 200..299 ->
+        case set_anyone_reader_permission(file_id) do
+          :ok ->
+            # lh3.googleusercontent.com/d/<file_id> serves the raw image binary
+            # (HTTP 200, no redirect). drive.google.com/uc?export=view returns a
+            # 303 the Docs insertInlineImage fetcher does not follow → 400
+            # INVALID_ARGUMENT.
+            {:ok, "https://lh3.googleusercontent.com/d/#{file_id}"}
+
+          {:error, _} = err ->
+            err
+        end
+
+      {:ok, %{body: body}} ->
+        log_drive_error("upload image for embedding failed", body)
+        {:error, :upload_failed}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # Grant anyone-with-link read access to a Drive file so Google's servers
+  # can fetch it when embedding via insertInlineImage.
+  defp set_anyone_reader_permission(file_id) do
+    body = %{type: "anyone", role: "reader"}
+
+    case authenticated_request(
+           :post,
+           "#{@drive_base}/files/#{file_id}/permissions",
+           json: body
+         ) do
+      {:ok, %{status: status}} when status in 200..299 ->
+        :ok
+
+      {:ok, %{body: body}} ->
+        log_drive_error("set anyone reader permission failed", body)
+        {:error, :permission_failed}
+
+      {:error, _} = err ->
+        err
+    end
+  end
 
   @doc "Move a file to a different folder in Google Drive."
   @spec move_file(String.t(), String.t()) ::
