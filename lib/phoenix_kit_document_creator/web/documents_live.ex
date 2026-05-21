@@ -1914,6 +1914,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       "view" => assigns.view_mode,
       "status" => assigns.status_mode,
       "page" => to_string(assigns.page),
+      "q" => assigns.filters["q"],
       "category" => assigns.filters["category"],
       "type" => assigns.filters["type"],
       "lang" => assigns.filters["lang"],
