@@ -161,18 +161,17 @@ defmodule PhoenixKitDocumentCreator.Documents.Composer do
         with {:ok, base_range} <- client.document_content_range(gdoc_id),
              {:ok, appended} <- append_sections(gdoc_id, rest, by_uuid, client),
              ranges = Map.put(appended, first.position, base_range),
-             {:ok, _} <- apply_substitutions(gdoc_id, sorted_sections, ranges, client) do
-          insert_result =
-            insert_document_and_sections(gdoc_id, sorted_sections, created_by, name, opts, repo)
-
-          case insert_result do
-            {:ok, doc} ->
-              {:ok, %{document: doc}}
-
-            {:error, reason} ->
-              best_effort_delete(gdoc_id, client)
-              {:error, reason}
-          end
+             {:ok, _} <- apply_substitutions(gdoc_id, sorted_sections, ranges, client),
+             {:ok, doc} <-
+               insert_document_and_sections(
+                 gdoc_id,
+                 sorted_sections,
+                 created_by,
+                 name,
+                 opts,
+                 repo
+               ) do
+          {:ok, %{document: doc}}
         else
           {:error, reason} ->
             # Compose pipeline failed AFTER the Drive copy was created — delete
