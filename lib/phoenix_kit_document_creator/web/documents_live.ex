@@ -1200,7 +1200,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <%!-- Loading skeletons --%>
         <%= if @loading do %>
           <%= if @view_mode == "cards" do %>
-            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
               <div
                 :for={_ <- 1..5}
                 class="flex flex-col animate-pulse skeleton"
@@ -1531,7 +1531,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       }
       item_id={& &1["id"]}
       class="table-sm"
-      card_grid_class="gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
+      card_grid_class="gap-3 grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
     >
       <:card_media :let={file}>
         <div
