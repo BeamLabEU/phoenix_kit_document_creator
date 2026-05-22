@@ -1022,44 +1022,69 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           end) %>
         <%!-- Status tabs + view toggle on one row --%>
         <% show_status_tabs = length(visible_status_tabs) > 1 %>
-        <div class={"flex items-center justify-between gap-2 #{if show_status_tabs, do: "border-b border-base-200"}"}>
-          <div class="flex items-center gap-0.5 min-w-0 overflow-x-auto">
-            <%= if show_status_tabs do %>
-              <%= for {mode, label, _count, color} <- visible_status_tabs do %>
-                <button
-                  type="button"
-                  phx-click="switch_status"
-                  phx-value-mode={mode}
-                  class={"px-3 py-1 text-xs font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer #{cond do
-                    @status_mode == mode and color == "error" -> "border-error text-error"
-                    @status_mode == mode -> "border-primary text-primary"
-                    true -> "border-transparent text-base-content/50 hover:text-base-content"
-                  end}"}
-                >
-                  {label}
-                </button>
-              <% end %>
-            <% end %>
-          </div>
-          <%!-- Filters --%>
-          <% filter_cats = Taxonomy.list_categories() %>
-          <% filter_types =
-            case @filters["category"] do
-              "" ->
-                filter_cats
-                |> Enum.flat_map(fn cat ->
-                  cat.uuid
-                  |> Taxonomy.list_types_for_category()
-                  |> Enum.map(&{&1.uuid, &1.name})
-                end)
-
-              cat_uuid ->
-                cat_uuid
+        <% filter_cats = Taxonomy.list_categories() %>
+        <% filter_types =
+          case @filters["category"] do
+            "" ->
+              filter_cats
+              |> Enum.flat_map(fn cat ->
+                cat.uuid
                 |> Taxonomy.list_types_for_category()
                 |> Enum.map(&{&1.uuid, &1.name})
-            end %>
-          <form phx-change="filter" class="flex items-center gap-2 flex-shrink-0">
-            <label class="input input-sm input-bordered w-80 shrink-0">
+              end)
+
+            cat_uuid ->
+              cat_uuid
+              |> Taxonomy.list_types_for_category()
+              |> Enum.map(&{&1.uuid, &1.name})
+          end %>
+        <%!-- Toolbar. Stacks on mobile: status tabs + view toggle share a compact
+             top line, filters (search full-width, selects wrapping) sit below.
+             On lg+ the filters move up onto the same line as the tabs/toggle. --%>
+        <div class={[
+          "flex flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center",
+          show_status_tabs && "border-b border-base-200 pb-2 lg:pb-0"
+        ]}>
+          <%!-- Status tabs (left) + view toggle (right) — always one compact row --%>
+          <div class="flex items-center justify-between gap-2 lg:order-last">
+            <div class="flex items-center gap-0.5 min-w-0 overflow-x-auto">
+              <%= if show_status_tabs do %>
+                <%= for {mode, label, _count, color} <- visible_status_tabs do %>
+                  <button
+                    type="button"
+                    phx-click="switch_status"
+                    phx-value-mode={mode}
+                    class={"px-3 py-1 text-xs font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer #{cond do
+                      @status_mode == mode and color == "error" -> "border-error text-error"
+                      @status_mode == mode -> "border-primary text-primary"
+                      true -> "border-transparent text-base-content/50 hover:text-base-content"
+                    end}"}
+                  >
+                    {label}
+                  </button>
+                <% end %>
+              <% end %>
+            </div>
+            <div class="flex gap-1 flex-shrink-0">
+              <button
+                class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "cards", do: "btn-active"}"}
+                phx-click="switch_view"
+                phx-value-mode="cards"
+              >
+                <span class="hero-squares-2x2 w-4 h-4" />
+              </button>
+              <button
+                class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "list", do: "btn-active"}"}
+                phx-click="switch_view"
+                phx-value-mode="list"
+              >
+                <span class="hero-list-bullet w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <%!-- Filters: search full-width on mobile then fixed; selects grow + wrap --%>
+          <form phx-change="filter" class="flex flex-wrap items-center gap-2 lg:flex-1">
+            <label class="input input-sm input-bordered w-full sm:w-72 md:w-80 shrink-0">
               <span class="hero-magnifying-glass w-4 h-4 opacity-60" />
               <input
                 type="search"
@@ -1070,7 +1095,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 placeholder={gettext("Search by name…")}
               />
             </label>
-            <select name="category" class="select select-sm">
+            <select name="category" class="select select-sm grow min-w-32 sm:grow-0">
               <option value="">{gettext("All Categories")}</option>
               <%= for cat <- filter_cats do %>
                 <option value={cat.uuid} selected={@filters["category"] == cat.uuid}>
@@ -1078,14 +1103,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 </option>
               <% end %>
             </select>
-            <select name="type" class="select select-sm">
+            <select name="type" class="select select-sm grow min-w-32 sm:grow-0">
               <option value="">{gettext("All Types")}</option>
               <%= for {uuid, name} <- filter_types do %>
                 <option value={uuid} selected={@filters["type"] == uuid}>{name}</option>
               <% end %>
             </select>
             <%= if @live_action == :templates and @enabled_languages != [] do %>
-              <select name="lang" class="select select-sm">
+              <select name="lang" class="select select-sm grow min-w-32 sm:grow-0">
                 <option value="">{gettext("All Languages")}</option>
                 <%= for lang <- @enabled_languages do %>
                   <option value={lang.code} selected={@filters["lang"] == lang.code}>
@@ -1094,7 +1119,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 <% end %>
               </select>
             <% end %>
-            <select name="sub_status" class="select select-sm">
+            <select name="sub_status" class="select select-sm grow min-w-32 sm:grow-0">
               <option value="">{gettext("All Statuses")}</option>
               <option value="published" selected={@filters["sub_status"] == "published"}>
                 {gettext("Published")}
@@ -1107,22 +1132,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               </option>
             </select>
           </form>
-          <div class="flex gap-1 flex-shrink-0">
-            <button
-              class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "cards", do: "btn-active"}"}
-              phx-click="switch_view"
-              phx-value-mode="cards"
-            >
-              <span class="hero-squares-2x2 w-4 h-4" />
-            </button>
-            <button
-              class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "list", do: "btn-active"}"}
-              phx-click="switch_view"
-              phx-value-mode="list"
-            >
-              <span class="hero-list-bullet w-4 h-4" />
-            </button>
-          </div>
         </div>
 
         <%!-- Warning --%>
@@ -1468,7 +1477,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       }
       item_id={& &1["id"]}
       class="table-sm"
-      card_grid_class="gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+      card_grid_class="gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
     >
       <:card_media :let={file}>
         <div
