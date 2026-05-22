@@ -79,7 +79,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        modal_creating: false,
        unfiled_modal_open: false,
        unfiled_file: nil,
-       unfiled_working: false
+       unfiled_working: false,
+       # Mobile-only: filters/search are collapsed behind a "Filters" toggle on
+       # narrow screens (< sm). Always visible on sm+ regardless of this flag.
+       show_filters: false
      )}
   end
 
@@ -392,6 +395,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   @impl true
   def handle_event("switch_view", %{"mode" => mode}, socket) do
     {:noreply, push_patch(socket, to: list_path_with_params(socket, %{"view" => mode}))}
+  end
+
+  def handle_event("toggle_filters", _params, socket) do
+    {:noreply, assign(socket, show_filters: not socket.assigns.show_filters)}
   end
 
   def handle_event("switch_status", %{"mode" => mode}, socket)
@@ -952,12 +959,27 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           </div>
         </div>
       <% else %>
-        <%!-- Header --%>
-        <div class="flex items-center justify-between">
-          <h1 class="text-2xl font-bold">
+        <%!-- Header action values, shared by the desktop button row and the
+             mobile dropdown so the templates/documents branching lives once. --%>
+        <% folder_url =
+          if @live_action == :templates,
+            do: templates_folder_url(),
+            else: documents_folder_url() %>
+        <% new_event = if @live_action == :templates, do: "new_template", else: "open_modal" %>
+        <% new_label =
+          if @live_action == :templates, do: gettext("New Template"), else: gettext("New Document") %>
+        <% new_icon = if @live_action == :templates, do: "hero-plus", else: "hero-document-plus" %>
+        <% new_busy =
+          if @live_action == :templates, do: gettext("Creating…"), else: gettext("Opening…") %>
+        <%!-- Header. Actions show inline on sm+; below sm they collapse into a
+             single dropdown so the row can never force horizontal overflow. --%>
+        <div class="flex items-center justify-between gap-2">
+          <h1 class="text-2xl font-bold truncate">
             {if @live_action == :templates, do: gettext("Templates"), else: gettext("Documents")}
           </h1>
-          <div class="flex gap-2">
+
+          <%!-- Desktop (sm+): inline buttons --%>
+          <div class="hidden sm:flex items-center gap-2 flex-shrink-0">
             <button
               class="btn btn-ghost btn-sm"
               phx-click="refresh"
@@ -967,39 +989,50 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               <span :if={@loading} class="loading loading-spinner loading-xs" />
               <span :if={not @loading} class="hero-arrow-path w-4 h-4" />
             </button>
-            <%= if @live_action == :templates do %>
-              <a
-                :if={templates_folder_url()}
-                href={templates_folder_url()}
-                target="_blank"
-                class="btn btn-ghost btn-sm"
-              >
-                <span class="hero-folder-open w-4 h-4" /> {gettext("Open Folder")}
-              </a>
-              <button
-                class="btn btn-primary btn-sm"
-                phx-click="new_template"
-                phx-disable-with={gettext("Creating…")}
-              >
-                <span class="hero-plus w-4 h-4" /> {gettext("New Template")}
-              </button>
-            <% else %>
-              <a
-                :if={documents_folder_url()}
-                href={documents_folder_url()}
-                target="_blank"
-                class="btn btn-ghost btn-sm"
-              >
-                <span class="hero-folder-open w-4 h-4" /> {gettext("Open Folder")}
-              </a>
-              <button
-                class="btn btn-primary btn-sm"
-                phx-click="open_modal"
-                phx-disable-with={gettext("Opening…")}
-              >
-                <span class="hero-document-plus w-4 h-4" /> {gettext("New Document")}
-              </button>
-            <% end %>
+            <a
+              :if={folder_url}
+              href={folder_url}
+              target="_blank"
+              class="btn btn-ghost btn-sm"
+            >
+              <span class="hero-folder-open w-4 h-4" /> {gettext("Open Folder")}
+            </a>
+            <button class="btn btn-primary btn-sm" phx-click={new_event} phx-disable-with={new_busy}>
+              <span class={[new_icon, "w-4 h-4"]} /> {new_label}
+            </button>
+          </div>
+
+          <%!-- Mobile (< sm): one dropdown holding every action --%>
+          <div class="dropdown dropdown-end sm:hidden flex-shrink-0">
+            <button type="button" tabindex="0" class="btn btn-ghost btn-sm btn-square">
+              <span :if={@loading} class="loading loading-spinner loading-xs" />
+              <span :if={not @loading} class="hero-ellipsis-vertical w-5 h-5" />
+            </button>
+            <ul
+              tabindex="0"
+              class="dropdown-content menu bg-base-100 rounded-box z-10 w-52 p-1 shadow-sm border border-base-200"
+            >
+              <li>
+                <button
+                  type="button"
+                  phx-click="refresh"
+                  disabled={@loading}
+                  phx-disable-with={gettext("Refreshing…")}
+                >
+                  <span class="hero-arrow-path w-4 h-4" /> {gettext("Refresh")}
+                </button>
+              </li>
+              <li :if={folder_url}>
+                <a href={folder_url} target="_blank">
+                  <span class="hero-folder-open w-4 h-4" /> {gettext("Open Folder")}
+                </a>
+              </li>
+              <li>
+                <button type="button" phx-click={new_event} phx-disable-with={new_busy}>
+                  <span class={[new_icon, "w-4 h-4"]} /> {new_label}
+                </button>
+              </li>
+            </ul>
           </div>
         </div>
 
@@ -1022,44 +1055,87 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           end) %>
         <%!-- Status tabs + view toggle on one row --%>
         <% show_status_tabs = length(visible_status_tabs) > 1 %>
-        <div class={"flex items-center justify-between gap-2 #{if show_status_tabs, do: "border-b border-base-200"}"}>
-          <div class="flex items-center gap-0.5 min-w-0 overflow-x-auto">
-            <%= if show_status_tabs do %>
-              <%= for {mode, label, _count, color} <- visible_status_tabs do %>
-                <button
-                  type="button"
-                  phx-click="switch_status"
-                  phx-value-mode={mode}
-                  class={"px-3 py-1 text-xs font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer #{cond do
-                    @status_mode == mode and color == "error" -> "border-error text-error"
-                    @status_mode == mode -> "border-primary text-primary"
-                    true -> "border-transparent text-base-content/50 hover:text-base-content"
-                  end}"}
-                >
-                  {label}
-                </button>
-              <% end %>
-            <% end %>
-          </div>
-          <%!-- Filters --%>
-          <% filter_cats = Taxonomy.list_categories() %>
-          <% filter_types =
-            case @filters["category"] do
-              "" ->
-                filter_cats
-                |> Enum.flat_map(fn cat ->
-                  cat.uuid
-                  |> Taxonomy.list_types_for_category()
-                  |> Enum.map(&{&1.uuid, &1.name})
-                end)
-
-              cat_uuid ->
-                cat_uuid
+        <% filter_cats = Taxonomy.list_categories() %>
+        <% filter_types =
+          case @filters["category"] do
+            "" ->
+              filter_cats
+              |> Enum.flat_map(fn cat ->
+                cat.uuid
                 |> Taxonomy.list_types_for_category()
                 |> Enum.map(&{&1.uuid, &1.name})
-            end %>
-          <form phx-change="filter" class="flex items-center gap-2 flex-shrink-0">
-            <label class="input input-sm input-bordered w-80 shrink-0">
+              end)
+
+            cat_uuid ->
+              cat_uuid
+              |> Taxonomy.list_types_for_category()
+              |> Enum.map(&{&1.uuid, &1.name})
+          end %>
+        <%!-- Toolbar. Stacks on mobile: status tabs + view toggle share a compact
+             top line, filters (search full-width, selects wrapping) sit below.
+             On lg+ the filters move up onto the same line as the tabs/toggle. --%>
+        <div class={[
+          "flex flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center",
+          show_status_tabs && "border-b border-base-200 pb-2 lg:pb-0"
+        ]}>
+          <%!-- Status tabs (left) + view toggle (right) — always one compact row --%>
+          <div class="flex items-center justify-between gap-2 lg:order-last">
+            <div class="flex items-center gap-0.5 min-w-0 overflow-x-auto">
+              <%= if show_status_tabs do %>
+                <%= for {mode, label, _count, color} <- visible_status_tabs do %>
+                  <button
+                    type="button"
+                    phx-click="switch_status"
+                    phx-value-mode={mode}
+                    class={"px-3 py-1 text-xs font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer #{cond do
+                      @status_mode == mode and color == "error" -> "border-error text-error"
+                      @status_mode == mode -> "border-primary text-primary"
+                      true -> "border-transparent text-base-content/50 hover:text-base-content"
+                    end}"}
+                  >
+                    {label}
+                  </button>
+                <% end %>
+              <% end %>
+            </div>
+            <div class="flex gap-1 flex-shrink-0">
+              <%!-- Mobile-only toggle: reveals/hides the filter block below.
+                   Hidden on sm+ where filters are always shown inline. --%>
+              <button
+                type="button"
+                class={["btn btn-ghost btn-sm sm:hidden", @show_filters && "btn-active"]}
+                phx-click="toggle_filters"
+                aria-expanded={to_string(@show_filters)}
+              >
+                <span class="hero-funnel w-4 h-4" />
+                {if @show_filters, do: gettext("Hide Filters"), else: gettext("Filters")}
+              </button>
+              <button
+                class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "cards", do: "btn-active"}"}
+                phx-click="switch_view"
+                phx-value-mode="cards"
+              >
+                <span class="hero-squares-2x2 w-4 h-4" />
+              </button>
+              <button
+                class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "list", do: "btn-active"}"}
+                phx-click="switch_view"
+                phx-value-mode="list"
+              >
+                <span class="hero-list-bullet w-4 h-4" />
+              </button>
+            </div>
+          </div>
+          <%!-- Filters: collapsed behind the "Filters" toggle below sm; always
+               visible (search full-width then fixed; selects grow + wrap) on sm+. --%>
+          <form
+            phx-change="filter"
+            class={[
+              "flex-wrap items-center gap-2 lg:flex-1",
+              if(@show_filters, do: "flex", else: "hidden sm:flex")
+            ]}
+          >
+            <label class="input input-sm input-bordered w-full sm:w-72 md:w-80 shrink-0">
               <span class="hero-magnifying-glass w-4 h-4 opacity-60" />
               <input
                 type="search"
@@ -1070,7 +1146,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 placeholder={gettext("Search by name…")}
               />
             </label>
-            <select name="category" class="select select-sm">
+            <select name="category" class="select select-sm grow min-w-32 sm:grow-0">
               <option value="">{gettext("All Categories")}</option>
               <%= for cat <- filter_cats do %>
                 <option value={cat.uuid} selected={@filters["category"] == cat.uuid}>
@@ -1078,14 +1154,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 </option>
               <% end %>
             </select>
-            <select name="type" class="select select-sm">
+            <select name="type" class="select select-sm grow min-w-32 sm:grow-0">
               <option value="">{gettext("All Types")}</option>
               <%= for {uuid, name} <- filter_types do %>
                 <option value={uuid} selected={@filters["type"] == uuid}>{name}</option>
               <% end %>
             </select>
             <%= if @live_action == :templates and @enabled_languages != [] do %>
-              <select name="lang" class="select select-sm">
+              <select name="lang" class="select select-sm grow min-w-32 sm:grow-0">
                 <option value="">{gettext("All Languages")}</option>
                 <%= for lang <- @enabled_languages do %>
                   <option value={lang.code} selected={@filters["lang"] == lang.code}>
@@ -1094,7 +1170,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 <% end %>
               </select>
             <% end %>
-            <select name="sub_status" class="select select-sm">
+            <select name="sub_status" class="select select-sm grow min-w-32 sm:grow-0">
               <option value="">{gettext("All Statuses")}</option>
               <option value="published" selected={@filters["sub_status"] == "published"}>
                 {gettext("Published")}
@@ -1107,22 +1183,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               </option>
             </select>
           </form>
-          <div class="flex gap-1 flex-shrink-0">
-            <button
-              class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "cards", do: "btn-active"}"}
-              phx-click="switch_view"
-              phx-value-mode="cards"
-            >
-              <span class="hero-squares-2x2 w-4 h-4" />
-            </button>
-            <button
-              class={"btn btn-ghost btn-sm btn-square #{if @view_mode == "list", do: "btn-active"}"}
-              phx-click="switch_view"
-              phx-value-mode="list"
-            >
-              <span class="hero-list-bullet w-4 h-4" />
-            </button>
-          </div>
         </div>
 
         <%!-- Warning --%>
@@ -1140,14 +1200,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <%!-- Loading skeletons --%>
         <%= if @loading do %>
           <%= if @view_mode == "cards" do %>
-            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-4">
               <div
                 :for={_ <- 1..5}
                 class="flex flex-col animate-pulse skeleton"
                 style="border: 1.5px solid oklch(var(--color-base-content) / 0.1); border-radius: 8px; overflow: hidden; padding-bottom: 12px;"
               >
                 <div style="padding:16px 16px 24px 16px;display:flex;justify-content:center;">
-                  <div class="skeleton" style="width:183px;height:258px;border-radius:4px;" />
+                  <div
+                    class="skeleton"
+                    style="width:100%;max-width:183px;aspect-ratio:183/258;border-radius:4px;"
+                  />
                 </div>
                 <div class="p-3 flex-1 flex flex-col gap-2">
                   <div class="skeleton h-4 rounded w-3/4" />
@@ -1468,13 +1531,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       }
       item_id={& &1["id"]}
       class="table-sm"
-    ><%!--
-      NOTE: a denser card grid (xl:grid-cols-5) needs the `card_grid_class` attr,
-      which is not in the released phoenix_kit (1.7.117 hardcodes
-      gap-4 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4). Re-add
-      card_grid_class="gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
-      once the dep ships that attr (see :requires_unreleased_core in test_helper.exs).
-    --%>
+      card_grid_class="gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6"
+    >
       <:card_media :let={file}>
         <div
           :if={MapSet.member?(@pending_files, file["id"])}
@@ -1890,7 +1948,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   defp render_thumbnail(assigns) do
     ~H"""
-    <div style="width:183px;height:258px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+    <div style="width:100%;max-width:183px;aspect-ratio:183/258;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
       <%= if @thumbnail do %>
         <img src={@thumbnail} style="width:100%;height:100%;object-fit:cover;object-position:top;" />
       <% else %>
