@@ -1901,10 +1901,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   defp render_category_picker(assigns) do
     # Resolve display names from the precomputed lookup maps (no DB call per row).
+    assigns = Map.put_new(assigns, :layout, "inline")
+
     assigns =
-      assigns
-      |> Map.put_new(:layout, "inline")
-      |> Map.merge(%{
+      Map.merge(assigns, %{
+        # Resolve the layout variant once; the template branches on `@card?`.
+        card?: assigns.layout == "card",
         cat_name: assigns.category_names[assigns.file["category_uuid"]],
         type_name: assigns.type_names[assigns.file["type_uuid"]],
         # Types for the currently selected category (nil → empty list).
@@ -1927,7 +1929,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     --%>
     <div class={[
       "flex items-center gap-1 min-w-0",
-      @layout == "card" && "flex-wrap basis-full w-full"
+      @card? && "flex-wrap basis-full w-full"
     ]}>
       <%= if @status_mode == "trashed" do %>
         <%!-- In trash view: read-only name badges --%>
@@ -1953,7 +1955,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           value (only the phx-value-* attrs would arrive).
         --%>
         <form
-          class={@layout == "card" && "min-w-0 flex-1 basis-28"}
+          class={@card? && "min-w-0 flex-1 basis-28"}
           phx-change="set_taxonomy_category"
           phx-value-google_doc_id={@file["id"]}
           phx-value-kind={if @is_template, do: "template", else: "document"}
@@ -1962,7 +1964,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             name="value"
             class={[
               "select select-bordered select-xs",
-              @layout == "card" && "w-full"
+              @card? && "w-full"
             ]}
             title={gettext("Category")}
           >
@@ -1975,7 +1977,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <%!-- Type select — only shown when a category is chosen --%>
         <form
           :if={@file["category_uuid"]}
-          class={@layout == "card" && "min-w-0 flex-1 basis-28"}
+          class={@card? && "min-w-0 flex-1 basis-28"}
           phx-change="set_taxonomy_type"
           phx-value-google_doc_id={@file["id"]}
           phx-value-kind={if @is_template, do: "template", else: "document"}
@@ -1984,7 +1986,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             name="value"
             class={[
               "select select-bordered select-xs",
-              @layout == "card" && "w-full"
+              @card? && "w-full"
             ]}
             title={gettext("Type")}
           >
