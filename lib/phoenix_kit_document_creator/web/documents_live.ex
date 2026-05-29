@@ -1522,7 +1522,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       card_class={
         fn file ->
           [
-            "group flex flex-col card bg-base-100 relative",
+            # `[&_.card-body]:p-0` zeroes daisyUI's default `.card-body`
+            # padding (1.5rem) directly on the nested element so the custom
+            # px-3/pt-2/pb-1/pb-2 inside owns spacing — otherwise there's a
+            # ~24px gap between the thumbnail and the title, and a matching
+            # dead band below the action buttons. We deliberately target
+            # `padding` on `.card-body` rather than overriding `--card-p`:
+            # any daisyUI size variant (`card-sm`/`card-md`/…) re-sets
+            # `--card-p` directly on `.card-body`, which would defeat an
+            # `[--card-p:0]` set on the outer `.card`.
+            "group flex flex-col card bg-base-100 relative [&_.card-body]:p-0",
             MapSet.member?(@pending_files, file["id"]) && "opacity-40 pointer-events-none"
           ]
           |> Enum.reject(&(&1 in [nil, false, ""]))
@@ -1580,7 +1589,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               {gettext("unfiled")}
             </button>
           </div>
-          <div class="flex flex-wrap gap-1">
+          <%!--
+            Card view: language badge sits inline with the category picker
+            when the column is wide enough (xl/2xl), and the picker wraps to
+            its own row only when it can't fit — `basis-full` on the picker
+            (via `layout="card"`) forces the wrap when needed. `min-w-0`
+            propagates so the picker's inner `flex-1` selects can shrink
+            under daisyUI's `.select` floor.
+          --%>
+          <div class="flex flex-wrap items-center gap-1 min-w-0">
             {render_language_picker(%{
               file: file,
               is_template: @is_template,
@@ -1594,7 +1611,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               category_names: @category_names,
               cat_options: @cat_options,
               types_by_category: @types_by_category,
-              type_names: @type_names
+              type_names: @type_names,
+              layout: "card"
             })}
           </div>
           <p :if={file["modifiedTime"]} class="text-xs text-base-content/40 mt-auto pt-2">
@@ -1703,7 +1721,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   category_names: @category_names,
                   cat_options: @cat_options,
                   types_by_category: @types_by_category,
-                  type_names: @type_names
+                  type_names: @type_names,
+                  layout: "inline"
                 })}
               </div>
             </.table_default_cell>
@@ -1883,7 +1902,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   defp render_category_picker(assigns) do
     # Resolve display names from the precomputed lookup maps (no DB call per row).
     assigns =
-      Map.merge(assigns, %{
+      assigns
+      |> Map.put_new(:layout, "inline")
+      |> Map.merge(%{
         cat_name: assigns.category_names[assigns.file["category_uuid"]],
         type_name: assigns.type_names[assigns.file["type_uuid"]],
         # Types for the currently selected category (nil → empty list).
@@ -1891,7 +1912,23 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       })
 
     ~H"""
-    <div class="flex items-center gap-1">
+    <%!--
+      Two layouts share this helper:
+        • `layout="inline"` (default; used by the table-view row): the
+          original intrinsic-width inline pair — selects size to content,
+          no wrap, no flex-grow, so the file-name link beside them isn't
+          pushed narrow.
+        • `layout="card"`: the picker takes a full grid row inside the
+          card body (`basis-full`), the two selects share that row via
+          `flex-1` with `basis-28` (≈7rem), and they wrap onto a second
+          row when the card column is too narrow to fit both side-by-side
+          — daisyUI's native `.select` min-width otherwise clips the
+          trailing option.
+    --%>
+    <div class={[
+      "flex items-center gap-1 min-w-0",
+      @layout == "card" && "flex-wrap basis-full w-full"
+    ]}>
       <%= if @status_mode == "trashed" do %>
         <%!-- In trash view: read-only name badges --%>
         <span
@@ -1916,11 +1953,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           value (only the phx-value-* attrs would arrive).
         --%>
         <form
+          class={@layout == "card" && "min-w-0 flex-1 basis-28"}
           phx-change="set_taxonomy_category"
           phx-value-google_doc_id={@file["id"]}
           phx-value-kind={if @is_template, do: "template", else: "document"}
         >
-          <select name="value" class="select select-bordered select-xs" title={gettext("Category")}>
+          <select
+            name="value"
+            class={[
+              "select select-bordered select-xs",
+              @layout == "card" && "w-full"
+            ]}
+            title={gettext("Category")}
+          >
             <option value="">{gettext("No category")}</option>
             <%= for {uuid, name} <- @cat_options do %>
               <option value={uuid} selected={@file["category_uuid"] == uuid}>{name}</option>
@@ -1930,11 +1975,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <%!-- Type select — only shown when a category is chosen --%>
         <form
           :if={@file["category_uuid"]}
+          class={@layout == "card" && "min-w-0 flex-1 basis-28"}
           phx-change="set_taxonomy_type"
           phx-value-google_doc_id={@file["id"]}
           phx-value-kind={if @is_template, do: "template", else: "document"}
         >
-          <select name="value" class="select select-bordered select-xs" title={gettext("Type")}>
+          <select
+            name="value"
+            class={[
+              "select select-bordered select-xs",
+              @layout == "card" && "w-full"
+            ]}
+            title={gettext("Type")}
+          >
             <option value="">{gettext("No type")}</option>
             <%= for {uuid, name} <- @type_options do %>
               <option value={uuid} selected={@file["type_uuid"] == uuid}>{name}</option>
