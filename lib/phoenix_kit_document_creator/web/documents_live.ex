@@ -2108,11 +2108,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # Nil values always sort last regardless of direction.
   defp sort_files(files, %{by: by, dir: dir}) do
     {with_val, nils} =
-      Enum.split_with(files, &(sort_value(&1, by) != nil))
+      files
+      |> Enum.map(&{&1, sort_value(&1, by)})
+      |> Enum.split_with(fn {_file, value} -> value != nil end)
 
-    sorted = Enum.sort_by(with_val, &sort_value(&1, by), dir)
-
-    sorted ++ nils
+    with_val
+    |> Enum.sort_by(fn {_file, value} -> value end, dir)
+    |> Enum.map(fn {file, _value} -> file end)
+    |> Kernel.++(Enum.map(nils, fn {file, _value} -> file end))
   end
 
   defp sort_value(file, :name) do

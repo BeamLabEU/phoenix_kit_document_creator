@@ -1023,6 +1023,81 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       {nil_desc, _} = :binary.match(html_desc, "doc-row-menu-#{nil_id}")
       assert named_desc < nil_desc, "nil-name doc should sort last even in desc"
     end
+
+    test "modifiedTime ISO-8601 sort: newest first desc, nil always last in both directions",
+         %{conn: conn} do
+      unique = System.unique_integer([:positive])
+      id_old = "sort-mod-old-#{unique}"
+      id_new = "sort-mod-new-#{unique}"
+      id_nil = "sort-mod-nil-#{unique}"
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      # nil-time doc placed FIRST so the assertion proves the sort moved it last.
+      :sys.replace_state(view.pid, fn state ->
+        nil_doc = %{
+          "id" => id_nil,
+          "name" => "Nil-time Doc #{unique}",
+          "status" => nil,
+          "inserted_at" => nil,
+          "modifiedTime" => nil,
+          "data" => nil,
+          "path" => nil
+        }
+
+        old_doc = %{
+          "id" => id_old,
+          "name" => "Old Doc #{unique}",
+          "status" => nil,
+          "inserted_at" => nil,
+          "modifiedTime" => "2026-05-01T10:00:00Z",
+          "data" => nil,
+          "path" => nil
+        }
+
+        new_doc = %{
+          "id" => id_new,
+          "name" => "New Doc #{unique}",
+          "status" => nil,
+          "inserted_at" => nil,
+          "modifiedTime" => "2026-05-30T10:00:00Z",
+          "data" => nil,
+          "path" => nil
+        }
+
+        new_socket =
+          state.socket
+          |> Phoenix.Component.assign(view_mode: "list")
+          |> Phoenix.Component.assign(documents: [nil_doc, old_doc, new_doc])
+          |> Phoenix.Component.assign(loaded: true, loading: false, google_connected: true)
+
+        %{state | socket: new_socket}
+      end)
+
+      # Default sort is modified desc — toggle once to get asc, toggle again for desc.
+      # First bring to modified asc.
+      render_click(view, "toggle_sort", %{"by" => "modified"})
+      html_asc = render(view)
+
+      {old_asc, _} = :binary.match(html_asc, "doc-row-menu-#{id_old}")
+      {new_asc, _} = :binary.match(html_asc, "doc-row-menu-#{id_new}")
+      {nil_asc, _} = :binary.match(html_asc, "doc-row-menu-#{id_nil}")
+
+      assert old_asc < new_asc, "asc: older doc should appear before newer doc"
+      assert new_asc < nil_asc, "asc: nil-time doc should sort last"
+
+      # Flip to desc.
+      render_click(view, "toggle_sort", %{"by" => "modified"})
+      html_desc = render(view)
+
+      {old_desc, _} = :binary.match(html_desc, "doc-row-menu-#{id_old}")
+      {new_desc, _} = :binary.match(html_desc, "doc-row-menu-#{id_new}")
+      {nil_desc, _} = :binary.match(html_desc, "doc-row-menu-#{id_nil}")
+
+      assert new_desc < old_desc, "desc: newer doc should appear before older doc"
+      assert old_desc < nil_desc, "desc: nil-time doc should still sort last"
+    end
   end
 
   describe "row menu (⋯) — table and card actions" do
