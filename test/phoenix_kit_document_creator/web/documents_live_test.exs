@@ -833,12 +833,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/document-creator")
 
-      # Start from default (modified, desc), then sort by name.
+      # Start from default (modified, desc), then sort by name. Sort is routed
+      # through the URL, so assert on the patched path (public behaviour) rather
+      # than reaching into socket assigns.
       render_click(view, "toggle_sort", %{"by" => "name"})
+      path = assert_patch(view)
 
-      state = :sys.get_state(view.pid).socket.assigns
-      assert state.sort == %{by: :name, dir: :asc}
-      assert state.page == 1
+      assert path =~ "sort_by=name"
+      assert path =~ "sort_dir=asc"
+      # Sort change resets to page 1 in the URL so the page param can't go stale.
+      assert path =~ "page=1"
     end
 
     test "toggle_sort on same column flips direction", %{conn: conn} do
@@ -847,11 +851,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
 
       # First click: name asc
       render_click(view, "toggle_sort", %{"by" => "name"})
-      assert :sys.get_state(view.pid).socket.assigns.sort == %{by: :name, dir: :asc}
+      path_asc = assert_patch(view)
+      assert path_asc =~ "sort_by=name"
+      assert path_asc =~ "sort_dir=asc"
 
-      # Second click: name desc
+      # Second click on the same column: flips to name desc
       render_click(view, "toggle_sort", %{"by" => "name"})
-      assert :sys.get_state(view.pid).socket.assigns.sort == %{by: :name, dir: :desc}
+      path_desc = assert_patch(view)
+      assert path_desc =~ "sort_by=name"
+      assert path_desc =~ "sort_dir=desc"
     end
 
     test "toggle_sort with unknown field is ignored (whitelist)", %{conn: conn} do
@@ -860,10 +868,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
 
       original_sort = :sys.get_state(view.pid).socket.assigns.sort
 
+      # Unknown field is rejected by the whitelist: the handler returns without
+      # patching, so no URL change happens and the sort assign is untouched.
       render_click(view, "toggle_sort", %{"by" => "evil_column"})
 
-      # Sort is unchanged when the field is unknown.
+      assert Process.alive?(view.pid)
       assert :sys.get_state(view.pid).socket.assigns.sort == original_sort
+
+      # A valid field still patches afterwards, proving the guard only skips the
+      # bad input rather than wedging the handler.
+      render_click(view, "toggle_sort", %{"by" => "status"})
+      assert assert_patch(view) =~ "sort_by=status"
     end
 
     test "toggle_sort supports all four sortable columns", %{conn: conn} do
@@ -872,10 +887,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
 
       for field <- ["name", "created", "modified", "status"] do
         render_click(view, "toggle_sort", %{"by" => field})
-        sort = :sys.get_state(view.pid).socket.assigns.sort
-
-        assert sort.by == String.to_existing_atom(field),
-               "expected sort by :#{field} after toggle, got #{inspect(sort)}"
+        assert assert_patch(view) =~ "sort_by=#{field}"
       end
     end
 

@@ -30,6 +30,11 @@ defmodule PhoenixKitDocumentCreator.Test.Router do
       layout: {PhoenixKitDocumentCreator.Test.Layouts, :app},
       on_mount: {PhoenixKitDocumentCreator.Test.Hooks, :assign_scope} do
       live("/", DocumentsLive, :documents)
+      # `Paths.documents()` resolves to `.../document-creator/documents`, which is
+      # where the LiveView push_patches itself on sort/filter/pagination/view
+      # changes. Register it (alongside the bare base) so those patches resolve
+      # in tests and event → URL → handle_params round-trips can be asserted.
+      live("/documents", DocumentsLive, :documents)
       live("/templates", DocumentsLive, :templates)
       live("/categories", CategoriesLive, :index)
       live("/categories/new", CategoryFormLive, :new)

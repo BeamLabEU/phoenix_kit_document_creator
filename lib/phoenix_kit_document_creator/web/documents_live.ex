@@ -106,6 +106,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
     view_mode = Map.get(params, "view", socket.assigns.view_mode)
     status_mode = Map.get(params, "status", socket.assigns.status_mode)
+    sort = parse_sort_params(params, socket.assigns.sort)
 
     filters = %{
       "category" => Map.get(params, "category", ""),
@@ -122,6 +123,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         page: page,
         view_mode: view_mode,
         status_mode: status_mode,
+        sort: sort,
         filters: filters
       )
 
@@ -825,7 +827,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
       field ->
         sort = toggle_sort(socket.assigns.sort, field)
-        {:noreply, assign(socket, sort: sort, page: 1)}
+
+        # Route sort through the URL like every other piece of table state
+        # (view/status/filters/page). Keeps sort bookmarkable and shareable,
+        # and resets to page 1 in the URL so the page param can't go stale.
+        {:noreply,
+         push_patch(socket,
+           to:
+             list_path_with_params(socket, %{
+               "sort_by" => sort.by,
+               "sort_dir" => sort.dir,
+               "page" => "1"
+             })
+         )}
     end
   end
 
@@ -1288,6 +1302,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             @filters
             |> Map.put("view", @view_mode)
             |> Map.put("status", @status_mode)
+            |> Map.put("sort_by", to_string(@sort.by))
+            |> Map.put("sort_dir", to_string(@sort.dir))
             |> Map.filter(fn {_k, v} -> v != "" end) %>
           {render_file_grid(assign_files(assigns, paged_files))}
           <.pagination
@@ -2065,6 +2081,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       "view" => assigns.view_mode,
       "status" => assigns.status_mode,
       "page" => to_string(assigns.page),
+      "sort_by" => to_string(assigns.sort.by),
+      "sort_dir" => to_string(assigns.sort.dir),
       "q" => assigns.filters["q"],
       "category" => assigns.filters["category"],
       "type" => assigns.filters["type"],
@@ -2086,6 +2104,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
+  # Builds the sort assign from URL params, falling back to the current sort
+  # when no (or an unrecognised) sort_by is present. The field whitelist guards
+  # against hostile or typo-ed payloads; an unknown dir defaults to :asc.
+  defp parse_sort_params(params, current) do
+    case parse_sort_field(Map.get(params, "sort_by")) do
+      nil -> current
+      field -> %{by: field, dir: parse_sort_dir(Map.get(params, "sort_dir"))}
+    end
+  end
+
+  defp parse_sort_dir("desc"), do: :desc
+  defp parse_sort_dir(_), do: :asc
+
   # Whitelisted sort-field parser — returns an atom for known fields, nil for
   # anything else. Guards against hostile or typo-ed phx-value-by payloads.
   defp parse_sort_field("name"), do: :name
@@ -2102,9 +2133,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   # Sorts a file list in memory according to the current sort assign.
   # - :name     — case-insensitive string compare on "name"
-  # - :created  — ISO 8601 / NaiveDateTime compare on "inserted_at"
-  # - :modified — ISO 8601 / NaiveDateTime compare on "modifiedTime"
-  # - :status   — string compare on "status"
+  # - :created  — chronological compare on "inserted_at" (DateTime)
+  # - :modified — chronological compare on "modifiedTime" (DateTime)
+  # - :status   — fixed-rank compare on "status" (see status_rank/1)
   # Nil values always sort last regardless of direction.
   defp sort_files(files, %{by: by, dir: dir}) do
     {with_val, nils} =
@@ -2113,10 +2144,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       |> Enum.split_with(fn {_file, value} -> value != nil end)
 
     with_val
-    |> Enum.sort_by(fn {_file, value} -> value end, dir)
+    |> Enum.sort_by(fn {_file, value} -> value end, sort_comparator(by, dir))
     |> Enum.map(fn {file, _value} -> file end)
     |> Kernel.++(Enum.map(nils, fn {file, _value} -> file end))
   end
+
+  # Date columns compare chronologically via DateTime.compare/2 (timezone-aware,
+  # immune to textual ISO-8601 differences). Other columns use plain term order.
+  defp sort_comparator(by, dir) when by in [:created, :modified], do: {dir, DateTime}
+  defp sort_comparator(_by, dir), do: dir
 
   defp sort_value(file, :name) do
     case file["name"] do
@@ -2133,25 +2169,36 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     parse_sort_time(file["modifiedTime"])
   end
 
-  defp sort_value(file, :status), do: file["status"]
+  defp sort_value(file, :status), do: status_rank(file["status"])
 
-  # Parse ISO 8601 strings and NaiveDateTime/DateTime structs into a
-  # comparable string (ISO format sorts lexicographically). Returns nil
-  # for unparseable / missing values so they land at the end.
+  # Fixed sort rank for the Status column. Sorting by the raw string would order
+  # statuses alphabetically by accident (lost < published < unfiled), burying
+  # "published" between the two badged states. Ranking instead clusters the
+  # attention-needing statuses (unfiled, lost) ahead of normal published docs in
+  # ascending order. Unknown/nil statuses return nil so they sort last in both
+  # directions, consistent with the other columns.
+  defp status_rank("unfiled"), do: 0
+  defp status_rank("lost"), do: 1
+  defp status_rank("published"), do: 2
+  defp status_rank(_), do: nil
+
+  # Parse ISO 8601 strings and NaiveDateTime/DateTime structs into a comparable
+  # DateTime (naive values are read as UTC). Returns nil for unparseable /
+  # missing values so they land at the end.
   defp parse_sort_time(nil), do: nil
 
-  defp parse_sort_time(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp parse_sort_time(%DateTime{} = dt), do: dt
 
-  defp parse_sort_time(%NaiveDateTime{} = ndt), do: NaiveDateTime.to_iso8601(ndt)
+  defp parse_sort_time(%NaiveDateTime{} = ndt), do: DateTime.from_naive!(ndt, "Etc/UTC")
 
   defp parse_sort_time(iso) when is_binary(iso) do
     case DateTime.from_iso8601(iso) do
-      {:ok, _dt, _offset} ->
-        iso
+      {:ok, dt, _offset} ->
+        dt
 
       _ ->
         case NaiveDateTime.from_iso8601(iso) do
-          {:ok, _ndt} -> iso
+          {:ok, ndt} -> DateTime.from_naive!(ndt, "Etc/UTC")
           _ -> nil
         end
     end
