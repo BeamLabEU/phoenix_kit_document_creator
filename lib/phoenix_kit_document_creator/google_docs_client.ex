@@ -1979,9 +1979,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp build_media_items(%{"media" => media}) when is_list(media) do
     Enum.map(media, fn m ->
-      # Carry height_px through. Dropping it (height_px: nil) while keeping a
-      # non-nil width_px makes scale_height/3 evaluate `target * nil / width`,
-      # crashing every inline/columns=1 image insert with an ArithmeticError.
+      # Preserve height_px so scale_height/3 can compute aspect-ratio scaling
+      # (dropping it crashed inline/columns=1 inserts with an ArithmeticError).
       %{
         uri: Map.get(m, "uri", ""),
         width_px: Map.get(m, "width_px"),
