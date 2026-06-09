@@ -1979,11 +1979,23 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp build_media_items(%{"media" => media}) when is_list(media) do
     Enum.map(media, fn m ->
-      %{uri: Map.get(m, "uri", ""), width_px: Map.get(m, "width_px"), height_px: nil}
+      # Preserve height_px so scale_height/3 can compute aspect-ratio scaling
+      # (dropping it crashed inline/columns=1 inserts with an ArithmeticError).
+      %{
+        uri: Map.get(m, "uri", ""),
+        width_px: Map.get(m, "width_px"),
+        height_px: Map.get(m, "height_px")
+      }
     end)
   end
 
   defp build_media_items(_), do: []
+
+  @doc false
+  # Test seam: exposes build_image_fills/1 so the regression test for
+  # build_media_items dropping height_px can exercise the full
+  # image_params → fills conversion without touching lib code.
+  def build_image_fills_for_test(image_params), do: build_image_fills(image_params)
 
   defp normalize_separator_atom("newline"), do: :newline
   defp normalize_separator_atom("space"), do: :space
