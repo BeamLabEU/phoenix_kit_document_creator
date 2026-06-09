@@ -1991,6 +1991,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp build_media_items(_), do: []
 
+  @doc false
+  # Test seam: exposes build_image_fills/1 so the regression test for
+  # build_media_items dropping height_px can exercise the full
+  # image_params → fills conversion without touching lib code.
+  def build_image_fills_for_test(image_params), do: build_image_fills(image_params)
+
   defp normalize_separator_atom("newline"), do: :newline
   defp normalize_separator_atom("space"), do: :space
   defp normalize_separator_atom(:newline), do: :newline
