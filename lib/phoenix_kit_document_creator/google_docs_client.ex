@@ -1203,8 +1203,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     }
   end
 
+  # No usable source width — can't compute an aspect ratio, so fall back to the
+  # native height if we have one, otherwise the target width (square-ish).
   defp scale_height(target_width, src_width, src_height) when src_width in [nil, 0],
     do: src_height || target_width
+
+  # Source width present but height missing. The Google API can return media
+  # with a width and no height; without this guard the arithmetic clause below
+  # evaluates round(target * nil / width) and raises an ArithmeticError — the
+  # same crash class PR #27 fixed at the data source. Fall back to target_width.
+  defp scale_height(target_width, _src_width, nil), do: target_width
 
   defp scale_height(target_width, src_width, src_height) do
     round(target_width * src_height / src_width)

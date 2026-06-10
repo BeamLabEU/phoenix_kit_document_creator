@@ -13,14 +13,8 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
   attr(:variable, :map, required: true)
 
   def config_form(%{variable: %{type: :image}} = assigns) do
-    current_annotated =
-      Map.get(
-        assigns.variable.config,
-        :annotated,
-        Map.get(assigns.variable.config, "annotated", true)
-      )
-
-    assigns = assign(assigns, current_annotated: current_annotated)
+    assigns =
+      assign(assigns, current_annotated: config_value(assigns.variable.config, :annotated, true))
 
     ~H"""
     <div class="space-y-2">
@@ -32,53 +26,27 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
           type="number"
           name={"variables[#{@variable.name}][config][default_width_px]"}
           class="input input-bordered input-sm w-full"
-          value={@variable.config[:default_width_px] || @variable.config["default_width_px"]}
+          value={config_value(@variable.config, :default_width_px)}
           min="1"
           phx-debounce="500"
         />
       </div>
-      <div class="form-control">
-        <label class="label cursor-pointer py-1 justify-start gap-3">
-          <input
-            type="hidden"
-            name={"variables[#{@variable.name}][config][annotated]"}
-            value="false"
-          />
-          <input
-            type="checkbox"
-            name={"variables[#{@variable.name}][config][annotated]"}
-            class="toggle toggle-sm"
-            value="true"
-            checked={@current_annotated}
-          />
-          <span class="label-text text-sm">{gettext("Include annotations")}</span>
-        </label>
-      </div>
+      <.annotated_toggle variable={@variable} current_annotated={@current_annotated} />
     </div>
     """
   end
 
   def config_form(%{variable: %{type: :image_list}} = assigns) do
-    current = assigns.variable.config[:separator] || assigns.variable.config["separator"]
+    current = config_value(assigns.variable.config, :separator)
     current_separator = if current, do: to_string(current), else: "newline"
 
-    current_columns =
-      assigns.variable.config[:columns] || assigns.variable.config["columns"] || 1
-
-    current_columns = to_string(current_columns)
-
-    current_annotated =
-      Map.get(
-        assigns.variable.config,
-        :annotated,
-        Map.get(assigns.variable.config, "annotated", true)
-      )
+    current_columns = to_string(config_value(assigns.variable.config, :columns, 1))
 
     assigns =
       assign(assigns,
         current_separator: current_separator,
         current_columns: current_columns,
-        current_annotated: current_annotated
+        current_annotated: config_value(assigns.variable.config, :annotated, true)
       )
 
     ~H"""
@@ -91,7 +59,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
           type="number"
           name={"variables[#{@variable.name}][config][default_width_px]"}
           class="input input-bordered input-sm w-full"
-          value={@variable.config[:default_width_px] || @variable.config["default_width_px"]}
+          value={config_value(@variable.config, :default_width_px)}
           min="1"
           phx-debounce="500"
         />
@@ -133,33 +101,52 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
           type="number"
           name={"variables[#{@variable.name}][config][max_count]"}
           class="input input-bordered input-sm w-full"
-          value={@variable.config[:max_count] || @variable.config["max_count"]}
+          value={config_value(@variable.config, :max_count)}
           min="1"
           phx-debounce="500"
         />
       </div>
-      <div class="form-control">
-        <label class="label cursor-pointer py-1 justify-start gap-3">
-          <input
-            type="hidden"
-            name={"variables[#{@variable.name}][config][annotated]"}
-            value="false"
-          />
-          <input
-            type="checkbox"
-            name={"variables[#{@variable.name}][config][annotated]"}
-            class="toggle toggle-sm"
-            value="true"
-            checked={@current_annotated}
-          />
-          <span class="label-text text-sm">{gettext("Include annotations")}</span>
-        </label>
-      </div>
+      <.annotated_toggle variable={@variable} current_annotated={@current_annotated} />
     </div>
     """
   end
 
   def config_form(assigns) do
     ~H""
+  end
+
+  # Renders the "Include annotations" toggle. The hidden input posts "false" so
+  # an unchecked box still submits a value (checkboxes are omitted otherwise).
+  attr(:variable, :map, required: true)
+  attr(:current_annotated, :boolean, required: true)
+
+  defp annotated_toggle(assigns) do
+    ~H"""
+    <div class="form-control">
+      <label class="label cursor-pointer py-1 justify-start gap-3">
+        <input
+          type="hidden"
+          name={"variables[#{@variable.name}][config][annotated]"}
+          value="false"
+        />
+        <input
+          type="checkbox"
+          name={"variables[#{@variable.name}][config][annotated]"}
+          class="toggle toggle-sm"
+          value="true"
+          checked={@current_annotated}
+        />
+        <span class="label-text text-sm">{gettext("Include annotations")}</span>
+      </label>
+    </div>
+    """
+  end
+
+  # Reads a config value by atom key, falling back to its string key, then the
+  # given default. Uses Map.get rather than `||` so legitimately falsy stored
+  # values (false, 0) are not mistaken for "missing" — the bug class fixed in
+  # commit 2118b0b for the annotated flag.
+  defp config_value(config, key, default \\ nil) do
+    Map.get(config, key, Map.get(config, to_string(key), default))
   end
 end

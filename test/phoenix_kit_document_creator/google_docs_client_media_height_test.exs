@@ -159,5 +159,41 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientMediaHeightTest do
       assert height_magnitude == 450.0,
              "expected height 450.0 PT, got: #{inspect(height_magnitude)}"
     end
+
+    test "media with width but nil height does not crash and falls back to target width" do
+      # The Google API can return media with a width and no height. PR #27 fixed
+      # the data source (build_media_items no longer drops height), but
+      # scale_height/3 itself must also tolerate a nil source height instead of
+      # raising round(target * nil / width). Here media carries width_px but no
+      # height_px at all.
+      image_params = %{
+        "photo" => %{
+          "kind" => "image",
+          "width_px" => 400,
+          "media" => [
+            %{
+              "uri" => "https://example.com/no-height.png",
+              "width_px" => 800
+            }
+          ]
+        }
+      }
+
+      fills = GoogleDocsClient.build_image_fills_for_test(image_params)
+
+      assert [%{height_px: nil}] = fills["photo"].media
+
+      ranges = [%{name: "photo", start_index: 1, end_index: 18}]
+
+      [_delete, insert] = GoogleDocsClient.build_image_batch_requests(ranges, fills)
+
+      height_magnitude = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
+
+      # No usable height → scale_height falls back to the target width (400px),
+      # so 400 * 0.75 = 300.0 PT. The key assertion is that it is a number and
+      # did not raise an ArithmeticError.
+      assert is_number(height_magnitude), "height magnitude must be a number, not nil"
+      assert height_magnitude == 400 * 0.75
+    end
   end
 end
