@@ -77,7 +77,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       {:phoenix_kit, "~> 1.7.118"},
 
       # LiveView is needed for the admin pages.
-      {:phoenix_live_view, "~> 1.1"},
+      {:phoenix_live_view, "~> 1.2"},
 
       # HTTP client for Google Docs/Drive API
       {:req, "~> 0.5"},
