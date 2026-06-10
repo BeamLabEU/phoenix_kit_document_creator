@@ -1662,14 +1662,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             <%= if @status_mode == "trashed" do %>
               <.table_row_menu_link
                 href={GoogleDocsClient.get_edit_url(file["id"])}
-                {%{target: "_blank", rel: "noopener noreferrer"}}
+                target="_blank"
+                rel="noopener noreferrer"
                 icon="hero-eye"
                 label={gettext("View")}
               />
             <% else %>
               <.table_row_menu_link
                 href={GoogleDocsClient.get_edit_url(file["id"])}
-                {%{target: "_blank", rel: "noopener noreferrer"}}
+                target="_blank"
+                rel="noopener noreferrer"
                 icon="hero-pencil-square"
                 label={gettext("Edit")}
               />
@@ -1802,14 +1804,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 <%= if @status_mode == "trashed" do %>
                   <.table_row_menu_link
                     href={GoogleDocsClient.get_edit_url(file["id"])}
-                    {%{target: "_blank", rel: "noopener noreferrer"}}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     icon="hero-eye"
                     label={gettext("View")}
                   />
                 <% else %>
                   <.table_row_menu_link
                     href={GoogleDocsClient.get_edit_url(file["id"])}
-                    {%{target: "_blank", rel: "noopener noreferrer"}}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     icon="hero-pencil-square"
                     label={gettext("Edit")}
                   />
