@@ -1902,6 +1902,17 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   The `:config` map is sourced from the saved variable in `template.variables`
   (if present); otherwise it falls back to `Variable.default_image_config(kind)`.
+  Keys are uniformly string-keyed (e.g. `"default_width_px"`, `"annotated"`).
+
+  ## The `"annotated"` flag is a host-app contract
+
+  This module stores and surfaces `config["annotated"]` but never consumes it —
+  by design. The host app is responsible for honoring it: when building the
+  `image_params` media URLs it submits back to `substitute_images/3`, it should
+  supply the *annotated* image (drawn overlays flattened in) when the flag is
+  truthy, or the *raw* photo when it is `false`. Defaults to `true` (see
+  `Variable.default_image_config/1`). This library only carries the URLs it is
+  given; it does not flatten annotations itself.
 
   Returns `{:error, :not_found}` if no template exists for the given UUID.
   """
