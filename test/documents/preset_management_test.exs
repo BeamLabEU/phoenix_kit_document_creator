@@ -4,7 +4,7 @@ defmodule PhoenixKitDocumentCreator.Documents.PresetManagementTest do
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.Schemas.{Template, TemplatePreset}
 
-  defp insert_template!(status \\ "published") do
+  defp insert_template!(status) do
     unique = System.unique_integer([:positive])
 
     {:ok, template} =

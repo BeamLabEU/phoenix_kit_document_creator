@@ -60,7 +60,13 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       precommit: [
         "compile --force --warnings-as-errors",
         "deps.unlock --check-unused",
-        "quality.ci"
+        # Run via `cmd` so Hex bootstraps in a fresh process — the hex.* archive
+        # tasks aren't reliably resolvable through Mix.Task.run inside an alias.
+        "cmd mix hex.audit",
+        "quality.ci",
+        # Run via `cmd` so the subprocess auto-selects MIX_ENV=test; a bare
+        # "test" step inside an alias stays in :dev and aborts.
+        "cmd mix test --warnings-as-errors"
       ]
     ]
   end

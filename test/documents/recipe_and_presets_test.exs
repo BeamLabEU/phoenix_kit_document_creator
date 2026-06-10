@@ -9,7 +9,7 @@ defmodule PhoenixKitDocumentCreator.Documents.RecipeAndPresetsTest do
 
   import StubDocsClientHelpers
 
-  defp insert_template!(opts \\ []) do
+  defp insert_template!(opts) do
     unique = System.unique_integer([:positive])
     google_doc_id = Keyword.get(opts, :google_doc_id, "tmpl-#{unique}")
     published = Keyword.get(opts, :published, true)

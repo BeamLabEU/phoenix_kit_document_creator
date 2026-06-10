@@ -4,7 +4,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.ImageSubstitutionTest do
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
   # Mimics a minimal Google Docs JSON response.
-  defp doc_with_text(text, start_index \\ 1) do
+  defp doc_with_text(text, start_index) do
     %{
       "body" => %{
         "content" => [
@@ -184,7 +184,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.ImageSubstitutionTest do
           assert %{insertInlineImage: body} = request
           assert body.location.index == 100
           assert body.uri == "https://x/img.png"
-          refute match?(%{createPositionedObject: _}, request)
+          refute Map.has_key?(request, :createPositionedObject)
         end)
 
       assert logs =~ "z_index 1 is not supported"
