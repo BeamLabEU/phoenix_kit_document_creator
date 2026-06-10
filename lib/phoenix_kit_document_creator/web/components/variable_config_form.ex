@@ -13,6 +13,15 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
   attr(:variable, :map, required: true)
 
   def config_form(%{variable: %{type: :image}} = assigns) do
+    current_annotated =
+      Map.get(
+        assigns.variable.config,
+        :annotated,
+        Map.get(assigns.variable.config, "annotated", true)
+      )
+
+    assigns = assign(assigns, current_annotated: current_annotated)
+
     ~H"""
     <div class="space-y-2">
       <div class="form-control">
@@ -28,6 +37,23 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
           phx-debounce="500"
         />
       </div>
+      <div class="form-control">
+        <label class="label cursor-pointer py-1 justify-start gap-3">
+          <input
+            type="hidden"
+            name={"variables[#{@variable.name}][config][annotated]"}
+            value="false"
+          />
+          <input
+            type="checkbox"
+            name={"variables[#{@variable.name}][config][annotated]"}
+            class="toggle toggle-sm"
+            value="true"
+            checked={@current_annotated}
+          />
+          <span class="label-text text-sm">{gettext("Include annotations")}</span>
+        </label>
+      </div>
     </div>
     """
   end
@@ -41,8 +67,19 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
 
     current_columns = to_string(current_columns)
 
+    current_annotated =
+      Map.get(
+        assigns.variable.config,
+        :annotated,
+        Map.get(assigns.variable.config, "annotated", true)
+      )
+
     assigns =
-      assign(assigns, current_separator: current_separator, current_columns: current_columns)
+      assign(assigns,
+        current_separator: current_separator,
+        current_columns: current_columns,
+        current_annotated: current_annotated
+      )
 
     ~H"""
     <div class="space-y-2">
@@ -100,6 +137,23 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
           min="1"
           phx-debounce="500"
         />
+      </div>
+      <div class="form-control">
+        <label class="label cursor-pointer py-1 justify-start gap-3">
+          <input
+            type="hidden"
+            name={"variables[#{@variable.name}][config][annotated]"}
+            value="false"
+          />
+          <input
+            type="checkbox"
+            name={"variables[#{@variable.name}][config][annotated]"}
+            class="toggle toggle-sm"
+            value="true"
+            checked={@current_annotated}
+          />
+          <span class="label-text text-sm">{gettext("Include annotations")}</span>
+        </label>
       </div>
     </div>
     """
