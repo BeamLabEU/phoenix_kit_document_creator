@@ -131,6 +131,75 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
         logo_var = Enum.find(reloaded.variables, &(&1["name"] == "logo"))
         assert logo_var["config"]["default_width_px"] == 400
       end
+
+      test "persists annotated false for an image variable", %{template: t} do
+        assert {:ok, _} =
+                 Documents.update_template_variable_config(
+                   t.google_doc_id,
+                   "logo",
+                   %{"annotated" => "false"}
+                 )
+
+        reloaded = Repo.reload(t)
+        logo_var = Enum.find(reloaded.variables, &(&1["name"] == "logo"))
+        assert logo_var["config"]["annotated"] == false
+        assert logo_var["config"]["default_width_px"] == 400
+      end
+
+      test "preserves annotated false when updating unrelated config", %{template: t} do
+        assert {:ok, _} =
+                 Documents.update_template_variable_config(
+                   t.google_doc_id,
+                   "logo",
+                   %{"annotated" => "false"}
+                 )
+
+        assert {:ok, _} =
+                 Documents.update_template_variable_config(
+                   t.google_doc_id,
+                   "logo",
+                   %{"default_width_px" => "650"}
+                 )
+
+        reloaded = Repo.reload(t)
+        logo_var = Enum.find(reloaded.variables, &(&1["name"] == "logo"))
+        assert logo_var["config"]["annotated"] == false
+        assert logo_var["config"]["default_width_px"] == 650
+      end
+
+      test "garbage annotated value is dropped, existing value preserved", %{template: t} do
+        assert {:ok, _} =
+                 Documents.update_template_variable_config(
+                   t.google_doc_id,
+                   "logo",
+                   %{"annotated" => "false"}
+                 )
+
+        assert {:ok, _} =
+                 Documents.update_template_variable_config(
+                   t.google_doc_id,
+                   "logo",
+                   %{"annotated" => "maybe"}
+                 )
+
+        reloaded = Repo.reload(t)
+        logo_var = Enum.find(reloaded.variables, &(&1["name"] == "logo"))
+        assert logo_var["config"]["annotated"] == false
+      end
+
+      test "atom-keyed annotated input is coerced to string key", %{template: t} do
+        assert {:ok, _} =
+                 Documents.update_template_variable_config(
+                   t.google_doc_id,
+                   "logo",
+                   %{annotated: false}
+                 )
+
+        reloaded = Repo.reload(t)
+        logo_var = Enum.find(reloaded.variables, &(&1["name"] == "logo"))
+        assert logo_var["config"]["annotated"] == false
+        refute is_map_key(logo_var["config"], :annotated)
+      end
     end
   end
 end

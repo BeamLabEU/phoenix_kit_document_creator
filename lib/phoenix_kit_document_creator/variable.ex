@@ -123,6 +123,22 @@ defmodule PhoenixKitDocumentCreator.Variable do
     text_vars ++ image_vars
   end
 
+  @doc """
+  Returns the effective `annotated` value for an image variable config map.
+
+  Handles both atom (`:annotated`) and string (`"annotated"`) keys, defaulting
+  to `true` when the key is missing or explicitly `nil`. This is the canonical
+  accessor host apps should use so they don't need to know the config's key
+  shape or the default value.
+  """
+  @spec image_config_annotated?(map()) :: boolean()
+  def image_config_annotated?(config) when is_map(config) do
+    case Map.get(config, :annotated) do
+      nil -> Map.get(config, "annotated", true) != false
+      v -> v != false
+    end
+  end
+
   @doc "Converts an underscore_name to a human-readable label."
   @spec humanize(String.t()) :: String.t()
   def humanize(name) do

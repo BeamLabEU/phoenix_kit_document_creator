@@ -1,3 +1,46 @@
+## 0.4.8 - 2026-06-16
+
+### Changed
+
+- **`VariableConfigForm` now derives the annotated toggle state through `Variable.image_config_annotated?/1`** instead of its own `config_value/3` lookup. This makes the checkbox preview a single source of truth with the canonical host-app accessor — they previously diverged on a mixed atom/string-keyed config (`%{annotated: nil, "annotated" => false}`) — and guarantees `current_annotated` is a strict boolean, matching its `attr :boolean` contract.
+
+## 0.4.7 - 2026-06-16
+
+### Added
+
+- **Per-slot `annotated` flag for image variables.** Template authors can now toggle whether each `{{ image: … }}` / `{{ images: … }}` slot includes annotation-flattened images (`true`, default and existing behaviour) or the raw photo (`false`). The flag lives in the variable's `config` jsonb, is edited through a toggle in the template editor, and is surfaced string-keyed via `Documents.image_slots_for_template/1`. The library stores and carries the flag but does not flatten annotations itself — that remains the host app's responsibility when building `image_params` for `substitute_images/3`.
+- **`Variable.image_config_annotated?/1`** — canonical accessor that reads either atom- or string-keyed `annotated` values and defaults to `true` when missing or `nil`, so host apps don't need to know the config key shape.
+
+### Changed
+
+- **`Documents.coerce_config/1`** now stringifies incoming config keys before coercion, so atom-keyed caller input (e.g. `%{annotated: false}`) is stored uniformly string-keyed and won't produce duplicate JSON keys in jsonb.
+- **`parse_bool/1`** now treats `nil`/empty as the safe `true` default and drops unrecognised values via `:skip` (preserving the existing stored value), instead of silently coercing every unknown input to `true`.
+- **`parse_columns/1`** now requires the whole input string to parse as an integer (aligning with `parse_integer/1`), so values like `"2abc"` no longer clamp to `2`.
+- **`resolve_slot_config/3`** now drops `nil` saved values before merging defaults, preventing an explicit `%{"annotated" => nil}` from shadowing the default with `nil`.
+- **External links open safely.** All `target="_blank"` anchors in `DocumentsLive` now carry `rel="noopener noreferrer"`, not only the row-action menu links.
+- **Dependencies refreshed.** `phoenix_kit` 1.7.126 → 1.7.144, `phoenix_live_view` 1.1.31 → 1.2.0.
+
+### Internal
+
+- **`mix precommit` hardened** with `hex.audit` and `mix test --warnings-as-errors`; surfaced and fixed warnings across the suite.
+- Row-menu edit/view links now use the native `target`/`rel` attr support in PhoenixKit core components rather than dynamic spread workarounds.
+
+## 0.4.6 - 2026-06-09
+
+### Fixed
+
+- **Image height arithmetic no longer divides by nil.** `GoogleDocsClient.build_media_items/1` now preserves the source `height_px` so `scale_height/3` always has a denominator; previously a missing height could crash the inline image sizing path.
+- **`scale_height/3` hardened against nil source height.** If the source height is missing, the function now falls back to the configured/default height instead of raising.
+- **Image config lookup centralised.** Both the inline and table-grid image paths read width/height config through the same helper, removing an atom-keyed fallback that mishandled explicit `false` for future boolean flags.
+
+### Changed
+
+- **Dependencies refreshed.** `phoenix_kit` 1.7.126 patch bump.
+
+### Internal
+
+- Added regression tests pinning the exact rendered height (`450.0 PT`) and ensuring `build_media_items/1` carries `height_px` end-to-end.
+
 ## 0.4.5 - 2026-05-31
 
 ### Added

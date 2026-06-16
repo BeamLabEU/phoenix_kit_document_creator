@@ -191,6 +191,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   defp coerce_config(config) do
     config
+    |> Enum.map(fn {k, v} -> {to_string(k), v} end)
     |> Enum.map(fn
       {"default_width_px", v} -> {"default_width_px", parse_integer(v)}
       {"max_count", v} -> {"max_count", parse_integer_or_nil(v)}
@@ -234,7 +235,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   defp parse_columns(v) when is_binary(v) do
     case Integer.parse(v) do
-      {n, _} -> max(1, min(n, @max_columns))
+      {n, ""} -> max(1, min(n, @max_columns))
       _ -> 1
     end
   end
@@ -242,12 +243,15 @@ defmodule PhoenixKitDocumentCreator.Documents do
   defp parse_columns(_), do: 1
 
   # Coerces annotated values from form strings ("true"/"false") to booleans.
-  # Falls back to true (the safe default) for unrecognised inputs.
-  defp parse_bool(true), do: true
-  defp parse_bool(false), do: false
+  # nil/empty means the field was not supplied (or the hidden input was blank)
+  # so we default to true, the safe "include annotations" value. Unrecognised
+  # inputs are dropped via :skip so the existing config value is preserved.
+  defp parse_bool(nil), do: true
+  defp parse_bool(""), do: true
+  defp parse_bool(v) when is_boolean(v), do: v
   defp parse_bool("true"), do: true
   defp parse_bool("false"), do: false
-  defp parse_bool(_), do: true
+  defp parse_bool(_), do: :skip
 
   @doc "List templates from the local DB. Returns maps compatible with the LiveView."
   @spec list_templates_from_db() :: [map()]
@@ -1958,8 +1962,19 @@ defmodule PhoenixKitDocumentCreator.Documents do
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
 
     case saved_config do
-      nil -> string_default
-      config when is_map(config) -> Map.merge(string_default, config)
+      nil ->
+        string_default
+
+      config when is_map(config) ->
+        # Drop nil saved values so the non-nil defaults win. This prevents an
+        # explicit %{"annotated" => nil} (or any other nil-stamped key) from
+        # shadowing the default with nil.
+        clean_config =
+          config
+          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+          |> Map.new()
+
+        Map.merge(string_default, clean_config)
     end
   end
 

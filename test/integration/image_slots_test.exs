@@ -62,6 +62,29 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
         # multi-column Google Docs renderer.
         photos = Enum.find(slots, &(&1.name == "photos"))
         assert photos.config["columns"] == 1
+
+        # Both slot kinds default to annotated true.
+        assert photos.config["annotated"] == true
+        logo = Enum.find(slots, &(&1.name == "logo"))
+        assert logo.config["annotated"] == true
+      end
+
+      test "surfaces saved annotated false" do
+        template =
+          insert_template_with_doc_text!("""
+            Logo: {{ image: logo }}
+          """)
+
+        assert {:ok, _} =
+                 Documents.update_template_variable_config(
+                   template.google_doc_id,
+                   "logo",
+                   %{"annotated" => "false"}
+                 )
+
+        assert {:ok, slots} = Documents.image_slots_for_template(template.uuid)
+        logo = Enum.find(slots, &(&1.name == "logo"))
+        assert logo.config["annotated"] == false
       end
 
       test "returns {:error, :not_found} for unknown template uuid" do

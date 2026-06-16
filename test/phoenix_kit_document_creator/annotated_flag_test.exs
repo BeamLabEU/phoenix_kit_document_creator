@@ -74,6 +74,37 @@ defmodule PhoenixKitDocumentCreator.AnnotatedFlagTest do
   # VariableConfigForm renders the annotated toggle
   # ---------------------------------------------------------------------------
 
+  # ---------------------------------------------------------------------------
+  # Variable.image_config_annotated?/1 — canonical accessor
+  # ---------------------------------------------------------------------------
+
+  describe "image_config_annotated?/1" do
+    test "defaults to true when key is missing" do
+      assert Variable.image_config_annotated?(%{}) == true
+      assert Variable.image_config_annotated?(%{"default_width_px" => 400}) == true
+    end
+
+    test "reads atom-keyed true/false" do
+      assert Variable.image_config_annotated?(%{annotated: true}) == true
+      assert Variable.image_config_annotated?(%{annotated: false}) == false
+    end
+
+    test "reads string-keyed true/false" do
+      assert Variable.image_config_annotated?(%{"annotated" => true}) == true
+      assert Variable.image_config_annotated?(%{"annotated" => false}) == false
+    end
+
+    test "treats explicit nil as the default true" do
+      assert Variable.image_config_annotated?(%{annotated: nil}) == true
+      assert Variable.image_config_annotated?(%{"annotated" => nil}) == true
+    end
+
+    test "atom key wins over string key" do
+      assert Variable.image_config_annotated?(%{"annotated" => true, annotated: false}) == false
+      assert Variable.image_config_annotated?(%{"annotated" => false, annotated: true}) == true
+    end
+  end
+
   describe "VariableConfigForm annotated toggle" do
     import Phoenix.LiveViewTest
 
@@ -119,6 +150,15 @@ defmodule PhoenixKitDocumentCreator.AnnotatedFlagTest do
       assert html =~ ~s(value="false")
       refute html =~ ~s(checked="checked")
       refute html =~ ~s( checked>)
+    end
+
+    test "image: toggle is checked when annotated is nil (default wins)" do
+      html =
+        render_component(&VariableConfigForm.config_form/1,
+          variable: %{name: "logo", type: :image, config: %{"annotated" => nil}}
+        )
+
+      assert html =~ ~s( checked)
     end
 
     test "image_list: renders Include annotations toggle" do

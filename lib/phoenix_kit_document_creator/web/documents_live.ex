@@ -1020,6 +1020,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               :if={folder_url}
               href={folder_url}
               target="_blank"
+              rel="noopener noreferrer"
               class="btn btn-ghost btn-sm"
             >
               <span class="hero-folder-open w-4 h-4" /> {gettext("Open Folder")}
@@ -1050,7 +1051,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 </button>
               </li>
               <li :if={folder_url}>
-                <a href={folder_url} target="_blank">
+                <a href={folder_url} target="_blank" rel="noopener noreferrer">
                   <span class="hero-folder-open w-4 h-4" /> {gettext("Open Folder")}
                 </a>
               </li>
@@ -1583,6 +1584,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <a
           href={GoogleDocsClient.get_edit_url(file["id"])}
           target="_blank"
+          rel="noopener noreferrer"
           style="display:flex;justify-content:center;padding:8px 8px 8px 8px;background:oklch(var(--color-base-200));"
         >
           <.render_thumbnail thumbnail={@thumbnails[file["id"]]} />
@@ -1594,6 +1596,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             <a
               href={GoogleDocsClient.get_edit_url(file["id"])}
               target="_blank"
+              rel="noopener noreferrer"
               class="font-medium text-sm truncate link link-hover"
             >
               {file["name"]}
@@ -1744,6 +1747,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 <a
                   href={GoogleDocsClient.get_edit_url(file["id"])}
                   target="_blank"
+                  rel="noopener noreferrer"
                   class="font-medium link link-hover"
                 >
                   {file["name"]}

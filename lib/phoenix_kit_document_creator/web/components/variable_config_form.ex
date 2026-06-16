@@ -10,11 +10,15 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
   use Phoenix.Component
   use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
+  alias PhoenixKitDocumentCreator.Variable
+
   attr(:variable, :map, required: true)
 
   def config_form(%{variable: %{type: :image}} = assigns) do
     assigns =
-      assign(assigns, current_annotated: config_value(assigns.variable.config, :annotated, true))
+      assign(assigns,
+        current_annotated: Variable.image_config_annotated?(assigns.variable.config)
+      )
 
     ~H"""
     <div class="space-y-2">
@@ -46,7 +50,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
       assign(assigns,
         current_separator: current_separator,
         current_columns: current_columns,
-        current_annotated: config_value(assigns.variable.config, :annotated, true)
+        current_annotated: Variable.image_config_annotated?(assigns.variable.config)
       )
 
     ~H"""
@@ -145,8 +149,22 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
   # Reads a config value by atom key, falling back to its string key, then the
   # given default. Uses Map.get rather than `||` so legitimately falsy stored
   # values (false, 0) are not mistaken for "missing" — the bug class fixed in
-  # commit 2118b0b for the annotated flag.
+  # commit 2118b0b for the annotated flag. An explicit nil is treated as missing
+  # so the default wins.
   defp config_value(config, key, default \\ nil) do
-    Map.get(config, key, Map.get(config, to_string(key), default))
+    case Map.get(config, key, :missing) do
+      :missing ->
+        case Map.get(config, to_string(key), :missing) do
+          :missing -> default
+          nil -> default
+          v -> v
+        end
+
+      nil ->
+        default
+
+      v ->
+        v
+    end
   end
 end

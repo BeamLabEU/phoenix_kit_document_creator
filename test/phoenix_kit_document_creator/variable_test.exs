@@ -133,7 +133,12 @@ defmodule PhoenixKitDocumentCreator.VariableTest do
                  name: "logo",
                  label: "Logo",
                  type: :image,
-                 config: %{default_width_px: 400, opacity: 1.0, z_index: 0}
+                 config: %{
+                   default_width_px: 400,
+                   opacity: 1.0,
+                   z_index: 0,
+                   annotated: true
+                 }
                }
              ] = PhoenixKitDocumentCreator.Variable.build_definitions(fork)
     end
@@ -149,6 +154,7 @@ defmodule PhoenixKitDocumentCreator.VariableTest do
                    default_width_px: 400,
                    opacity: 1.0,
                    z_index: 0,
+                   annotated: true,
                    separator: :newline,
                    max_count: nil
                  }
