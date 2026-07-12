@@ -7,6 +7,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Category do
   `status = "deleted"`.
   """
   use Ecto.Schema
+  use PhoenixKit.SchemaPrefix
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}

@@ -8,6 +8,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.HeaderFooter do
   drop this table.
   """
   use Ecto.Schema
+  use PhoenixKit.SchemaPrefix
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}
