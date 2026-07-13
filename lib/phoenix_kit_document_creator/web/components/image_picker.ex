@@ -35,6 +35,9 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
       |> assign_new(:current_selection, fn -> [] end)
       |> assign_new(:filter, fn -> "" end)
       |> assign_new(:page, fn -> 0 end)
+      # In HEEx `@page_size` reads an *assign*, not the module attribute —
+      # expose it so the pagination footer can render.
+      |> assign(:page_size, @page_size)
       |> compute_visible()
 
     {:ok, socket}

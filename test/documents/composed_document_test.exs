@@ -89,31 +89,36 @@ defmodule PhoenixKitDocumentCreator.Documents.ComposedDocumentTest do
       ])
     end
 
-    test "defaults to :page_break separator and raises on unsupported values" do
-      t1 = insert_template!(google_doc_id: "tmpl-1", published: true)
-      section = %{template_uuid: t1.uuid, position: 0, variable_values: %{}, image_params: %{}}
+    test "defaults to :page_break separator and rejects unsupported values" do
+      # Distinct templates per compose: the stub derives the copied doc id from
+      # the source template id ("copy-of-<id>"), and documents.google_doc_id
+      # carries a unique index — two composes of the same template would collide.
+      t1 = insert_template!(google_doc_id: "tmpl-sep-1", published: true)
+      t2 = insert_template!(google_doc_id: "tmpl-sep-2", published: true)
+      section1 = %{template_uuid: t1.uuid, position: 0, variable_values: %{}, image_params: %{}}
+      section2 = %{template_uuid: t2.uuid, position: 0, variable_values: %{}, image_params: %{}}
       user = Ecto.UUID.generate()
 
       assert {:ok, %Document{}} =
-               Documents.create_composed_document([section],
+               Documents.create_composed_document([section1],
                  created_by_uuid: user,
                  name: "Sep default"
                )
 
       assert {:ok, %Document{}} =
-               Documents.create_composed_document([section],
+               Documents.create_composed_document([section2],
                  created_by_uuid: user,
                  name: "Sep pb",
                  separator: :page_break
                )
 
-      assert_raise ArgumentError, ~r/unsupported separator/, fn ->
-        Documents.create_composed_document([section],
-          created_by_uuid: user,
-          name: "Sep bad",
-          separator: :blank_line
-        )
-      end
+      # Unsupported separators surface as an error tuple, not a raise.
+      assert {:error, {:unsupported_separator, :blank_line}} =
+               Documents.create_composed_document([section1],
+                 created_by_uuid: user,
+                 name: "Sep bad",
+                 separator: :blank_line
+               )
     end
 
     test "single-section document does not call append_template" do

@@ -160,6 +160,15 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLiveTest do
 
       view |> element("button", "Add section") |> render_click()
 
+      # The variable-value inputs only render once the section has a template
+      # selected — pick it via a change event first (as the browser would).
+      view
+      |> form("form",
+        preset: %{name: "WithVars"},
+        section: %{"0" => %{template_uuid: tmpl.uuid}}
+      )
+      |> render_change()
+
       view
       |> form("form",
         preset: %{name: "WithVars"},

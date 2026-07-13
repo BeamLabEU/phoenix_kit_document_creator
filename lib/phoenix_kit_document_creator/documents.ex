@@ -170,8 +170,18 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   defp write_variable_config!(template, var_name, config) do
+    # Raw SQL bypasses Ecto's type layer: the native `uuid` column needs the
+    # 16-byte binary form, not the string carried by the schema struct. Also
+    # qualify the table with the configured schema prefix (nil on default
+    # `public` installs) since raw SQL doesn't see `@schema_prefix`.
+    table =
+      case Template.__schema__(:prefix) do
+        nil -> "phoenix_kit_doc_templates"
+        prefix -> ~s("#{prefix}".phoenix_kit_doc_templates)
+      end
+
     sql = """
-    UPDATE phoenix_kit_doc_templates
+    UPDATE #{table}
     SET variables = (
       SELECT jsonb_agg(
         CASE
@@ -186,7 +196,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
     WHERE uuid = $1
     """
 
-    SQL.query!(repo(), sql, [template.uuid, var_name, config])
+    SQL.query!(repo(), sql, [Ecto.UUID.dump!(template.uuid), var_name, config])
   end
 
   defp coerce_config(config) do

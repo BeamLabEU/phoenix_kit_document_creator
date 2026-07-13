@@ -3,6 +3,52 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLiveTest do
 
   import ExUnit.CaptureLog
 
+  alias PhoenixKitDocumentCreator.Test.StubIntegrations
+
+  # Seeds a *connected* Google integration the uuid-keyed way (core V114+):
+  # birth the row via `add_connection/2`, stamp credentials via `save_setup/2`,
+  # then point the module's `google_connection` setting at the row's uuid.
+  # Also routes Drive HTTP through the stub backend so no real requests fire
+  # (unstubbed calls short-circuit to `{:error, :unstubbed_request}`).
+  defp seed_connected_google_integration!(email \\ "connected@example.com") do
+    {:ok, %{uuid: uuid}} = PhoenixKit.Integrations.add_connection("google", "Primary")
+
+    {:ok, _} =
+      PhoenixKit.Integrations.save_setup(uuid, %{
+        "access_token" => "stub-token",
+        "status" => "connected",
+        "external_account_id" => email,
+        "metadata" => %{"connected_email" => email}
+      })
+
+    {:ok, _} =
+      PhoenixKit.Settings.update_json_setting_with_module(
+        "document_creator_settings",
+        %{"google_connection" => uuid},
+        "document_creator"
+      )
+
+    previous = Application.get_env(:phoenix_kit_document_creator, :integrations_backend)
+
+    Application.put_env(
+      :phoenix_kit_document_creator,
+      :integrations_backend,
+      StubIntegrations
+    )
+
+    on_exit(fn ->
+      StubIntegrations.release!()
+
+      if previous do
+        Application.put_env(:phoenix_kit_document_creator, :integrations_backend, previous)
+      else
+        Application.delete_env(:phoenix_kit_document_creator, :integrations_backend)
+      end
+    end)
+
+    uuid
+  end
+
   describe "mount" do
     test "renders the settings page header", %{conn: conn} do
       conn = put_test_scope(conn, fake_scope())
@@ -356,6 +402,11 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLiveTest do
     end
 
     test "access reminder is visible when root name is set", %{conn: conn} do
+      # The Drive Folders card (which hosts the reminder) only renders when a
+      # Google integration is connected. Core stores integrations uuid-keyed
+      # (V114+), so seed a real connection row + point the module setting at it.
+      seed_connected_google_integration!()
+
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/settings/document-creator")
 

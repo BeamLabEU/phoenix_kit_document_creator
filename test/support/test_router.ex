@@ -40,6 +40,8 @@ defmodule PhoenixKitDocumentCreator.Test.Router do
       live("/categories/new", CategoryFormLive, :new)
       live("/categories/:uuid/edit", CategoryFormLive, :edit)
       live("/categories/:category_uuid/types/new", TypeFormLive, :new)
+      live("/categories/:category_uuid/presets/new", PresetFormLive, :new)
+      live("/presets/:uuid/edit", PresetFormLive, :edit)
     end
   end
 

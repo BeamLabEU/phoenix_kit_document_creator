@@ -17,7 +17,7 @@ defmodule PhoenixKitDocumentCreator.Test.StubDocsClient do
 
   ## Default stub behaviour
 
-  - `copy_document/1` → `{:ok, "copy-of-<source_id>"}`
+  - `copy_document/2` → `{:ok, "copy-of-<source_id>"}`
   - `append_template/2` → `{:ok, {100, 200}}`
   - `substitute_all_sections/3` → `:ok`
   - `delete_document/1` → `:ok`
@@ -64,7 +64,7 @@ defmodule PhoenixKitDocumentCreator.Test.StubDocsClient do
 
   # ── GoogleDocsClient contract ────────────────────────────────────────
 
-  def copy_document(source_id) do
+  def copy_document(source_id, _opts \\ []) do
     record(:copy_document)
 
     case override_for(:copy_document) do

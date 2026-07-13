@@ -33,8 +33,22 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
       doc_id = "stub-doc-#{unique}"
       Process.put({:stub_doc_text, doc_id}, text)
 
+      # Mirror `Documents.detect_variables/1`: cache the detected variable
+      # definitions on the row, as the template picker does before any
+      # variable-config edit happens in the real flow.
+      # `update_template_variable_config/3` intentionally rejects variables
+      # missing from the DB cache with `:unknown_variable`.
+      var_defs =
+        text
+        |> PhoenixKitDocumentCreator.Variable.extract_variables()
+        |> PhoenixKitDocumentCreator.Variable.build_definitions()
+        |> Enum.map(&Map.from_struct/1)
+
       {:ok, template} =
-        Documents.upsert_template_from_drive(%{"id" => doc_id, "name" => "Test #{unique}"})
+        Documents.upsert_template_from_drive(
+          %{"id" => doc_id, "name" => "Test #{unique}"},
+          %{variables: var_defs}
+        )
 
       template
     end

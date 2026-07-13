@@ -811,8 +811,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert {:error, {:live_redirect, %{to: redirect_url}}} =
                render_click(view, "open_media_picker", %{"name" => "logo", "mode" => "garbage"})
 
-      # The redirect URL must NOT contain "garbage" — it defaults to "single".
-      refute String.contains?(redirect_url, "garbage")
+      # The mode handed to the media selector must default to "single". The raw
+      # client value only survives inside `return_to` (echoed for the round
+      # trip) and is re-validated on return, where unknown modes are treated
+      # as single by `apply_image_selection/4`.
+      query = URI.decode_query(URI.parse(redirect_url).query)
+      assert query["mode"] == "single"
+      refute String.contains?(URI.parse(redirect_url).path, "garbage")
     end
   end
 
@@ -897,10 +902,32 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
 
       # Inject list view mode directly to avoid push_patch routing issue in the
       # test router (switch_view patches to /documents which isn't registered).
+      # The list table (and its sort headers) only renders in the connected,
+      # loaded state with at least one row — inject those too.
       :sys.replace_state(view.pid, fn state ->
-        %{state | socket: Phoenix.Component.assign(state.socket, view_mode: "list")}
+        doc = %{
+          "id" => "sort-header-doc",
+          "name" => "Sort Header Doc",
+          "status" => nil,
+          "inserted_at" => nil,
+          "modifiedTime" => nil,
+          "data" => nil,
+          "path" => nil
+        }
+
+        new_socket =
+          state.socket
+          |> Phoenix.Component.assign(view_mode: "list")
+          |> Phoenix.Component.assign(documents: [doc])
+          |> Phoenix.Component.assign(loaded: true, loading: false, google_connected: true)
+
+        %{state | socket: new_socket}
       end)
 
+      # `render/1` alone returns the proxy's cached tree — nudge the LV (the
+      # handle_info catch-all ignores the message) so the injected assigns
+      # produce a fresh render.
+      send(view.pid, :__rerender__)
       html = render(view)
 
       # The sort_header_cell emits phx-value-by for each sortable column.
@@ -1146,6 +1173,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
         %{state | socket: new_socket}
       end)
 
+      # `render/1` alone returns the proxy's cached tree — nudge the LV (the
+      # handle_info catch-all ignores the message) so the injected assigns
+      # produce a fresh render.
+      send(view.pid, :__rerender__)
       html = render(view)
 
       # Table row menu wrapper exists with the doc's id.
@@ -1194,6 +1225,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
         %{state | socket: new_socket}
       end)
 
+      send(view.pid, :__rerender__)
       html = render(view)
 
       assert html =~ "doc-row-menu-#{id}"
@@ -1235,6 +1267,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
         %{state | socket: new_socket}
       end)
 
+      send(view.pid, :__rerender__)
       html = render(view)
 
       assert html =~ "doc-card-menu-#{id}"

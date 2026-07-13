@@ -21,7 +21,7 @@ defmodule PhoenixKitDocumentCreator.Documents.RenameDocumentTest do
       |> Document.changeset(%{
         name: Keyword.get(opts, :name, "Document #{unique}"),
         google_doc_id: Keyword.get(opts, :google_doc_id, "gdoc-#{unique}"),
-        status: "active"
+        status: "published"
       })
       |> Repo.insert()
 
