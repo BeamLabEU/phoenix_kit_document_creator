@@ -11,6 +11,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   Google Docs workflow. A future migration should remove these columns.
   """
   use Ecto.Schema
+  use PhoenixKit.SchemaPrefix
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}

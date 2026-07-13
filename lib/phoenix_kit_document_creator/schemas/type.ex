@@ -4,6 +4,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Type do
   Category. Soft-deleted via `status = "deleted"`.
   """
   use Ecto.Schema
+  use PhoenixKit.SchemaPrefix
   import Ecto.Changeset
 
   @type t :: %__MODULE__{}
