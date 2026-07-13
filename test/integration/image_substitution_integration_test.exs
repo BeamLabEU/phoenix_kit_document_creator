@@ -31,19 +31,18 @@ defmodule PhoenixKitDocumentCreator.Integration.ImageSubstitutionTest do
   @moduletag :external
   @moduletag :integration
 
+  # ExUnit does not accept `{:skip, reason}` from `setup_all` (returning it
+  # invalidates the whole module every run) — gate with a conditional module
+  # tag instead.
+  unless System.get_env("PHOENIX_KIT_DOC_CREATOR_DEV_OAUTH") do
+    @moduletag skip: "PHOENIX_KIT_DOC_CREATOR_DEV_OAUTH not set — skipping E2E integration tests"
+  end
+
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
   # Fake UUID used as the media_id throughout this test.
   @test_media_uuid "00000000-e2e1-0000-0000-000000000001"
-
-  setup_all do
-    if System.get_env("PHOENIX_KIT_DOC_CREATOR_DEV_OAUTH") do
-      :ok
-    else
-      {:skip, "PHOENIX_KIT_DOC_CREATOR_DEV_OAUTH not set — skipping E2E integration tests"}
-    end
-  end
 
   # Minimal stub that satisfies PhoenixKitDocumentCreator.Media's interface:
   # get_file/1 returns a fake struct, get_public_url/1 returns the test URL.
