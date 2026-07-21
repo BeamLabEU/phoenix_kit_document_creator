@@ -749,9 +749,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @spec batch_update(String.t(), [map()]) :: {:ok, map()} | {:error, term()}
   def batch_update(doc_id, requests) when is_list(requests) do
     with {:ok, fid} <- validate_file_id(doc_id) do
-      authenticated_request(:post, "#{@docs_base}/documents/#{fid}:batchUpdate",
-        json: %{requests: requests}
-      )
+      case authenticated_request(:post, "#{@docs_base}/documents/#{fid}:batchUpdate",
+             json: %{requests: requests}
+           ) do
+        {:ok, %{status: status} = resp} when status in 200..299 ->
+          {:ok, resp}
+
+        {:ok, %{body: body}} ->
+          log_drive_error("batchUpdate failed", body)
+          {:error, :batch_update_failed}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -1712,10 +1722,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       end)
       |> Enum.sort_by(fn {_, s, _, _} -> s end, :desc)
       |> Enum.flat_map(fn {_, s, e, value} ->
-        [
-          %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}},
-          %{insertText: %{location: %{index: s}, text: value}}
-        ]
+        delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
+
+        # Google rejects insertText with empty text, and batchUpdate is atomic —
+        # one empty value would void every substitution in the batch. A blank
+        # variable clears its placeholder, mirroring the image path's behavior.
+        case value do
+          "" -> [delete]
+          _ -> [delete, %{insertText: %{location: %{index: s}, text: value}}]
+        end
       end)
 
     maybe_batch(&batch_update/2, doc_id, requests)
