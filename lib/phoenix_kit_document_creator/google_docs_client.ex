@@ -1623,42 +1623,317 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @doc """
   Append a template's content to an existing Google Doc via batchUpdate.
 
-  Inserts a page break followed by the full text content of `template_doc_id`
-  into `target_doc_id`. Returns `{:ok, {start_index, end_index}}` representing
-  the character range of the inserted content — callers use this for
+  Inserts a page break followed by the content of `template_doc_id` into
+  `target_doc_id`. Returns `{:ok, {start_index, end_index}}` representing the
+  character range of the inserted content — callers use this for
   section-scoped substitution.
+
+  Paragraph text is inserted via a single `insertText`, same as before this
+  function also handled tables. Tables are NOT part of that flattened text —
+  there is no Docs API primitive for "paste another document's table here" —
+  so they are rebuilt in two extra batchUpdate passes, reusing the exact
+  pattern already proven for image-grid tables (`table_image_inserts/3` ->
+  re-fetch -> `match_new_tables/3` -> `fill_table_cells/3`):
+
+    1. `flatten_template_with_table_markers/1` walks the template like
+       `get_document_text/1` does, but emits a unique marker token at each
+       table's position (instead of silently dropping it) and captures the
+       table's `{rows, columns, cell text}` separately, in document order.
+       The marked-up text is inserted via the same single `insertText` as
+       before.
+    2. Re-fetch, locate the markers (`find_table_marker_ranges/1`), and
+       replace each with a bare table of the right size
+       (`table_skeleton_requests/2`) in one batchUpdate.
+    3. Re-fetch again, identify the newly-inserted tables (`match_new_tables/3`,
+       reused as-is), and fill every cell with its captured text
+       (`fill_table_cells_text/2`) in one batchUpdate. Any `{{var}}`
+       placeholder that lived inside a table cell is now physically present
+       in the document, so it substitutes normally in
+       `Composer.apply_substitutions/4` like any other text.
+
+  Templates with no tables skip steps 2-3 entirely — this reduces to exactly
+  the previous single-`insertText` behaviour, with no extra Docs API calls.
+
+  Known limitations: cell styling (bold, shading, borders, merged cells,
+  column widths) is not restored — `insertTable` creates a bare
+  default-styled table. Nested tables (a table inside a table cell) are not
+  supported.
+
+  Options (used in tests):
+    * `:get_fn` — overrides `get_document/1` (used for both the template
+      fetch and every target-document re-fetch)
+    * `:batch_fn` — overrides `batch_update/2`
   """
-  @spec append_template(String.t(), String.t()) ::
+  @spec append_template(String.t(), String.t(), keyword()) ::
           {:ok, {integer(), integer()}} | {:error, term()}
-  def append_template(target_doc_id, template_doc_id) do
-    with {:ok, text} <- get_document_text(template_doc_id),
-         {:ok, %{body: current_doc}} <- get_document(target_doc_id) do
+  def append_template(target_doc_id, template_doc_id, opts \\ []) do
+    get_fn = Keyword.get(opts, :get_fn, &get_document/1)
+    batch_fn = Keyword.get(opts, :batch_fn, &batch_update/2)
+
+    with {:ok, %{body: template_doc}} <- get_fn.(template_doc_id),
+         {text, tables} = flatten_template_with_table_markers(template_doc),
+         {:ok, %{body: current_doc}} <- get_fn.(target_doc_id) do
       end_index = document_end_index(current_doc)
       insert_index = max(end_index - 1, 1)
 
       requests = [
         %{insertPageBreak: %{location: %{index: insert_index}}},
-        %{
-          insertText: %{
-            location: %{index: insert_index + 1},
-            text: text
-          }
-        }
+        %{insertText: %{location: %{index: insert_index + 1}, text: text}}
       ]
 
-      case batch_update(target_doc_id, requests) do
+      content_start = insert_index + 1
+
+      case batch_fn.(target_doc_id, requests) do
         {:ok, _} ->
-          content_start = insert_index + 1
-          # Use UTF-16 unit count — Google Docs indices count UTF-16 code units,
-          # not graphemes. For BMP-only text these are equal; emoji and rare CJK
-          # codepoints occupy two UTF-16 units (a surrogate pair).
-          content_end = content_start + utf16_units(text)
-          {:ok, {content_start, content_end}}
+          finish_append_template(target_doc_id, content_start, text, tables, get_fn, batch_fn)
 
         {:error, _} = err ->
           err
       end
     end
+  end
+
+  # No tables in this template — previous behaviour, no extra Docs API calls.
+  # UTF-16 unit count is used because Google Docs indices count UTF-16 code
+  # units, not graphemes: for BMP-only text these are equal, but emoji and
+  # rare CJK codepoints occupy two UTF-16 units (a surrogate pair).
+  defp finish_append_template(_target_doc_id, content_start, text, [], _get_fn, _batch_fn) do
+    {:ok, {content_start, content_start + utf16_units(text)}}
+  end
+
+  # Tables present: rebuild them via the marker -> skeleton -> fill pipeline
+  # described in append_template/3's doc. A final re-fetch computes the true
+  # content_end from the actual document state (rather than the marked-up
+  # text's length), since inserting real tables changes the document's
+  # length beyond what the marker text occupied — and Google may add its own
+  # structural padding around an inserted table that isn't worth predicting
+  # analytically when a re-fetch gives the exact answer.
+  defp finish_append_template(target_doc_id, content_start, _text, tables, get_fn, batch_fn) do
+    tables_by_index = Map.new(tables, &{&1.marker_index, &1})
+
+    with {:ok, %{body: doc1}} <- get_fn.(target_doc_id),
+         marker_ranges = find_table_marker_ranges(doc1),
+         :ok <- verify_marker_count(marker_ranges, tables),
+         pre_existing_starts = doc1 |> collect_tables() |> Enum.map(& &1["table"]["startIndex"]),
+         skeleton_requests = table_skeleton_requests(marker_ranges, tables_by_index),
+         {:ok, _} <- maybe_batch(batch_fn, target_doc_id, skeleton_requests),
+         {:ok, %{body: doc2}} <- get_fn.(target_doc_id),
+         slot_starts = marker_ranges |> Enum.map(& &1.start_index) |> Enum.sort(),
+         tables_asc = doc2 |> collect_tables() |> Enum.sort_by(& &1["table"]["startIndex"]),
+         {:ok, new_tables} <- match_new_tables(tables_asc, pre_existing_starts, slot_starts),
+         fill_requests = build_table_fill_requests(marker_ranges, new_tables, tables_by_index),
+         {:ok, _} <- maybe_batch(batch_fn, target_doc_id, fill_requests),
+         {:ok, %{body: final_doc}} <- get_fn.(target_doc_id) do
+      {:ok, {content_start, document_end_index(final_doc) - 1}}
+    else
+      :mismatch ->
+        Logger.error(
+          "append_template: table match mismatch while appending tables into doc #{target_doc_id}"
+        )
+
+        {:error, :table_match_mismatch}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp verify_marker_count(marker_ranges, tables) do
+    if length(marker_ranges) == length(tables) do
+      :ok
+    else
+      {:error, :table_marker_count_mismatch}
+    end
+  end
+
+  # Sentinel wrapped in spaces (per the diagnosis's own recommendation) so it
+  # reads as ordinary, API-safe plain text — no reliance on control
+  # characters or private-use codepoints surviving an insertText round-trip.
+  # The surrounding spaces are part of the match (and the delete), so no
+  # stray whitespace is left behind once the marker is replaced.
+  @table_marker_regex ~r/ __PKDC_TABLE_(\d+)__ /
+
+  defp table_marker(n), do: " __PKDC_TABLE_#{n}__ "
+
+  @doc """
+  Phase 0 of the append-with-tables pipeline (see `append_template/3`).
+
+  Flattens a template document's body the same way `get_document_text/1`
+  does for paragraphs, but instead of silently skipping table blocks, emits a
+  unique marker token at each table's position and captures its structure
+  separately.
+
+  This is a distinct code path from `get_document_text/1` — that function's
+  existing behaviour (silently skipping tables) is relied on by its other
+  callers (`Documents.detect_variables/1`,
+  `Documents.image_slots_for_template/1`) and is intentionally left
+  untouched.
+
+  Returns `{text, tables}`. `tables` is a list of
+  `%{marker_index: pos_integer(), rows: pos_integer(), columns: pos_integer(),
+  cell_texts: [String.t()]}`, one entry per table, in document order.
+  `cell_texts` is row-major (row 0's cells left-to-right, then row 1's, ...),
+  one entry per table cell — the same order `extract_table_cells/1` (private)
+  and `fill_table_cells_text/2` enumerate cells in.
+
+  Nested tables (a table inside a table cell) are not supported: a cell's
+  text is captured from its paragraph blocks only, same limitation the
+  top-level flatten has.
+  """
+  @spec flatten_template_with_table_markers(map()) :: {String.t(), [map()]}
+  def flatten_template_with_table_markers(doc) do
+    blocks = get_in(doc, ["body", "content"]) |> List.wrap()
+    {rev_chunks, rev_tables, _next_marker} = Enum.reduce(blocks, {[], [], 1}, &flatten_block/2)
+
+    text = rev_chunks |> Enum.reverse() |> Enum.join()
+    {text, Enum.reverse(rev_tables)}
+  end
+
+  defp flatten_block(%{"paragraph" => %{"elements" => elements}}, {chunks, tables, n}) do
+    text = Enum.map_join(elements, fn el -> get_in(el, ["textRun", "content"]) || "" end)
+    {[text | chunks], tables, n}
+  end
+
+  defp flatten_block(%{"table" => table}, {chunks, tables, n}) do
+    {rows, columns} = table_dimensions(table)
+    cell_texts = table |> Map.get("tableRows", []) |> Enum.flat_map(&row_cell_texts/1)
+    table_info = %{marker_index: n, rows: rows, columns: columns, cell_texts: cell_texts}
+
+    {[table_marker(n) | chunks], [table_info | tables], n + 1}
+  end
+
+  defp flatten_block(_block, acc), do: acc
+
+  defp table_dimensions(%{"rows" => r, "columns" => c}) when is_integer(r) and is_integer(c) do
+    {max(r, 1), max(c, 1)}
+  end
+
+  defp table_dimensions(%{"tableRows" => rows}) do
+    columns = rows |> Enum.map(&row_length/1) |> Enum.max(fn -> 1 end)
+    {max(length(rows), 1), max(columns, 1)}
+  end
+
+  defp table_dimensions(_), do: {1, 1}
+
+  defp row_length(%{"tableCells" => cells}), do: length(cells)
+  defp row_length(_), do: 0
+
+  defp row_cell_texts(%{"tableCells" => cells}), do: Enum.map(cells, &cell_text/1)
+  defp row_cell_texts(_), do: []
+
+  # Same join `get_document_text/1` uses, scoped to one cell's content, minus
+  # the trailing newline contributed by the cell's last paragraph (that
+  # newline is already present in the target table's default empty
+  # paragraph, so keeping ours too would leave a spurious blank trailing
+  # line in every filled cell).
+  defp cell_text(%{"content" => content}) do
+    content
+    |> Enum.flat_map(fn el -> get_in(el, ["paragraph", "elements"]) || [] end)
+    |> Enum.map_join(fn el -> get_in(el, ["textRun", "content"]) || "" end)
+    |> strip_trailing_newline()
+  end
+
+  defp cell_text(_), do: ""
+
+  defp strip_trailing_newline(text) do
+    if String.ends_with?(text, "\n") do
+      binary_part(text, 0, byte_size(text) - 1)
+    else
+      text
+    end
+  end
+
+  @doc """
+  Phase 1a of the append-with-tables pipeline (see `append_template/3`):
+  locate `flatten_template_with_table_markers/1` marker tokens in an
+  already-fetched document. Mirrors `find_text_var_ranges/2`'s UTF-16 index
+  arithmetic (`Regex.scan(..., return: :index)` yields byte offsets; Google
+  Docs indices count UTF-16 code units).
+  """
+  @spec find_table_marker_ranges(map()) :: [
+          %{marker_index: integer(), start_index: integer(), end_index: integer()}
+        ]
+  def find_table_marker_ranges(doc) do
+    doc
+    |> body_text_runs()
+    |> Enum.flat_map(&extract_marker_ranges/1)
+  end
+
+  defp extract_marker_ranges(%{"textRun" => %{"content" => content}, "startIndex" => base}) do
+    Regex.scan(@table_marker_regex, content, return: :index)
+    |> Enum.map(fn [{full_byte_start, full_byte_len}, {idx_byte_start, idx_byte_len}] ->
+      u16_start = content |> binary_part(0, full_byte_start) |> utf16_units()
+      u16_len = content |> binary_part(full_byte_start, full_byte_len) |> utf16_units()
+      marker_index = content |> binary_part(idx_byte_start, idx_byte_len) |> String.to_integer()
+
+      %{
+        marker_index: marker_index,
+        start_index: base + u16_start,
+        end_index: base + u16_start + u16_len
+      }
+    end)
+  end
+
+  defp extract_marker_ranges(_), do: []
+
+  @doc """
+  Phase 1b of the append-with-tables pipeline (see `append_template/3`): for
+  each located marker, delete the marker text and insert a bare table of its
+  captured dimensions at that position. Sorted descending by `start_index`
+  (same convention as `substitute_all_text/4` and
+  `build_image_batch_requests/3`) so earlier replacements in the list don't
+  shift the indices of markers still to be processed.
+  """
+  @spec table_skeleton_requests([map()], %{integer() => map()}) :: [map()]
+  def table_skeleton_requests(marker_ranges, tables_by_index) do
+    marker_ranges
+    |> Enum.sort_by(& &1.start_index, :desc)
+    |> Enum.flat_map(fn %{marker_index: idx, start_index: s, end_index: e} ->
+      %{rows: rows, columns: columns} = Map.fetch!(tables_by_index, idx)
+
+      [
+        %{"deleteContentRange" => %{"range" => %{"startIndex" => s, "endIndex" => e}}},
+        %{"insertTable" => %{"rows" => rows, "columns" => columns, "location" => %{"index" => s}}}
+      ]
+    end)
+  end
+
+  @doc """
+  Phase 2 of the append-with-tables pipeline (see `append_template/3`): text
+  variant of `fill_table_cells/3`. Emits `insertText` requests for each
+  cell's captured text, last-first so earlier inserts don't shift later
+  indices. A cell whose captured text is empty is left untouched (its
+  default empty paragraph already reads as empty).
+  """
+  @spec fill_table_cells_text([%{insert_index: integer()}], [String.t()]) :: [map()]
+  def fill_table_cells_text(cells, cell_texts) when is_list(cells) and is_list(cell_texts) do
+    cells
+    |> Enum.zip(cell_texts)
+    |> Enum.reverse()
+    |> Enum.map(fn {%{insert_index: idx}, text} -> text_insert_request(idx, text) end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp text_insert_request(_idx, ""), do: nil
+
+  defp text_insert_request(idx, text),
+    do: %{"insertText" => %{"location" => %{"index" => idx}, "text" => text}}
+
+  # Merges every matched table's cell fills into one globally-ordered request
+  # list. Fills must be applied in descending index order ACROSS tables (not
+  # just within one), since an earlier insert would otherwise shift a later
+  # table's captured cell indices.
+  defp build_table_fill_requests(marker_ranges, new_tables, tables_by_index) do
+    marker_ranges
+    |> Enum.sort_by(& &1.start_index)
+    |> Enum.zip(new_tables)
+    |> Enum.flat_map(fn {%{marker_index: idx}, table_el} ->
+      %{cell_texts: cell_texts} = Map.fetch!(tables_by_index, idx)
+      Enum.zip(extract_table_cells(table_el), cell_texts)
+    end)
+    |> Enum.sort_by(fn {%{insert_index: idx}, _text} -> idx end, :desc)
+    |> Enum.map(fn {%{insert_index: idx}, text} -> text_insert_request(idx, text) end)
+    |> Enum.reject(&is_nil/1)
   end
 
   @doc """
