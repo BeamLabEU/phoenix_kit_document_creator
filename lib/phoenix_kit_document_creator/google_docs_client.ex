@@ -1395,8 +1395,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           {:ok, %{status: status}} when status in 200..299 ->
             :ok
 
-          {:ok, %{status: 404}} ->
-            {:error, :drive_file_not_found}
+          # A 404 on the PATCH is ambiguous: the file was just fetched above,
+          # so the missing resource is most likely the DESTINATION folder.
+          # Keep it distinct from :drive_file_not_found (initial GET 404) so
+          # callers can treat "file already gone" and "bad destination"
+          # differently — conflating them once let deletes DB-trash entries
+          # whose live Drive files then got resurrected by the next sync.
+          {:ok, %{status: 404, body: body}} ->
+            log_drive_error("move failed (404, likely destination folder)", body)
+            {:error, :move_failed}
 
           {:ok, %{body: body}} ->
             log_drive_error("move failed", body)

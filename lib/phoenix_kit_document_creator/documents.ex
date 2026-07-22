@@ -1784,18 +1784,36 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   defp move_to_deleted_folder(file_id, folder_key, actor_uuid) do
-    with {:ok, folder_id} <- resolve_deleted_folder_id(folder_key),
-         :ok <- GoogleDocsClient.move_file(file_id, folder_id) do
-      update_file_by_google_doc_id(file_id, %{
-        status: "trashed",
-        folder_id: folder_id,
-        path: deleted_folder_path(folder_key)
-      })
+    with {:ok, folder_id} <- resolve_deleted_folder_id(folder_key) do
+      case GoogleDocsClient.move_file(file_id, folder_id) do
+        :ok ->
+          finish_soft_delete(file_id, folder_key, folder_id, actor_uuid)
 
-      stamp_deleted_data(deleted_schema(folder_key), file_id, actor_uuid)
+        # The Drive file no longer exists (orphaned DB row — e.g. the file was
+        # hard-deleted directly in Drive and sync marked the row "lost").
+        # There is nothing to move; the delete should still succeed by
+        # trashing the DB row, otherwise such rows can never be removed from
+        # the UI. Distinct from a missing destination folder, which surfaces
+        # as {:error, :move_failed} and correctly fails the delete.
+        {:error, :drive_file_not_found} ->
+          finish_soft_delete(file_id, folder_key, folder_id, actor_uuid)
 
-      :ok
+        {:error, _} = err ->
+          err
+      end
     end
+  end
+
+  defp finish_soft_delete(file_id, folder_key, folder_id, actor_uuid) do
+    update_file_by_google_doc_id(file_id, %{
+      status: "trashed",
+      folder_id: folder_id,
+      path: deleted_folder_path(folder_key)
+    })
+
+    stamp_deleted_data(deleted_schema(folder_key), file_id, actor_uuid)
+
+    :ok
   end
 
   # A given google_doc_id lives in exactly one of these tables, so we stamp /
