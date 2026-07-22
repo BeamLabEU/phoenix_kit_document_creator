@@ -1714,12 +1714,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     with {:ok, %{body: doc1}} <- get_fn.(target_doc_id),
          marker_ranges = find_table_marker_ranges(doc1),
          :ok <- verify_marker_count(marker_ranges, tables),
-         pre_existing_starts = doc1 |> collect_tables() |> Enum.map(& &1["table"]["startIndex"]),
+         pre_existing_starts = doc1 |> collect_tables() |> Enum.map(& &1["startIndex"]),
          skeleton_requests = table_skeleton_requests(marker_ranges, tables_by_index),
          {:ok, _} <- maybe_batch(batch_fn, target_doc_id, skeleton_requests),
          {:ok, %{body: doc2}} <- get_fn.(target_doc_id),
          slot_starts = marker_ranges |> Enum.map(& &1.start_index) |> Enum.sort(),
-         tables_asc = doc2 |> collect_tables() |> Enum.sort_by(& &1["table"]["startIndex"]),
+         tables_asc = doc2 |> collect_tables() |> Enum.sort_by(& &1["startIndex"]),
          {:ok, new_tables} <- match_new_tables(tables_asc, pre_existing_starts, slot_starts),
          fill_requests = build_table_fill_requests(marker_ranges, new_tables, tables_by_index),
          {:ok, _} <- maybe_batch(batch_fn, target_doc_id, fill_requests),
@@ -2059,7 +2059,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     # Phase 2 can reconstruct the pre/new table interleaving (see
     # match_new_tables/3) and identify the newly inserted tables.
     pre_existing_table_starts =
-      doc2 |> collect_tables() |> Enum.map(& &1["table"]["startIndex"])
+      doc2 |> collect_tables() |> Enum.map(& &1["startIndex"])
 
     with {:ok, _} <- maybe_batch(&batch_update/2, doc_id, phase1_requests) do
       if table_ranges == [] do
@@ -2093,7 +2093,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       tables_asc =
         doc3
         |> collect_tables()
-        |> Enum.sort_by(fn el -> el["table"]["startIndex"] end, :asc)
+        |> Enum.sort_by(fn el -> el["startIndex"] end, :asc)
 
       case match_new_tables(tables_asc, pre_existing_table_starts, slot_starts) do
         :mismatch ->
@@ -2131,7 +2131,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
-  # Walk doc body content and collect all table elements in document order.
+  # Walk doc body content and collect all table StructuralElements, in
+  # document order. Each returned element is the *block*, e.g.
+  # `%{"startIndex" => _, "endIndex" => _, "table" => %{"rows" => _, ...}}`
+  # — `startIndex`/`endIndex` are fields of the block itself, NOT of the
+  # nested `"table"` object (the Docs API's `Table` resource has no
+  # `startIndex` field of its own). Callers locating a table's position must
+  # read `el["startIndex"]`, never `el["table"]["startIndex"]` (that always
+  # returns `nil` and silently corrupts any index-based ordering built on
+  # top of it — see match_new_tables/3's callers).
   defp collect_tables(doc) do
     (get_in(doc, ["body", "content"]) || [])
     |> Enum.filter(&Map.has_key?(&1, "table"))
