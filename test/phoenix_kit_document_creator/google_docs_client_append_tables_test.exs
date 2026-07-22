@@ -63,6 +63,59 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
     }
   end
 
+  # A single textRun element, optionally carrying a textStyle — real Docs API
+  # shape. `run` is either a plain string (no textStyle key at all, matching
+  # how Google omits it for fully-default runs) or `{text, style_map}`.
+  defp text_run_elem({text, style}) when is_map(style),
+    do: %{"textRun" => %{"content" => text, "textStyle" => style}}
+
+  defp text_run_elem(text) when is_binary(text), do: %{"textRun" => %{"content" => text}}
+
+  # A paragraph block built from a list of runs (plain strings and/or
+  # `{text, style}` tuples, see text_run_elem/1) — for body (non-table) text
+  # style tests, where `table_block/1`'s plain-string-only row_texts can't
+  # express a styled run.
+  defp styled_paragraph_block(runs) do
+    %{"paragraph" => %{"elements" => Enum.map(runs, &text_run_elem/1)}}
+  end
+
+  # Table block variant of `table_block/1` that accepts styled runs per cell
+  # (a cell is a list of runs, see text_run_elem/1) and an optional
+  # `tableStyle.tableColumnProperties` list — for cell-style and
+  # column-width capture tests. `table_block/1` itself is left untouched
+  # (many existing tests rely on its plain-string-only shape).
+  defp styled_table_block(opts) do
+    rows = Keyword.fetch!(opts, :rows)
+    row_runs = Keyword.fetch!(opts, :row_runs)
+    column_properties = Keyword.get(opts, :column_properties)
+
+    table_rows =
+      Enum.map(row_runs, fn cell_runs ->
+        %{
+          "tableCells" =>
+            Enum.map(cell_runs, fn
+              nil -> %{"content" => []}
+              runs -> %{"content" => [styled_paragraph_block(runs)]}
+            end)
+        }
+      end)
+
+    table = %{
+      "rows" => rows,
+      "columns" => Keyword.fetch!(opts, :columns),
+      "tableRows" => table_rows
+    }
+
+    table =
+      if column_properties do
+        Map.put(table, "tableStyle", %{"tableColumnProperties" => column_properties})
+      else
+        table
+      end
+
+    %{"table" => table}
+  end
+
   # Builds a table StructuralElement matching the REAL Docs API response
   # shape, for simulating an already-inserted table in a target document
   # (as opposed to `table_block/1`, which builds a *template's* table for
@@ -225,6 +278,202 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
     end
   end
 
+  describe "flatten_template_with_table_markers_and_styles/1" do
+    test "flatten_template_with_table_markers/1 stays a 2-tuple, unaffected by style capture" do
+      doc = %{
+        "body" => %{"content" => [table_block(rows: 1, columns: 1, row_texts: [["x\n"]])]}
+      }
+
+      assert {text, tables} = GoogleDocsClient.flatten_template_with_table_markers(doc)
+
+      assert {^text, ^tables, []} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+    end
+
+    test "captures column_properties from tableStyle.tableColumnProperties, FIXED_WIDTH only carries a width" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            styled_table_block(
+              rows: 1,
+              columns: 3,
+              row_runs: [[["A"], ["B"], ["C"]]],
+              column_properties: [
+                %{"widthType" => "FIXED_WIDTH", "width" => %{"magnitude" => 120, "unit" => "PT"}},
+                %{"widthType" => "EVENLY_DISTRIBUTED"},
+                %{"widthType" => "FIXED_WIDTH", "width" => %{"magnitude" => 80.5, "unit" => "PT"}}
+              ]
+            )
+          ]
+        }
+      }
+
+      assert {_text, [table], _body_runs} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert table.column_properties == [
+               %{width_type: "FIXED_WIDTH", magnitude: 120.0, unit: "PT"},
+               %{width_type: "EVENLY_DISTRIBUTED", magnitude: nil, unit: nil},
+               %{width_type: "FIXED_WIDTH", magnitude: 80.5, unit: "PT"}
+             ]
+    end
+
+    test "column_properties is [] when the source table has no tableStyle" do
+      doc = %{"body" => %{"content" => [table_block(rows: 1, columns: 1, row_texts: [["x\n"]])]}}
+
+      assert {_text, [table], _} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert table.column_properties == []
+    end
+
+    test "cell_runs captures per-run style and strips only the cell's trailing newline" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            styled_table_block(
+              rows: 1,
+              columns: 1,
+              row_runs: [[[{"Bold", %{"bold" => true}}, {" plain\n", %{}}]]]
+            )
+          ]
+        }
+      }
+
+      assert {_text, [table], _} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert [[run1, run2]] = table.cell_runs
+
+      assert run1.text == "Bold"
+      assert run1.bold == true
+      assert run1.start_offset == 0
+      assert run1.length == 4
+
+      assert run2.text == " plain"
+      assert run2.bold == false
+      assert run2.start_offset == 4
+      assert run2.length == 6
+
+      # Same underlying data as cell_texts, decomposed into styled runs —
+      # concatenating the runs' text must reproduce it exactly.
+      assert Enum.map_join([run1, run2], & &1.text) == hd(table.cell_texts)
+      assert table.cell_texts == ["Bold plain"]
+    end
+
+    test "an empty cell captures as an empty cell_runs list" do
+      doc = %{
+        "body" => %{"content" => [table_block(rows: 1, columns: 2, row_texts: [["Text\n", nil]])]}
+      }
+
+      assert {_text, [table], _} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert [[text_run], []] = table.cell_runs
+      assert text_run.text == "Text"
+      assert text_run.bold == false
+      assert text_run.length == 4
+    end
+
+    test "cell_runs threads offsets across multiple paragraph blocks in one cell, keeping internal newlines" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "table" => %{
+                "rows" => 1,
+                "columns" => 1,
+                "tableRows" => [
+                  %{
+                    "tableCells" => [
+                      %{
+                        "content" => [
+                          %{
+                            "paragraph" => %{
+                              "elements" => [%{"textRun" => %{"content" => "Line1\n"}}]
+                            }
+                          },
+                          %{
+                            "paragraph" => %{
+                              "elements" => [%{"textRun" => %{"content" => "Line2\n"}}]
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      assert {_text, [table], _} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert [[run1, run2]] = table.cell_runs
+      # Internal newline kept (not the last run) — only the trailing one is dropped.
+      assert run1.text == "Line1\n"
+      assert run1.start_offset == 0
+      assert run1.length == 6
+
+      assert run2.text == "Line2"
+      assert run2.start_offset == 6
+      assert run2.length == 5
+    end
+
+    test "body_runs captures per-run style for non-table paragraphs, offsets skip the table marker" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            styled_paragraph_block([{"Heading\n", %{"bold" => true}}]),
+            table_block(rows: 1, columns: 1, row_texts: [["x\n"]]),
+            styled_paragraph_block(["Body text.\n"])
+          ]
+        }
+      }
+
+      assert {text, [_table], body_runs} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      marker = " __PKDC_TABLE_1__ "
+      assert text =~ marker
+
+      assert [heading_run, body_run] = body_runs
+
+      assert heading_run.text == "Heading\n"
+      assert heading_run.bold == true
+      assert heading_run.start_offset == 0
+      assert heading_run.length == String.length("Heading\n")
+
+      assert body_run.text == "Body text.\n"
+      assert body_run.bold == false
+      assert body_run.start_offset == String.length("Heading\n") + String.length(marker)
+      assert body_run.length == String.length("Body text.\n")
+    end
+
+    test "paragraph-only document with no styling captures a single plain body run" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            %{"paragraph" => %{"elements" => [%{"textRun" => %{"content" => "Hello "}}]}},
+            %{"paragraph" => %{"elements" => [%{"textRun" => %{"content" => "World\n"}}]}}
+          ]
+        }
+      }
+
+      assert {"Hello World\n", [], body_runs} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert [run1, run2] = body_runs
+      assert run1.text == "Hello "
+      assert run1.bold == false
+      assert run2.text == "World\n"
+      assert run2.start_offset == String.length("Hello ")
+    end
+  end
+
   describe "find_table_marker_ranges/1" do
     test "locates a single marker and reports its captured index" do
       {marker_text, [%{marker_index: 1}]} =
@@ -288,6 +537,193 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                %{"deleteContentRange" => %{"range" => %{"startIndex" => 10, "endIndex" => 28}}},
                %{"insertTable" => %{"rows" => 2, "columns" => 2, "location" => %{"index" => 10}}}
              ] = reqs
+    end
+
+    test "column_properties present in table_info are NOT applied here even when present" do
+      # Column widths are applied in Phase 2 (build_table_fill_requests/3),
+      # not this Phase 1b skeleton batch — verified live against the real
+      # Docs API that insertTable's own `location` index cannot be trusted
+      # as the resulting table's real startIndex (Google inserts an
+      # implicit paragraph break ahead of a table landing mid-paragraph),
+      # so updateTableColumnProperties needs the confirmed post-insert
+      # position from a re-fetch, which this function doesn't have. See
+      # table_column_width_requests/2's doc.
+      marker_ranges = [%{marker_index: 1, start_index: 10, end_index: 28}]
+
+      tables_by_index = %{
+        1 => %{
+          rows: 1,
+          columns: 2,
+          column_properties: [%{width_type: "FIXED_WIDTH", magnitude: 200.0, unit: "PT"}]
+        }
+      }
+
+      reqs = GoogleDocsClient.table_skeleton_requests(marker_ranges, tables_by_index)
+
+      assert [
+               %{"deleteContentRange" => %{"range" => %{"startIndex" => 10, "endIndex" => 28}}},
+               %{"insertTable" => %{"rows" => 1, "columns" => 2, "location" => %{"index" => 10}}}
+             ] = reqs
+    end
+  end
+
+  describe "table_column_width_requests/2" do
+    test "emits one request per FIXED_WIDTH column, columnIndices aligned to source column position" do
+      column_properties = [
+        %{width_type: "FIXED_WIDTH", magnitude: 120.0, unit: "PT"},
+        %{width_type: "EVENLY_DISTRIBUTED", magnitude: nil, unit: nil},
+        %{width_type: "FIXED_WIDTH", magnitude: 80.5, unit: "PT"}
+      ]
+
+      assert GoogleDocsClient.table_column_width_requests(50, column_properties) == [
+               %{
+                 "updateTableColumnProperties" => %{
+                   "tableStartLocation" => %{"index" => 50},
+                   "columnIndices" => [0],
+                   "tableColumnProperties" => %{
+                     "widthType" => "FIXED_WIDTH",
+                     "width" => %{"magnitude" => 120.0, "unit" => "PT"}
+                   },
+                   "fields" => "width,widthType"
+                 }
+               },
+               %{
+                 "updateTableColumnProperties" => %{
+                   "tableStartLocation" => %{"index" => 50},
+                   "columnIndices" => [2],
+                   "tableColumnProperties" => %{
+                     "widthType" => "FIXED_WIDTH",
+                     "width" => %{"magnitude" => 80.5, "unit" => "PT"}
+                   },
+                   "fields" => "width,widthType"
+                 }
+               }
+             ]
+    end
+
+    test "empty column_properties produces no requests" do
+      assert GoogleDocsClient.table_column_width_requests(50, []) == []
+    end
+
+    test "a column with no captured width_type produces no request" do
+      assert GoogleDocsClient.table_column_width_requests(50, [
+               %{width_type: nil, magnitude: nil, unit: nil}
+             ]) == []
+    end
+  end
+
+  describe "text_style_requests/2" do
+    test "builds one updateTextStyle request per run, range anchored at base_index" do
+      runs = [
+        %{start_offset: 0, length: 5, bold: true, italic: false, font_size: nil, color: nil}
+      ]
+
+      assert GoogleDocsClient.text_style_requests(100, runs) == [
+               %{
+                 "updateTextStyle" => %{
+                   "range" => %{"startIndex" => 100, "endIndex" => 105},
+                   "textStyle" => %{"bold" => true, "italic" => false},
+                   "fields" => "bold,italic"
+                 }
+               }
+             ]
+    end
+
+    test "merges adjacent runs sharing identical style into one range" do
+      runs = [
+        %{start_offset: 0, length: 3, bold: false, italic: false, font_size: nil, color: nil},
+        %{start_offset: 3, length: 4, bold: false, italic: false, font_size: nil, color: nil}
+      ]
+
+      assert GoogleDocsClient.text_style_requests(10, runs) == [
+               %{
+                 "updateTextStyle" => %{
+                   "range" => %{"startIndex" => 10, "endIndex" => 17},
+                   "textStyle" => %{"bold" => false, "italic" => false},
+                   "fields" => "bold,italic"
+                 }
+               }
+             ]
+    end
+
+    test "does not merge adjacent runs with different style — each gets its own explicit range" do
+      runs = [
+        %{start_offset: 0, length: 3, bold: true, italic: false, font_size: nil, color: nil},
+        %{start_offset: 3, length: 4, bold: false, italic: false, font_size: nil, color: nil}
+      ]
+
+      assert GoogleDocsClient.text_style_requests(10, runs) == [
+               %{
+                 "updateTextStyle" => %{
+                   "range" => %{"startIndex" => 10, "endIndex" => 13},
+                   "textStyle" => %{"bold" => true, "italic" => false},
+                   "fields" => "bold,italic"
+                 }
+               },
+               %{
+                 "updateTextStyle" => %{
+                   "range" => %{"startIndex" => 13, "endIndex" => 17},
+                   "textStyle" => %{"bold" => false, "italic" => false},
+                   "fields" => "bold,italic"
+                 }
+               }
+             ]
+    end
+
+    test "does not merge non-contiguous runs even when their style matches" do
+      runs = [
+        %{start_offset: 0, length: 3, bold: false, italic: false, font_size: nil, color: nil},
+        %{start_offset: 10, length: 4, bold: false, italic: false, font_size: nil, color: nil}
+      ]
+
+      assert length(GoogleDocsClient.text_style_requests(0, runs)) == 2
+    end
+
+    test "includes fontSize and foregroundColor in both textStyle and the fields mask when present" do
+      runs = [
+        %{
+          start_offset: 0,
+          length: 4,
+          bold: true,
+          italic: true,
+          font_size: 14,
+          color: %{"red" => 1.0}
+        }
+      ]
+
+      assert [%{"updateTextStyle" => req}] = GoogleDocsClient.text_style_requests(0, runs)
+      assert req["range"] == %{"startIndex" => 0, "endIndex" => 4}
+
+      assert req["textStyle"] == %{
+               "bold" => true,
+               "italic" => true,
+               "fontSize" => %{"magnitude" => 14.0, "unit" => "PT"},
+               "foregroundColor" => %{"color" => %{"rgbColor" => %{"red" => 1.0}}}
+             }
+
+      assert req["fields"] == "bold,italic,fontSize,foregroundColor"
+    end
+
+    test "an all-zero (black) foregroundColor is still replayed, not treated as absent" do
+      runs = [
+        %{start_offset: 0, length: 2, bold: false, italic: false, font_size: nil, color: %{}}
+      ]
+
+      assert [%{"updateTextStyle" => req}] = GoogleDocsClient.text_style_requests(0, runs)
+      assert req["textStyle"]["foregroundColor"] == %{"color" => %{"rgbColor" => %{}}}
+      assert req["fields"] == "bold,italic,foregroundColor"
+    end
+
+    test "filters out zero-length runs" do
+      runs = [
+        %{start_offset: 0, length: 0, bold: false, italic: false, font_size: nil, color: nil}
+      ]
+
+      assert GoogleDocsClient.text_style_requests(0, runs) == []
+    end
+
+    test "empty runs list produces no requests" do
+      assert GoogleDocsClient.text_style_requests(0, []) == []
     end
   end
 
@@ -365,10 +801,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                )
 
       # content_start=10, content_end = 10 + utf16_units("Plain body.\n") = 10+12=22
+      #
+      # The plain paragraph has no textStyle at all, so it captures as a
+      # single bold:false/italic:false run spanning the whole insert — the
+      # anti-inheritance guarantee (text_style_requests/2) applies even when
+      # nothing in the source was actually styled.
       assert_receive {:batch,
                       [
                         %{insertPageBreak: %{location: %{index: 9}}},
-                        %{insertText: %{location: %{index: 10}, text: "Plain body.\n"}}
+                        %{insertText: %{location: %{index: 10}, text: "Plain body.\n"}},
+                        %{
+                          "updateTextStyle" => %{
+                            "range" => %{"startIndex" => 10, "endIndex" => 22},
+                            "textStyle" => %{"bold" => false, "italic" => false},
+                            "fields" => "bold,italic"
+                          }
+                        }
                       ]}
 
       refute_receive {:batch, _}
@@ -510,14 +958,34 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                  batch_fn: batch_fn
                )
 
-      # Phase 0: page break + the marked-up text (marker included).
+      # Phase 0: page break + the marked-up text (marker included), plus a
+      # body style request per plain-text run either side of the marker
+      # ("Hi\n" at 10-13, "Bye\n" at 31-35 — the marker itself, 13-31, gets
+      # no style request since it's deleted before Phase 1 finishes).
       assert_receive {:batch,
                       [
                         %{insertPageBreak: %{location: %{index: 9}}},
-                        %{insertText: %{location: %{index: 10}, text: ^text}}
+                        %{insertText: %{location: %{index: 10}, text: ^text}},
+                        %{
+                          "updateTextStyle" => %{
+                            "range" => %{"startIndex" => 10, "endIndex" => 13},
+                            "textStyle" => %{"bold" => false, "italic" => false},
+                            "fields" => "bold,italic"
+                          }
+                        },
+                        %{
+                          "updateTextStyle" => %{
+                            "range" => %{"startIndex" => 31, "endIndex" => 35},
+                            "textStyle" => %{"bold" => false, "italic" => false},
+                            "fields" => "bold,italic"
+                          }
+                        }
                       ]}
 
-      # Phase 1: skeleton — delete the marker, insert a bare 1x2 table at its position.
+      # Phase 1: skeleton — delete the marker, insert a bare 1x2 table at its
+      # position. Neither template table declares tableStyle.tableColumnProperties
+      # (table_block/1's fixture doesn't set one), so no updateTableColumnProperties
+      # requests are appended — covered separately in the column-widths tests.
       assert_receive {:batch,
                       [
                         %{"deleteContentRange" => %{"range" => %{"startIndex" => ^marker_start}}},
@@ -530,11 +998,28 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                         }
                       ]}
 
-      # Phase 2: cell fill — captured cell text ("X", "Y"), last-first.
+      # Phase 2: cell fill — captured cell text ("X", "Y"), last-first, each
+      # insertText immediately followed by its own bold:false/italic:false
+      # style request (both cells are plain textRuns, same anti-inheritance
+      # guarantee as the body text above).
       assert_receive {:batch,
                       [
                         %{"insertText" => %{"location" => %{"index" => 104}, "text" => "Y"}},
-                        %{"insertText" => %{"location" => %{"index" => 101}, "text" => "X"}}
+                        %{
+                          "updateTextStyle" => %{
+                            "range" => %{"startIndex" => 104, "endIndex" => 105},
+                            "textStyle" => %{"bold" => false, "italic" => false},
+                            "fields" => "bold,italic"
+                          }
+                        },
+                        %{"insertText" => %{"location" => %{"index" => 101}, "text" => "X"}},
+                        %{
+                          "updateTextStyle" => %{
+                            "range" => %{"startIndex" => 101, "endIndex" => 102},
+                            "textStyle" => %{"bold" => false, "italic" => false},
+                            "fields" => "bold,italic"
+                          }
+                        }
                       ]}
 
       refute_receive {:batch, _}
@@ -926,13 +1411,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert_receive {:call2_batch, fill_requests}
       refute_receive {:call2_batch, _}
 
+      # Each insertText is now immediately followed by its own
+      # bold:false/italic:false updateTextStyle request (anti-inheritance
+      # guarantee — see text_style_requests/2), so fill_requests is no
+      # longer insertText-only. Filter to insertText before extracting
+      # targets; the regression under test (correct table, not cross-section
+      # corruption) is about insertText's location, unaffected by styling.
+      insert_requests = Enum.filter(fill_requests, &Map.has_key?(&1, "insertText"))
+
       fill_targets =
-        Enum.map(fill_requests, fn %{
-                                     "insertText" => %{
-                                       "location" => %{"index" => idx},
-                                       "text" => text
-                                     }
-                                   } ->
+        Enum.map(insert_requests, fn %{
+                                       "insertText" => %{
+                                         "location" => %{"index" => idx},
+                                         "text" => text
+                                       }
+                                     } ->
           {idx, text}
         end)
 
@@ -945,6 +1438,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                ])
 
       refute Enum.any?(fill_targets, fn {idx, _} ->
+               idx in [ma1 + 11, ma1 + 14, ma2 + 11, ma2 + 14]
+             end)
+
+      # Style requests ride along with the same guarantee: every one targets
+      # section 2's own new cells, never section 1's already-filled ones.
+      style_requests = Enum.filter(fill_requests, &Map.has_key?(&1, "updateTextStyle"))
+      assert length(style_requests) == length(insert_requests)
+
+      refute Enum.any?(style_requests, fn %{
+                                            "updateTextStyle" => %{
+                                              "range" => %{"startIndex" => idx}
+                                            }
+                                          } ->
                idx in [ma1 + 11, ma1 + 14, ma2 + 11, ma2 + 14]
              end)
     end
@@ -1207,18 +1713,374 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert_receive {:batch3, fill_requests_3}
       refute_receive {:batch3, _}
 
+      # See the equivalent filter in the two-tables-per-section test above —
+      # each insertText now carries its own trailing updateTextStyle request.
+      insert_requests_3 = Enum.filter(fill_requests_3, &Map.has_key?(&1, "insertText"))
+
       fill_targets_3 =
-        Enum.map(fill_requests_3, fn %{
-                                       "insertText" => %{
-                                         "location" => %{"index" => idx},
-                                         "text" => text
-                                       }
-                                     } ->
+        Enum.map(insert_requests_3, fn %{
+                                         "insertText" => %{
+                                           "location" => %{"index" => idx},
+                                           "text" => text
+                                         }
+                                       } ->
           {idx, text}
         end)
 
       assert Enum.sort(fill_targets_3) == Enum.sort([{mb + 11, "B1a"}, {mb + 14, "B1b"}])
       refute Enum.any?(fill_targets_3, fn {idx, _} -> idx in [ma + 11, ma + 14] end)
+    end
+  end
+
+  describe "append_template/3 — formatting fidelity (mock-based)" do
+    test "column widths captured from the template are applied to the new table's real (re-fetched) position in the fill batch" do
+      template_doc = %{
+        "body" => %{
+          "content" => [
+            styled_table_block(
+              rows: 1,
+              columns: 2,
+              row_runs: [[["X"], ["Y"]]],
+              column_properties: [
+                %{"widthType" => "FIXED_WIDTH", "width" => %{"magnitude" => 150, "unit" => "PT"}},
+                %{"widthType" => "FIXED_WIDTH", "width" => %{"magnitude" => 250, "unit" => "PT"}}
+              ]
+            )
+          ]
+        }
+      }
+
+      initial_target_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "endIndex" => 10,
+                    "textRun" => %{"content" => "Existing\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      {text, _tables} = GoogleDocsClient.flatten_template_with_table_markers(template_doc)
+
+      doc1 = %{
+        "body" => %{
+          "content" =>
+            initial_target_doc["body"]["content"] ++
+              [
+                %{
+                  "paragraph" => %{
+                    "elements" => [%{"startIndex" => 10, "textRun" => %{"content" => text}}]
+                  }
+                }
+              ]
+        }
+      }
+
+      [%{marker_index: 1, start_index: marker_start}] =
+        GoogleDocsClient.find_table_marker_ranges(doc1)
+
+      # The table's REAL post-insert startIndex is one past the marker's own
+      # start_index — reproducing the real Docs API's behavior verified live:
+      # insertTable's `location` index cannot be trusted as the resulting
+      # table's actual position (Google inserts an implicit paragraph break
+      # ahead of a table landing mid-paragraph). If the implementation used
+      # marker_start instead of this confirmed value for
+      # updateTableColumnProperties's tableStartLocation, this test's
+      # `^table_real_start` pin below would fail.
+      table_real_start = marker_start + 1
+
+      doc2 = %{
+        "body" => %{
+          "content" => [
+            %{
+              "startIndex" => table_real_start,
+              "table" => %{
+                "tableRows" => [
+                  %{
+                    "tableCells" => [
+                      %{"startIndex" => 100, "content" => []},
+                      %{"startIndex" => 103, "content" => []}
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      final_doc = %{
+        "body" => %{
+          "content" => [
+            %{"paragraph" => %{"elements" => [%{"startIndex" => 1, "endIndex" => 300}]}}
+          ]
+        }
+      }
+
+      call_count = :counters.new(1, [])
+
+      get_fn = fn
+        "template-id" ->
+          {:ok, %{body: template_doc}}
+
+        "target-id" ->
+          call = :counters.get(call_count, 1)
+          :counters.add(call_count, 1, 1)
+
+          case call do
+            0 -> {:ok, %{body: initial_target_doc}}
+            1 -> {:ok, %{body: doc1}}
+            2 -> {:ok, %{body: doc2}}
+            3 -> {:ok, %{body: final_doc}}
+          end
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(self(), {:batch, requests})
+        {:ok, %{}}
+      end
+
+      assert {:ok, _} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      # Phase 0 and Phase 1 (skeleton) — not under test here. Column widths
+      # are NOT in the skeleton batch (see the table_skeleton_requests/2
+      # test above) — they ride along with Phase 2's cell fills instead,
+      # once the table's real position is known from the re-fetch.
+      assert_receive {:batch, _phase0}
+      assert_receive {:batch, phase1_requests}
+      refute Enum.any?(phase1_requests, &Map.has_key?(&1, "updateTableColumnProperties"))
+
+      assert_receive {:batch, phase2_requests}
+      refute_receive {:batch, _}
+
+      column_width_requests =
+        Enum.filter(phase2_requests, &Map.has_key?(&1, "updateTableColumnProperties"))
+
+      assert [
+               %{
+                 "updateTableColumnProperties" => %{
+                   "tableStartLocation" => %{"index" => ^table_real_start},
+                   "columnIndices" => [0],
+                   "tableColumnProperties" => %{
+                     "widthType" => "FIXED_WIDTH",
+                     "width" => %{"magnitude" => 150.0, "unit" => "PT"}
+                   },
+                   "fields" => "width,widthType"
+                 }
+               },
+               %{
+                 "updateTableColumnProperties" => %{
+                   "tableStartLocation" => %{"index" => ^table_real_start},
+                   "columnIndices" => [1],
+                   "tableColumnProperties" => %{
+                     "widthType" => "FIXED_WIDTH",
+                     "width" => %{"magnitude" => 250.0, "unit" => "PT"}
+                   },
+                   "fields" => "width,widthType"
+                 }
+               }
+             ] = column_width_requests
+    end
+
+    test "bold cell runs are replayed with the correct base-index-relative offsets" do
+      template_doc = %{
+        "body" => %{
+          "content" => [
+            styled_table_block(
+              rows: 1,
+              columns: 1,
+              row_runs: [[[{"Bold", %{"bold" => true}}, " word"]]]
+            )
+          ]
+        }
+      }
+
+      initial_target_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "endIndex" => 10,
+                    "textRun" => %{"content" => "Existing\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      {text, _tables} = GoogleDocsClient.flatten_template_with_table_markers(template_doc)
+
+      doc1 = %{
+        "body" => %{
+          "content" =>
+            initial_target_doc["body"]["content"] ++
+              [
+                %{
+                  "paragraph" => %{
+                    "elements" => [%{"startIndex" => 10, "textRun" => %{"content" => text}}]
+                  }
+                }
+              ]
+        }
+      }
+
+      [%{marker_index: 1, start_index: marker_start}] =
+        GoogleDocsClient.find_table_marker_ranges(doc1)
+
+      # Single 1x1 table, one cell starting at 200 — insert_index = 201.
+      doc2 = %{
+        "body" => %{"content" => [skeleton_table_block(marker_start, marker_start + 30, [200])]}
+      }
+
+      final_doc = %{
+        "body" => %{
+          "content" => [
+            %{"paragraph" => %{"elements" => [%{"startIndex" => 1, "endIndex" => 300}]}}
+          ]
+        }
+      }
+
+      call_count = :counters.new(1, [])
+
+      get_fn = fn
+        "template-id" ->
+          {:ok, %{body: template_doc}}
+
+        "target-id" ->
+          call = :counters.get(call_count, 1)
+          :counters.add(call_count, 1, 1)
+
+          case call do
+            0 -> {:ok, %{body: initial_target_doc}}
+            1 -> {:ok, %{body: doc1}}
+            2 -> {:ok, %{body: doc2}}
+            3 -> {:ok, %{body: final_doc}}
+          end
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(self(), {:batch, requests})
+        {:ok, %{}}
+      end
+
+      assert {:ok, _} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, _phase0}
+      assert_receive {:batch, _phase1}
+      assert_receive {:batch, phase2_requests}
+      refute_receive {:batch, _}
+
+      # insert_index = cell startIndex (200) + 1 = 201. "Bold" (bold:true,
+      # 4 units) then " word" (bold:false, 5 units, no trailing newline to
+      # strip) — captured text is "Bold word", replayed as insertText
+      # followed immediately by both runs' own explicit style ranges.
+      assert phase2_requests == [
+               %{"insertText" => %{"location" => %{"index" => 201}, "text" => "Bold word"}},
+               %{
+                 "updateTextStyle" => %{
+                   "range" => %{"startIndex" => 201, "endIndex" => 205},
+                   "textStyle" => %{"bold" => true, "italic" => false},
+                   "fields" => "bold,italic"
+                 }
+               },
+               %{
+                 "updateTextStyle" => %{
+                   "range" => %{"startIndex" => 205, "endIndex" => 210},
+                   "textStyle" => %{"bold" => false, "italic" => false},
+                   "fields" => "bold,italic"
+                 }
+               }
+             ]
+    end
+
+    test "body text style (bold heading + plain paragraph) is replayed in the Phase 0 batch" do
+      template_doc = %{
+        "body" => %{
+          "content" => [
+            styled_paragraph_block([{"Heading\n", %{"bold" => true}}]),
+            styled_paragraph_block(["Plain text.\n"])
+          ]
+        }
+      }
+
+      target_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "endIndex" => 10,
+                    "textRun" => %{"content" => "Existing\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template_doc}}
+        "target-id" -> {:ok, %{body: target_doc}}
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(self(), {:batch, requests})
+        {:ok, %{}}
+      end
+
+      assert {:ok, {10, content_end}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert content_end == 10 + String.length("Heading\nPlain text.\n")
+
+      assert_receive {:batch, requests}
+      refute_receive {:batch, _}
+
+      assert [
+               %{insertPageBreak: %{location: %{index: 9}}},
+               %{insertText: %{location: %{index: 10}, text: "Heading\nPlain text.\n"}},
+               %{
+                 "updateTextStyle" => %{
+                   "range" => %{"startIndex" => 10, "endIndex" => 18},
+                   "textStyle" => %{"bold" => true, "italic" => false},
+                   "fields" => "bold,italic"
+                 }
+               },
+               %{
+                 "updateTextStyle" => %{
+                   "range" => %{"startIndex" => 18, "endIndex" => 30},
+                   "textStyle" => %{"bold" => false, "italic" => false},
+                   "fields" => "bold,italic"
+                 }
+               }
+             ] = requests
     end
   end
 end
