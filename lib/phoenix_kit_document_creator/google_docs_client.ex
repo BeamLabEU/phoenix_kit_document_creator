@@ -1698,7 +1698,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     batch_fn = Keyword.get(opts, :batch_fn, &batch_update/2)
 
     with {:ok, %{body: template_doc}} <- get_fn.(template_doc_id),
-         {text, tables, body_runs} = flatten_template_with_table_markers_and_styles(template_doc),
+         {text, tables, body_runs, body_paragraphs} =
+           flatten_template_with_table_markers_and_styles(template_doc),
          {:ok, %{body: current_doc}} <- get_fn.(target_doc_id) do
       end_index = document_end_index(current_doc)
       insert_index = max(end_index - 1, 1)
@@ -1708,7 +1709,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         [
           %{insertPageBreak: %{location: %{index: insert_index}}},
           %{insertText: %{location: %{index: content_start}, text: text}}
-        ] ++ text_style_requests(content_start, body_runs)
+        ] ++
+          text_style_requests(content_start, body_runs) ++
+          paragraph_style_requests(content_start, body_paragraphs) ++
+          paragraph_bullet_requests(content_start, body_paragraphs)
 
       case batch_fn.(target_doc_id, requests) do
         {:ok, _} ->
@@ -1808,61 +1812,85 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   top-level flatten has.
 
   This is a thin wrapper around `flatten_template_with_table_markers_and_styles/1`
-  that drops its third return value (`body_runs`) — kept at its original
-  2-tuple arity so existing callers are unaffected by the style-capture
-  addition.
+  that drops its 3rd/4th return values (`body_runs`/`body_paragraphs`) — kept
+  at its original 2-tuple arity so existing callers are unaffected by the
+  style-capture addition.
   """
   @spec flatten_template_with_table_markers(map()) :: {String.t(), [map()]}
   def flatten_template_with_table_markers(doc) do
-    {text, tables, _body_runs} = flatten_template_with_table_markers_and_styles(doc)
+    {text, tables, _body_runs, _body_paragraphs} =
+      flatten_template_with_table_markers_and_styles(doc)
+
     {text, tables}
   end
 
   @doc """
   Same walk as `flatten_template_with_table_markers/1`, additionally
   capturing per-run character style (bold, italic, font size, foreground
-  color) — see `append_template/3`'s "Formatting fidelity" doc section.
+  color) and per-paragraph style (alignment, line spacing, space
+  above/below, named style type, indentation, list bullet) — see
+  `append_template/3`'s "Formatting fidelity" doc section.
 
-  Returns `{text, tables, body_runs}`:
+  Returns `{text, tables, body_runs, body_paragraphs}`:
 
     * `text`, `tables` — identical to `flatten_template_with_table_markers/1`,
-      except each table map in `tables` gains two keys: `column_properties`
+      except each table map in `tables` gains three keys: `column_properties`
       (the source table's `tableStyle.tableColumnProperties`, normalized to
       `%{width_type, magnitude, unit}`, one per column, `[]` if the source
-      table has none) and `cell_runs` (one run-list per cell, parallel to
-      `cell_texts`, same order — see `text_style_requests/2`'s run shape).
+      table has none), `cell_runs` (one run-list per cell, parallel to
+      `cell_texts`, same order — see `text_style_requests/2`'s run shape) and
+      `cell_paragraphs` (one paragraph-span-list per cell, parallel to
+      `cell_texts`, same order — see `paragraph_style_requests/2`'s span
+      shape).
     * `body_runs` — the non-table body text's per-run style spans, same run
       shape as a `cell_runs` entry, with `start_offset`/`length` in UTF-16
       units relative to the start of `text` (table markers consume offset
       but contribute no run — they're deleted before any style request
       referencing them would apply).
+    * `body_paragraphs` — the non-table body text's per-paragraph style
+      spans, same shape as a `cell_paragraphs` entry, offsets relative to the
+      start of `text`.
   """
-  @spec flatten_template_with_table_markers_and_styles(map()) :: {String.t(), [map()], [map()]}
+  @spec flatten_template_with_table_markers_and_styles(map()) ::
+          {String.t(), [map()], [map()], [map()]}
   def flatten_template_with_table_markers_and_styles(doc) do
     blocks = get_in(doc, ["body", "content"]) |> List.wrap()
+    doc_lists = get_in(doc, ["lists"]) || %{}
 
-    {rev_chunks, rev_tables, rev_body_runs, _next_marker, _offset} =
-      Enum.reduce(blocks, {[], [], [], 1, 0}, &flatten_block_with_styles/2)
+    {rev_chunks, rev_tables, rev_body_runs, rev_body_paragraphs, _next_marker, _offset} =
+      Enum.reduce(blocks, {[], [], [], [], 1, 0}, &flatten_block_with_styles(&1, &2, doc_lists))
 
     text = rev_chunks |> Enum.reverse() |> Enum.join()
-    {text, Enum.reverse(rev_tables), Enum.reverse(rev_body_runs)}
+
+    {text, Enum.reverse(rev_tables), Enum.reverse(rev_body_runs),
+     Enum.reverse(rev_body_paragraphs)}
   end
 
   defp flatten_block_with_styles(
-         %{"paragraph" => %{"elements" => elements}},
-         {chunks, tables, body_runs, n, offset}
+         %{"paragraph" => %{"elements" => elements} = paragraph},
+         {chunks, tables, body_runs, body_paragraphs, n, offset},
+         doc_lists
        ) do
     runs = text_runs_with_styles(elements, offset)
     para_text = Enum.map_join(runs, & &1.text)
-    new_offset = offset + utf16_units(para_text)
-    {[para_text | chunks], tables, Enum.reverse(runs) ++ body_runs, n, new_offset}
+    length = utf16_units(para_text)
+    new_offset = offset + length
+    span = paragraph_span(paragraph, offset, length, doc_lists)
+
+    {[para_text | chunks], tables, Enum.reverse(runs) ++ body_runs, [span | body_paragraphs], n,
+     new_offset}
   end
 
-  defp flatten_block_with_styles(%{"table" => table}, {chunks, tables, body_runs, n, offset}) do
+  defp flatten_block_with_styles(
+         %{"table" => table},
+         {chunks, tables, body_runs, body_paragraphs, n, offset},
+         doc_lists
+       ) do
     {rows, columns} = table_dimensions(table)
     table_rows = Map.get(table, "tableRows", [])
     cell_texts = Enum.flat_map(table_rows, &row_cell_texts/1)
     cell_runs = Enum.flat_map(table_rows, &row_cell_runs/1)
+    cell_paragraphs = Enum.flat_map(table_rows, &row_cell_paragraphs(&1, doc_lists))
     column_properties = extract_column_properties(table)
 
     table_info = %{
@@ -1871,16 +1899,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       columns: columns,
       cell_texts: cell_texts,
       cell_runs: cell_runs,
+      cell_paragraphs: cell_paragraphs,
       column_properties: column_properties
     }
 
     marker = table_marker(n)
     new_offset = offset + utf16_units(marker)
 
-    {[marker | chunks], [table_info | tables], body_runs, n + 1, new_offset}
+    {[marker | chunks], [table_info | tables], body_runs, body_paragraphs, n + 1, new_offset}
   end
 
-  defp flatten_block_with_styles(_block, acc), do: acc
+  defp flatten_block_with_styles(_block, acc, _doc_lists), do: acc
 
   # Walks a paragraph's `elements` list (or a table cell's, flattened across
   # its own paragraph blocks — see `cell_style_runs/1`) and returns one run
@@ -2019,6 +2048,121 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         ]
     else
       runs
+    end
+  end
+
+  defp row_cell_paragraphs(%{"tableCells" => cells}, doc_lists),
+    do: Enum.map(cells, &cell_paragraph_spans(&1, doc_lists))
+
+  defp row_cell_paragraphs(_, _doc_lists), do: []
+
+  # Per-paragraph style variant of `cell_style_runs/1` — walks the cell's own
+  # paragraph blocks (not flattened across them, since each one needs its
+  # own captured `paragraphStyle`/`bullet`), offsets local to the cell
+  # starting at 0. Deliberately does NOT mirror `cell_style_runs/1`'s
+  # trailing-newline strip: unlike a run's `text`/`length` (which must match
+  # what `fill_table_cells_text/2` actually inserts), a paragraph's natural,
+  # un-stripped length already lands the style range exactly where the
+  # paragraph ends up structurally in the target — the cell's last paragraph
+  # reuses the pre-existing bare cell's own trailing newline instead of
+  # having one inserted, and that pre-existing newline occupies exactly the
+  # one UTF-16 unit the un-stripped length accounts for. See
+  # `paragraph_style_requests/2`'s doc for the general rule.
+  defp cell_paragraph_spans(%{"content" => content}, doc_lists) do
+    {rev_spans, _offset} =
+      Enum.reduce(content, {[], 0}, fn
+        %{"paragraph" => paragraph}, {spans, offset} ->
+          elements = paragraph["elements"] || []
+
+          para_text =
+            Enum.map_join(elements, fn el -> get_in(el, ["textRun", "content"]) || "" end)
+
+          length = utf16_units(para_text)
+          span = paragraph_span(paragraph, offset, length, doc_lists)
+          {[span | spans], offset + length}
+
+        _other, acc ->
+          acc
+      end)
+
+    Enum.reverse(rev_spans)
+  end
+
+  defp cell_paragraph_spans(_, _doc_lists), do: []
+
+  # Alignment/spacing/named-style defaults a paragraph gets when Google omits
+  # the corresponding `paragraphStyle` key (i.e. what a paragraph with no
+  # explicit style already renders as) — used for the anti-inheritance
+  # guarantee: a captured span always states every field explicitly, so a
+  # freshly inserted/split paragraph in the target document can never
+  # silently inherit alignment/spacing/named style from whatever paragraph
+  # sat at the insertion point, the same philosophy `text_style_fields/1`
+  # already applies to bold/italic.
+  @default_alignment "START"
+  @default_line_spacing 100.0
+  @default_named_style_type "NORMAL_TEXT"
+  @zero_dimension %{magnitude: 0.0, unit: "PT"}
+
+  defp paragraph_span(paragraph, start_offset, length, doc_lists) do
+    %{
+      start_offset: start_offset,
+      length: length,
+      style: extract_paragraph_style(paragraph, doc_lists),
+      bullet: extract_bullet_info(paragraph, doc_lists)
+    }
+  end
+
+  defp extract_paragraph_style(paragraph, _doc_lists) do
+    style = Map.get(paragraph, "paragraphStyle", %{})
+
+    %{
+      alignment: Map.get(style, "alignment", @default_alignment),
+      line_spacing: numeric_or_default(Map.get(style, "lineSpacing"), @default_line_spacing),
+      space_above: dimension_or_default(Map.get(style, "spaceAbove")),
+      space_below: dimension_or_default(Map.get(style, "spaceBelow")),
+      named_style_type: Map.get(style, "namedStyleType", @default_named_style_type),
+      indent_start: dimension_or_default(Map.get(style, "indentStart")),
+      indent_first_line: dimension_or_default(Map.get(style, "indentFirstLine"))
+    }
+  end
+
+  defp numeric_or_default(n, _default) when is_number(n), do: n * 1.0
+  defp numeric_or_default(_, default), do: default
+
+  defp dimension_or_default(%{"magnitude" => m} = dimension) when is_number(m) do
+    %{magnitude: m * 1.0, unit: Map.get(dimension, "unit", "PT")}
+  end
+
+  defp dimension_or_default(_), do: @zero_dimension
+
+  # List membership: only glyph *family* (bulleted vs numbered) is
+  # reproduced, via Google's own default preset for that family
+  # (`BULLET_DISC_CIRCLE_SQUARE` / `NUMBERED_DECIMAL_ALPHA_ROMAN`) — not the
+  # source list's exact glyph/format at each nesting level. `createParagraphBullets`
+  # only accepts a fixed enum of ~20 presets, so reproducing a custom glyph
+  # sequence exactly would require matching the source's per-level
+  # glyphType/glyphSymbol against every preset's own known sequence; for the
+  # overwhelming common case (a list created via the Docs UI's default
+  # "bulleted list"/"numbered list" buttons) this already matches exactly,
+  # and is a documented approximation, not silent data loss, for the rest.
+  @numbered_glyph_types ~w(DECIMAL ZERO_DECIMAL UPPER_ALPHA ALPHA UPPER_ROMAN ROMAN)
+
+  defp extract_bullet_info(%{"bullet" => %{"listId" => list_id} = bullet}, doc_lists) do
+    level = Map.get(bullet, "nestingLevel", 0)
+    %{list_id: list_id, preset: resolve_bullet_preset(list_id, level, doc_lists)}
+  end
+
+  defp extract_bullet_info(_paragraph, _doc_lists), do: nil
+
+  defp resolve_bullet_preset(list_id, level, doc_lists) do
+    nesting_levels = get_in(doc_lists, [list_id, "listProperties", "nestingLevels"]) || []
+
+    case Enum.at(nesting_levels, level) do
+      %{"glyphType" => glyph_type} when glyph_type in @numbered_glyph_types ->
+        "NUMBERED_DECIMAL_ALPHA_ROMAN"
+
+      _ ->
+        "BULLET_DISC_CIRCLE_SQUARE"
     end
   end
 
@@ -2247,6 +2391,128 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  @doc """
+  Builds `updateParagraphStyle` requests replaying captured paragraph style
+  (alignment, line spacing, space above/below, named style type,
+  start/first-line indentation — see
+  `flatten_template_with_table_markers_and_styles/1`'s `cell_paragraphs` /
+  `body_paragraphs`), anchored at `base_index` the same way
+  `text_style_requests/2` anchors character runs.
+
+  Every field is always included in the request, including values that
+  merely reproduce Google's own default (`alignment: "START"`, `lineSpacing:
+  100.0`, zero spacing/indentation, `namedStyleType: "NORMAL_TEXT"`) — the
+  same anti-inheritance guarantee `text_style_fields/1` applies to
+  bold/italic: a newly split paragraph in the target document otherwise
+  inherits alignment/spacing/named style from whatever paragraph sat at the
+  insertion point (e.g. an appended section's plain paragraph picking up
+  CENTER alignment from a neighboring heading), not from the source
+  template.
+
+  Unlike `text_style_requests/2`, spans are never merged — each paragraph
+  gets its own request, since paragraphs are already discrete units (no
+  benefit to coalescing, even when two adjacent ones share identical style).
+  A span whose `length` is 0 (a paragraph with no textRun at all — doesn't
+  happen for a real, non-empty paragraph, since even a blank line carries a
+  `"\\n"`-only run) is skipped: with zero characters, it contributes no
+  offset and doesn't exist as distinct content in the inserted text either.
+
+  Ranges deliberately use the paragraph's own natural (un-stripped) length,
+  even for a table cell's last paragraph whose *text* had its trailing
+  newline stripped before insertion (see `fill_table_cells_text/2`) — the
+  cell's pre-existing bare paragraph supplies that newline structurally
+  either way, so the natural length lands the range exactly on it. See
+  `cell_paragraph_spans/2`'s doc for the full argument.
+
+  Safe to batch immediately after the insert/fill it styles: like character
+  style changes, paragraph style changes never shift document indices.
+  """
+  @spec paragraph_style_requests(integer(), [map()]) :: [map()]
+  def paragraph_style_requests(base_index, spans) when is_list(spans) do
+    spans
+    |> Enum.filter(&(&1.length > 0))
+    |> Enum.map(fn span ->
+      paragraph_style_request(
+        base_index + span.start_offset,
+        base_index + span.start_offset + span.length,
+        span.style
+      )
+    end)
+  end
+
+  defp paragraph_style_request(range_start, range_end, style) do
+    %{
+      "updateParagraphStyle" => %{
+        "range" => %{"startIndex" => range_start, "endIndex" => range_end},
+        "paragraphStyle" => %{
+          "alignment" => style.alignment,
+          "lineSpacing" => style.line_spacing,
+          "spaceAbove" => dimension_payload(style.space_above),
+          "spaceBelow" => dimension_payload(style.space_below),
+          "namedStyleType" => style.named_style_type,
+          "indentStart" => dimension_payload(style.indent_start),
+          "indentFirstLine" => dimension_payload(style.indent_first_line)
+        },
+        "fields" =>
+          "alignment,lineSpacing,spaceAbove,spaceBelow,namedStyleType,indentStart,indentFirstLine"
+      }
+    }
+  end
+
+  defp dimension_payload(%{magnitude: magnitude, unit: unit}),
+    do: %{"magnitude" => magnitude, "unit" => unit}
+
+  @doc """
+  Builds `createParagraphBullets` requests replaying captured list
+  membership (see `extract_bullet_info/2`'s doc for what "replaying" means
+  here — glyph *family*, not exact glyph/format). Contiguous spans (no gap
+  in offsets, same source `listId`) are merged into a single request
+  spanning the whole run, so consecutive list items land in one target list
+  (numbered items continuing count 1, 2, 3, ... instead of each restarting
+  at 1) rather than `length(spans)` separate single-paragraph lists.
+
+  Spans with no `bullet` (not a list item) or zero `length` (see
+  `paragraph_style_requests/2`) are excluded before grouping.
+  """
+  @spec paragraph_bullet_requests(integer(), [map()]) :: [map()]
+  def paragraph_bullet_requests(base_index, spans) when is_list(spans) do
+    spans
+    |> Enum.filter(&(&1.length > 0 and not is_nil(&1.bullet)))
+    |> group_contiguous_bullet_spans()
+    |> Enum.map(fn {first, last} ->
+      %{
+        "createParagraphBullets" => %{
+          "range" => %{
+            "startIndex" => base_index + first.start_offset,
+            "endIndex" => base_index + last.start_offset + last.length
+          },
+          "bulletPreset" => first.bullet.preset
+        }
+      }
+    end)
+  end
+
+  defp group_contiguous_bullet_spans(spans) do
+    spans
+    |> Enum.reduce([], &extend_or_start_bullet_group/2)
+    |> Enum.reverse()
+  end
+
+  defp extend_or_start_bullet_group(span, [{first, prev} | rest] = acc) do
+    if contiguous_same_list?(prev, span) do
+      [{first, span} | rest]
+    else
+      [{span, span} | acc]
+    end
+  end
+
+  defp extend_or_start_bullet_group(span, []), do: [{span, span}]
+
+  defp contiguous_same_list?(prev, span) do
+    prev.start_offset + prev.length == span.start_offset and
+      prev.bullet.list_id == span.bullet.list_id
+  end
+
   # Column widths are applied here (Phase 2), not alongside the Phase 1b
   # skeleton — see `table_column_width_requests/2`'s doc: `table_el` here
   # comes from a document re-fetched AFTER the skeleton batch, so
@@ -2278,22 +2544,28 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         table_info = Map.fetch!(tables_by_index, idx)
         cell_texts = table_info.cell_texts
         cell_runs_list = Map.get(table_info, :cell_runs, List.duplicate([], length(cell_texts)))
+
+        cell_paragraphs_list =
+          Map.get(table_info, :cell_paragraphs, List.duplicate([], length(cell_texts)))
+
         cells = extract_table_cells(table_el)
 
-        Enum.zip([cells, cell_texts, cell_runs_list])
+        Enum.zip([cells, cell_texts, cell_runs_list, cell_paragraphs_list])
       end)
-      |> Enum.sort_by(fn {%{insert_index: idx}, _text, _runs} -> idx end, :desc)
-      |> Enum.flat_map(fn {%{insert_index: idx}, text, runs} ->
-        cell_fill_requests(idx, text, runs)
+      |> Enum.sort_by(fn {%{insert_index: idx}, _text, _runs, _paragraphs} -> idx end, :desc)
+      |> Enum.flat_map(fn {%{insert_index: idx}, text, runs, paragraphs} ->
+        cell_fill_requests(idx, text, runs, paragraphs)
       end)
 
     column_width_requests ++ cell_fill_requests_list
   end
 
-  defp cell_fill_requests(_idx, "", _runs), do: []
+  defp cell_fill_requests(_idx, "", _runs, _paragraphs), do: []
 
-  defp cell_fill_requests(idx, text, runs),
-    do: [text_insert_request(idx, text) | text_style_requests(idx, runs)]
+  defp cell_fill_requests(idx, text, runs, paragraphs) do
+    [text_insert_request(idx, text) | text_style_requests(idx, runs)] ++
+      paragraph_style_requests(idx, paragraphs) ++ paragraph_bullet_requests(idx, paragraphs)
+  end
 
   @doc """
   Return the range `{1, end_index}` of the current content in a Google Doc.

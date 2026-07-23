@@ -14,6 +14,47 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
+  # The paragraphStyle payload/fields mask a paragraph with no explicit
+  # `paragraphStyle` key captures as — see
+  # `GoogleDocsClient.paragraph_style_requests/2`'s anti-inheritance doc.
+  # Reused across every fixture below whose paragraphs don't set an explicit
+  # style, which is most of them.
+  @default_paragraph_style %{
+    "alignment" => "START",
+    "lineSpacing" => 100.0,
+    "spaceAbove" => %{"magnitude" => 0.0, "unit" => "PT"},
+    "spaceBelow" => %{"magnitude" => 0.0, "unit" => "PT"},
+    "namedStyleType" => "NORMAL_TEXT",
+    "indentStart" => %{"magnitude" => 0.0, "unit" => "PT"},
+    "indentFirstLine" => %{"magnitude" => 0.0, "unit" => "PT"}
+  }
+  @paragraph_style_fields "alignment,lineSpacing,spaceAbove,spaceBelow,namedStyleType,indentStart,indentFirstLine"
+
+  defp default_paragraph_style_request(start_index, end_index) do
+    %{
+      "updateParagraphStyle" => %{
+        "range" => %{"startIndex" => start_index, "endIndex" => end_index},
+        "paragraphStyle" => @default_paragraph_style,
+        "fields" => @paragraph_style_fields
+      }
+    }
+  end
+
+  # Atom-keyed counterpart to @default_paragraph_style — the internal span
+  # shape `paragraph_style_requests/2` and `paragraph_bullet_requests/2`
+  # consume, as opposed to the JSON-shaped request payload above.
+  defp default_span_style do
+    %{
+      alignment: "START",
+      line_spacing: 100.0,
+      space_above: %{magnitude: 0.0, unit: "PT"},
+      space_below: %{magnitude: 0.0, unit: "PT"},
+      named_style_type: "NORMAL_TEXT",
+      indent_start: %{magnitude: 0.0, unit: "PT"},
+      indent_first_line: %{magnitude: 0.0, unit: "PT"}
+    }
+  end
+
   # Minimal single-paragraph document, mirrors the helper used throughout the
   # sibling GoogleDocsClient test files.
   defp doc_with_text(text, start_index) do
@@ -77,6 +118,28 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
   # express a styled run.
   defp styled_paragraph_block(runs) do
     %{"paragraph" => %{"elements" => Enum.map(runs, &text_run_elem/1)}}
+  end
+
+  # Same as `styled_paragraph_block/1`, additionally carrying an explicit
+  # `paragraphStyle` and/or `bullet` — for paragraph-style/bullet capture
+  # tests, where `styled_paragraph_block/1`'s bare paragraphs only exercise
+  # the anti-inheritance defaults.
+  defp paragraph_block(runs, opts) do
+    paragraph = %{"elements" => Enum.map(runs, &text_run_elem/1)}
+
+    paragraph =
+      case Keyword.get(opts, :paragraph_style) do
+        nil -> paragraph
+        style -> Map.put(paragraph, "paragraphStyle", style)
+      end
+
+    paragraph =
+      case Keyword.get(opts, :bullet) do
+        nil -> paragraph
+        bullet -> Map.put(paragraph, "bullet", bullet)
+      end
+
+    %{"paragraph" => paragraph}
   end
 
   # Table block variant of `table_block/1` that accepts styled runs per cell
@@ -286,7 +349,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
       assert {text, tables} = GoogleDocsClient.flatten_template_with_table_markers(doc)
 
-      assert {^text, ^tables, []} =
+      assert {^text, ^tables, [], []} =
                GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
     end
 
@@ -308,7 +371,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         }
       }
 
-      assert {_text, [table], _body_runs} =
+      assert {_text, [table], _body_runs, _body_paragraphs} =
                GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
 
       assert table.column_properties == [
@@ -321,7 +384,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
     test "column_properties is [] when the source table has no tableStyle" do
       doc = %{"body" => %{"content" => [table_block(rows: 1, columns: 1, row_texts: [["x\n"]])]}}
 
-      assert {_text, [table], _} =
+      assert {_text, [table], _, _} =
                GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
 
       assert table.column_properties == []
@@ -340,7 +403,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         }
       }
 
-      assert {_text, [table], _} =
+      assert {_text, [table], _, _} =
                GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
 
       assert [[run1, run2]] = table.cell_runs
@@ -366,7 +429,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         "body" => %{"content" => [table_block(rows: 1, columns: 2, row_texts: [["Text\n", nil]])]}
       }
 
-      assert {_text, [table], _} =
+      assert {_text, [table], _, _} =
                GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
 
       assert [[text_run], []] = table.cell_runs
@@ -409,7 +472,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         }
       }
 
-      assert {_text, [table], _} =
+      assert {_text, [table], _, _} =
                GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
 
       assert [[run1, run2]] = table.cell_runs
@@ -434,7 +497,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         }
       }
 
-      assert {text, [_table], body_runs} =
+      assert {text, [_table], body_runs, _body_paragraphs} =
                GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
 
       marker = " __PKDC_TABLE_1__ "
@@ -463,7 +526,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         }
       }
 
-      assert {"Hello World\n", [], body_runs} =
+      assert {"Hello World\n", [], body_runs, body_paragraphs} =
                GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
 
       assert [run1, run2] = body_runs
@@ -471,6 +534,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert run1.bold == false
       assert run2.text == "World\n"
       assert run2.start_offset == String.length("Hello ")
+
+      # One captured span per structural paragraph block (2 here), regardless
+      # of whether the block's own text happens to end in "\n" — this
+      # fixture's first block ("Hello ") doesn't, unlike real Docs paragraph
+      # content, but flatten_block_with_styles/3 still treats each "paragraph"
+      # block as its own paragraph.
+      assert [para1, para2] = body_paragraphs
+      assert para1.start_offset == 0
+      assert para1.length == String.length("Hello ")
+      assert para1.style.alignment == "START"
+      assert para1.style.line_spacing == 100.0
+      assert para1.style.named_style_type == "NORMAL_TEXT"
+      assert para1.bullet == nil
+
+      assert para2.start_offset == String.length("Hello ")
+      assert para2.length == String.length("World\n")
     end
   end
 
@@ -802,10 +881,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
       # content_start=10, content_end = 10 + utf16_units("Plain body.\n") = 10+12=22
       #
-      # The plain paragraph has no textStyle at all, so it captures as a
-      # single bold:false/italic:false run spanning the whole insert — the
-      # anti-inheritance guarantee (text_style_requests/2) applies even when
-      # nothing in the source was actually styled.
+      # The plain paragraph has no textStyle/paragraphStyle at all, so it
+      # captures as a single bold:false/italic:false run and a
+      # default-valued paragraph style, both spanning the whole insert — the
+      # anti-inheritance guarantee (text_style_requests/2,
+      # paragraph_style_requests/2) applies even when nothing in the source
+      # was actually styled. No createParagraphBullets request — not a list
+      # item.
+      paragraph_style = default_paragraph_style_request(10, 22)
+
       assert_receive {:batch,
                       [
                         %{insertPageBreak: %{location: %{index: 9}}},
@@ -816,7 +900,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                             "textStyle" => %{"bold" => false, "italic" => false},
                             "fields" => "bold,italic"
                           }
-                        }
+                        },
+                        ^paragraph_style
                       ]}
 
       refute_receive {:batch, _}
@@ -959,9 +1044,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                )
 
       # Phase 0: page break + the marked-up text (marker included), plus a
-      # body style request per plain-text run either side of the marker
+      # body char-style request per plain-text run either side of the marker
       # ("Hi\n" at 10-13, "Bye\n" at 31-35 — the marker itself, 13-31, gets
-      # no style request since it's deleted before Phase 1 finishes).
+      # no style request since it's deleted before Phase 1 finishes), then a
+      # paragraph-style request per body paragraph, same ranges — each
+      # captured span happens to be a single run here, so char and paragraph
+      # ranges coincide.
+      hi_paragraph_style = default_paragraph_style_request(10, 13)
+      bye_paragraph_style = default_paragraph_style_request(31, 35)
+
       assert_receive {:batch,
                       [
                         %{insertPageBreak: %{location: %{index: 9}}},
@@ -979,7 +1070,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                             "textStyle" => %{"bold" => false, "italic" => false},
                             "fields" => "bold,italic"
                           }
-                        }
+                        },
+                        ^hi_paragraph_style,
+                        ^bye_paragraph_style
                       ]}
 
       # Phase 1: skeleton — delete the marker, insert a bare 1x2 table at its
@@ -1000,8 +1093,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
       # Phase 2: cell fill — captured cell text ("X", "Y"), last-first, each
       # insertText immediately followed by its own bold:false/italic:false
-      # style request (both cells are plain textRuns, same anti-inheritance
-      # guarantee as the body text above).
+      # char-style request (both cells are plain textRuns, same
+      # anti-inheritance guarantee as the body text above) and its own
+      # paragraph-style request. The paragraph range uses the cell's
+      # *natural* (un-stripped) length ("Y\n"/"X\n", 2 UTF-16 units) rather
+      # than the 1-unit stripped text/char-style range — see
+      # `cell_paragraph_spans/2`'s doc: the extra unit lands on the
+      # pre-existing bare cell's own trailing newline, which the char-style
+      # range correctly excludes (nothing to bold/italicize there) but the
+      # paragraph range correctly includes (the paragraph boundary is real).
+      y_paragraph_style = default_paragraph_style_request(104, 106)
+      x_paragraph_style = default_paragraph_style_request(101, 103)
+
       assert_receive {:batch,
                       [
                         %{"insertText" => %{"location" => %{"index" => 104}, "text" => "Y"}},
@@ -1012,6 +1115,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                             "fields" => "bold,italic"
                           }
                         },
+                        ^y_paragraph_style,
                         %{"insertText" => %{"location" => %{"index" => 101}, "text" => "X"}},
                         %{
                           "updateTextStyle" => %{
@@ -1019,7 +1123,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                             "textStyle" => %{"bold" => false, "italic" => false},
                             "fields" => "bold,italic"
                           }
-                        }
+                        },
+                        ^x_paragraph_style
                       ]}
 
       refute_receive {:batch, _}
@@ -1994,7 +2099,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       # insert_index = cell startIndex (200) + 1 = 201. "Bold" (bold:true,
       # 4 units) then " word" (bold:false, 5 units, no trailing newline to
       # strip) — captured text is "Bold word", replayed as insertText
-      # followed immediately by both runs' own explicit style ranges.
+      # followed immediately by both runs' own explicit style ranges, then
+      # one paragraph-style request for the cell's single paragraph. No
+      # trailing "\n" in this fixture's cell text at all, so the paragraph's
+      # natural length (9) equals the inserted text's length exactly — no
+      # extra unit for a stripped newline, unlike the other cell-fill tests.
+      paragraph_style = default_paragraph_style_request(201, 210)
+
       assert phase2_requests == [
                %{"insertText" => %{"location" => %{"index" => 201}, "text" => "Bold word"}},
                %{
@@ -2010,7 +2121,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                    "textStyle" => %{"bold" => false, "italic" => false},
                    "fields" => "bold,italic"
                  }
-               }
+               },
+               paragraph_style
              ]
     end
 
@@ -2063,6 +2175,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert_receive {:batch, requests}
       refute_receive {:batch, _}
 
+      heading_paragraph_style = default_paragraph_style_request(10, 18)
+      plain_paragraph_style = default_paragraph_style_request(18, 30)
+
       assert [
                %{insertPageBreak: %{location: %{index: 9}}},
                %{insertText: %{location: %{index: 10}, text: "Heading\nPlain text.\n"}},
@@ -2079,8 +2194,434 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                    "textStyle" => %{"bold" => false, "italic" => false},
                    "fields" => "bold,italic"
                  }
-               }
+               },
+               ^heading_paragraph_style,
+               ^plain_paragraph_style
              ] = requests
+    end
+  end
+
+  describe "flatten_template_with_table_markers_and_styles/1 — paragraph style + bullet capture" do
+    test "captures explicit paragraphStyle fields for a body paragraph, no defaults substituted" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            paragraph_block(["Centered heading\n"],
+              paragraph_style: %{
+                "alignment" => "CENTER",
+                "lineSpacing" => 150.0,
+                "spaceAbove" => %{"magnitude" => 12, "unit" => "PT"},
+                "spaceBelow" => %{"magnitude" => 6, "unit" => "PT"},
+                "namedStyleType" => "HEADING_1",
+                "indentStart" => %{"magnitude" => 18, "unit" => "PT"},
+                "indentFirstLine" => %{"magnitude" => 36, "unit" => "PT"}
+              }
+            )
+          ]
+        }
+      }
+
+      assert {_text, [], _body_runs, [para]} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert para.style.alignment == "CENTER"
+      assert para.style.line_spacing == 150.0
+      assert para.style.space_above == %{magnitude: 12.0, unit: "PT"}
+      assert para.style.space_below == %{magnitude: 6.0, unit: "PT"}
+      assert para.style.named_style_type == "HEADING_1"
+      assert para.style.indent_start == %{magnitude: 18.0, unit: "PT"}
+      assert para.style.indent_first_line == %{magnitude: 36.0, unit: "PT"}
+      assert para.bullet == nil
+    end
+
+    test "a paragraph with no paragraphStyle key captures full anti-inheritance defaults" do
+      doc = %{"body" => %{"content" => [styled_paragraph_block(["Plain\n"])]}}
+
+      assert {_text, [], _body_runs, [para]} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert para.style == default_span_style()
+    end
+
+    test "captures paragraphStyle for a table cell's paragraph, using the cell's natural (un-stripped) length" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "table" => %{
+                "rows" => 1,
+                "columns" => 1,
+                "tableRows" => [
+                  %{
+                    "tableCells" => [
+                      %{
+                        "content" => [
+                          %{
+                            "paragraph" => %{
+                              "elements" => [%{"textRun" => %{"content" => "Cell\n"}}],
+                              "paragraphStyle" => %{"alignment" => "END"}
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      assert {_text, [table], _, _} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert [[cell_para]] = table.cell_paragraphs
+      assert cell_para.start_offset == 0
+      # Natural length ("Cell\n" = 5 units), not the 4-unit stripped length
+      # cell_texts/cell_runs use for the actual insertText — see
+      # cell_paragraph_spans/2's doc for why the extra unit is correct here.
+      assert cell_para.length == 5
+      assert cell_para.style.alignment == "END"
+      assert table.cell_texts == ["Cell"]
+    end
+
+    test "resolves a numbered preset from doc[\"lists\"] when the level's nesting has a glyphType" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            paragraph_block(["Item one\n"], bullet: %{"listId" => "L1", "nestingLevel" => 0})
+          ]
+        },
+        "lists" => %{
+          "L1" => %{"listProperties" => %{"nestingLevels" => [%{"glyphType" => "DECIMAL"}]}}
+        }
+      }
+
+      assert {_text, [], _body_runs, [para]} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert para.bullet == %{list_id: "L1", preset: "NUMBERED_DECIMAL_ALPHA_ROMAN"}
+    end
+
+    test "resolves a bulleted preset from doc[\"lists\"] when the level's nesting has a glyphSymbol" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            paragraph_block(["Item one\n"], bullet: %{"listId" => "L2", "nestingLevel" => 0})
+          ]
+        },
+        "lists" => %{
+          "L2" => %{"listProperties" => %{"nestingLevels" => [%{"glyphSymbol" => "●"}]}}
+        }
+      }
+
+      assert {_text, [], _body_runs, [para]} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert para.bullet == %{list_id: "L2", preset: "BULLET_DISC_CIRCLE_SQUARE"}
+    end
+
+    test "a bullet whose listId is missing from doc[\"lists\"] falls back to the bulleted preset" do
+      doc = %{
+        "body" => %{"content" => [paragraph_block(["Item\n"], bullet: %{"listId" => "Unknown"})]}
+      }
+
+      assert {_text, [], _body_runs, [para]} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert para.bullet == %{list_id: "Unknown", preset: "BULLET_DISC_CIRCLE_SQUARE"}
+    end
+
+    test "a paragraph with no bullet key captures bullet: nil" do
+      doc = %{"body" => %{"content" => [styled_paragraph_block(["Plain\n"])]}}
+
+      assert {_text, [], _body_runs, [para]} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert para.bullet == nil
+    end
+  end
+
+  describe "paragraph_style_requests/2" do
+    test "builds one updateParagraphStyle request per span, anchored at base_index + start_offset" do
+      spans = [
+        %{start_offset: 0, length: 5, style: default_span_style()},
+        %{start_offset: 5, length: 7, style: default_span_style()}
+      ]
+
+      assert GoogleDocsClient.paragraph_style_requests(100, spans) == [
+               default_paragraph_style_request(100, 105),
+               default_paragraph_style_request(105, 112)
+             ]
+    end
+
+    test "skips a zero-length span" do
+      assert GoogleDocsClient.paragraph_style_requests(100, [
+               %{start_offset: 0, length: 0, style: default_span_style()}
+             ]) == []
+    end
+
+    test "replays explicit non-default captured style values verbatim" do
+      style = %{
+        alignment: "JUSTIFIED",
+        line_spacing: 200.0,
+        space_above: %{magnitude: 24.0, unit: "PT"},
+        space_below: %{magnitude: 12.0, unit: "PT"},
+        named_style_type: "HEADING_2",
+        indent_start: %{magnitude: 36.0, unit: "PT"},
+        indent_first_line: %{magnitude: 0.0, unit: "PT"}
+      }
+
+      spans = [%{start_offset: 0, length: 3, style: style}]
+
+      assert GoogleDocsClient.paragraph_style_requests(10, spans) == [
+               %{
+                 "updateParagraphStyle" => %{
+                   "range" => %{"startIndex" => 10, "endIndex" => 13},
+                   "paragraphStyle" => %{
+                     "alignment" => "JUSTIFIED",
+                     "lineSpacing" => 200.0,
+                     "spaceAbove" => %{"magnitude" => 24.0, "unit" => "PT"},
+                     "spaceBelow" => %{"magnitude" => 12.0, "unit" => "PT"},
+                     "namedStyleType" => "HEADING_2",
+                     "indentStart" => %{"magnitude" => 36.0, "unit" => "PT"},
+                     "indentFirstLine" => %{"magnitude" => 0.0, "unit" => "PT"}
+                   },
+                   "fields" => @paragraph_style_fields
+                 }
+               }
+             ]
+    end
+  end
+
+  describe "paragraph_bullet_requests/2" do
+    test "merges contiguous spans sharing the same listId into one range, using the first span's preset" do
+      bullet = %{list_id: "L1", preset: "NUMBERED_DECIMAL_ALPHA_ROMAN"}
+
+      spans = [
+        %{start_offset: 0, length: 5, style: default_span_style(), bullet: bullet},
+        %{start_offset: 5, length: 6, style: default_span_style(), bullet: bullet},
+        %{start_offset: 11, length: 4, style: default_span_style(), bullet: bullet}
+      ]
+
+      assert GoogleDocsClient.paragraph_bullet_requests(100, spans) == [
+               %{
+                 "createParagraphBullets" => %{
+                   "range" => %{"startIndex" => 100, "endIndex" => 115},
+                   "bulletPreset" => "NUMBERED_DECIMAL_ALPHA_ROMAN"
+                 }
+               }
+             ]
+    end
+
+    test "does not merge across a different listId — separate ranges/presets" do
+      spans = [
+        %{
+          start_offset: 0,
+          length: 5,
+          style: default_span_style(),
+          bullet: %{list_id: "L1", preset: "BULLET_DISC_CIRCLE_SQUARE"}
+        },
+        %{
+          start_offset: 5,
+          length: 5,
+          style: default_span_style(),
+          bullet: %{list_id: "L2", preset: "NUMBERED_DECIMAL_ALPHA_ROMAN"}
+        }
+      ]
+
+      assert GoogleDocsClient.paragraph_bullet_requests(0, spans) == [
+               %{
+                 "createParagraphBullets" => %{
+                   "range" => %{"startIndex" => 0, "endIndex" => 5},
+                   "bulletPreset" => "BULLET_DISC_CIRCLE_SQUARE"
+                 }
+               },
+               %{
+                 "createParagraphBullets" => %{
+                   "range" => %{"startIndex" => 5, "endIndex" => 10},
+                   "bulletPreset" => "NUMBERED_DECIMAL_ALPHA_ROMAN"
+                 }
+               }
+             ]
+    end
+
+    test "a non-bullet paragraph in between breaks contiguity, even for the same listId on both sides" do
+      bullet = %{list_id: "L1", preset: "BULLET_DISC_CIRCLE_SQUARE"}
+
+      spans = [
+        %{start_offset: 0, length: 5, style: default_span_style(), bullet: bullet},
+        %{start_offset: 5, length: 5, style: default_span_style(), bullet: nil},
+        %{start_offset: 10, length: 5, style: default_span_style(), bullet: bullet}
+      ]
+
+      assert GoogleDocsClient.paragraph_bullet_requests(0, spans) == [
+               %{
+                 "createParagraphBullets" => %{
+                   "range" => %{"startIndex" => 0, "endIndex" => 5},
+                   "bulletPreset" => "BULLET_DISC_CIRCLE_SQUARE"
+                 }
+               },
+               %{
+                 "createParagraphBullets" => %{
+                   "range" => %{"startIndex" => 10, "endIndex" => 15},
+                   "bulletPreset" => "BULLET_DISC_CIRCLE_SQUARE"
+                 }
+               }
+             ]
+    end
+
+    test "excludes non-bullet spans and zero-length spans entirely" do
+      spans = [
+        %{start_offset: 0, length: 5, style: default_span_style(), bullet: nil},
+        %{
+          start_offset: 5,
+          length: 0,
+          style: default_span_style(),
+          bullet: %{list_id: "L1", preset: "BULLET_DISC_CIRCLE_SQUARE"}
+        }
+      ]
+
+      assert GoogleDocsClient.paragraph_bullet_requests(0, spans) == []
+    end
+  end
+
+  describe "append_template/3 — paragraph style + bullet fidelity (mock-based)" do
+    test "non-default paragraph style on a body heading is replayed verbatim, plain sibling gets anti-inheritance defaults" do
+      template_doc = %{
+        "body" => %{
+          "content" => [
+            paragraph_block(["Heading\n"],
+              paragraph_style: %{"alignment" => "CENTER", "namedStyleType" => "HEADING_1"}
+            ),
+            styled_paragraph_block(["Plain text.\n"])
+          ]
+        }
+      }
+
+      target_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "endIndex" => 10,
+                    "textRun" => %{"content" => "Existing\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template_doc}}
+        "target-id" -> {:ok, %{body: target_doc}}
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(self(), {:batch, requests})
+        {:ok, %{}}
+      end
+
+      assert {:ok, _} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, requests}
+
+      paragraph_style_requests = Enum.filter(requests, &Map.has_key?(&1, "updateParagraphStyle"))
+
+      heading_style = %{
+        "updateParagraphStyle" => %{
+          "range" => %{"startIndex" => 10, "endIndex" => 18},
+          "paragraphStyle" => %{
+            "alignment" => "CENTER",
+            "namedStyleType" => "HEADING_1",
+            "lineSpacing" => 100.0,
+            "spaceAbove" => %{"magnitude" => 0.0, "unit" => "PT"},
+            "spaceBelow" => %{"magnitude" => 0.0, "unit" => "PT"},
+            "indentStart" => %{"magnitude" => 0.0, "unit" => "PT"},
+            "indentFirstLine" => %{"magnitude" => 0.0, "unit" => "PT"}
+          },
+          "fields" => @paragraph_style_fields
+        }
+      }
+
+      plain_style = default_paragraph_style_request(18, 30)
+
+      assert paragraph_style_requests == [heading_style, plain_style]
+    end
+
+    test "contiguous numbered-list body paragraphs replay as one merged createParagraphBullets range" do
+      template_doc = %{
+        "body" => %{
+          "content" => [
+            paragraph_block(["First\n"], bullet: %{"listId" => "L1", "nestingLevel" => 0}),
+            paragraph_block(["Second\n"], bullet: %{"listId" => "L1", "nestingLevel" => 0})
+          ]
+        },
+        "lists" => %{
+          "L1" => %{"listProperties" => %{"nestingLevels" => [%{"glyphType" => "DECIMAL"}]}}
+        }
+      }
+
+      target_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "endIndex" => 10,
+                    "textRun" => %{"content" => "Existing\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template_doc}}
+        "target-id" -> {:ok, %{body: target_doc}}
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(self(), {:batch, requests})
+        {:ok, %{}}
+      end
+
+      assert {:ok, _} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, requests}
+
+      bullet_requests = Enum.filter(requests, &Map.has_key?(&1, "createParagraphBullets"))
+
+      # content_start = 10, "First\n" = 6 units, "Second\n" = 7 units — one
+      # merged range spanning both paragraphs (10 to 10+6+7=23), so the
+      # target document gets one continuous numbered list (1, 2) instead of
+      # two separate single-item lists (each restarting at 1).
+      assert bullet_requests == [
+               %{
+                 "createParagraphBullets" => %{
+                   "range" => %{"startIndex" => 10, "endIndex" => 23},
+                   "bulletPreset" => "NUMBERED_DECIMAL_ALPHA_ROMAN"
+                 }
+               }
+             ]
     end
   end
 end
