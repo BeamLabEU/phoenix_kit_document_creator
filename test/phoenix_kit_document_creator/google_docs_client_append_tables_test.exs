@@ -873,13 +873,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         {:ok, %{}}
       end
 
-      assert {:ok, {10, 22}} =
+      assert {:ok, {11, 23}} =
                GoogleDocsClient.append_template("target-id", "template-id",
                  get_fn: get_fn,
                  batch_fn: batch_fn
                )
 
-      # content_start=10, content_end = 10 + utf16_units("Plain body.\n") = 10+12=22
+      # insert_index=9, page_break_index=10, content_start=11 (one extra
+      # unit beyond insert_index+1 for the leading paragraph-break insert —
+      # see append_template/3's doc for why it's needed). content_end = 11 +
+      # utf16_units("Plain body.\n") = 11+12=23.
       #
       # The plain paragraph has no textStyle/paragraphStyle at all, so it
       # captures as a single bold:false/italic:false run and a
@@ -888,15 +891,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       # paragraph_style_requests/2) applies even when nothing in the source
       # was actually styled. No createParagraphBullets request — not a list
       # item.
-      paragraph_style = default_paragraph_style_request(10, 22)
+      paragraph_style = default_paragraph_style_request(11, 23)
 
       assert_receive {:batch,
                       [
-                        %{insertPageBreak: %{location: %{index: 9}}},
-                        %{insertText: %{location: %{index: 10}, text: "Plain body.\n"}},
+                        %{insertText: %{location: %{index: 9}, text: "\n"}},
+                        %{insertPageBreak: %{location: %{index: 10}}},
+                        %{insertText: %{location: %{index: 11}, text: "Plain body.\n"}},
                         %{
                           "updateTextStyle" => %{
-                            "range" => %{"startIndex" => 10, "endIndex" => 22},
+                            "range" => %{"startIndex" => 11, "endIndex" => 23},
                             "textStyle" => %{"bold" => false, "italic" => false},
                             "fields" => "bold,italic"
                           }
@@ -944,10 +948,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       }
 
       # State after Phase 0's insertText: the marker text now lives at
-      # content_start (10). Real Google Docs would split this across several
-      # paragraph structural elements (one per embedded \n) — collapsed to a
-      # single textRun here since find_table_marker_ranges/1 only cares about
-      # locating the marker substring and its startIndex.
+      # content_start (11 — insert_index 9 + the leading paragraph-break
+      # insert + the page break, see append_template/3's doc). Real Google
+      # Docs would split this across several paragraph structural elements
+      # (one per embedded \n) — collapsed to a single textRun here since
+      # find_table_marker_ranges/1 only cares about locating the marker
+      # substring and its startIndex.
       doc1 = %{
         "body" => %{
           "content" => [
@@ -964,7 +970,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
             },
             %{
               "paragraph" => %{
-                "elements" => [%{"startIndex" => 10, "textRun" => %{"content" => text}}]
+                "elements" => [%{"startIndex" => 11, "textRun" => %{"content" => text}}]
               }
             }
           ]
@@ -1037,36 +1043,37 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         {:ok, %{}}
       end
 
-      assert {:ok, {10, 499}} =
+      assert {:ok, {11, 499}} =
                GoogleDocsClient.append_template("target-id", "template-id",
                  get_fn: get_fn,
                  batch_fn: batch_fn
                )
 
-      # Phase 0: page break + the marked-up text (marker included), plus a
-      # body char-style request per plain-text run either side of the marker
-      # ("Hi\n" at 10-13, "Bye\n" at 31-35 — the marker itself, 13-31, gets
-      # no style request since it's deleted before Phase 1 finishes), then a
-      # paragraph-style request per body paragraph, same ranges — each
-      # captured span happens to be a single run here, so char and paragraph
-      # ranges coincide.
-      hi_paragraph_style = default_paragraph_style_request(10, 13)
-      bye_paragraph_style = default_paragraph_style_request(31, 35)
+      # Phase 0: leading "\n" + page break + the marked-up text (marker
+      # included), plus a body char-style request per plain-text run either
+      # side of the marker ("Hi\n" at 11-14, "Bye\n" at 32-36 — the marker
+      # itself gets no style request since it's deleted before Phase 1
+      # finishes), then a paragraph-style request per body paragraph, same
+      # ranges — each captured span happens to be a single run here, so char
+      # and paragraph ranges coincide.
+      hi_paragraph_style = default_paragraph_style_request(11, 14)
+      bye_paragraph_style = default_paragraph_style_request(32, 36)
 
       assert_receive {:batch,
                       [
-                        %{insertPageBreak: %{location: %{index: 9}}},
-                        %{insertText: %{location: %{index: 10}, text: ^text}},
+                        %{insertText: %{location: %{index: 9}, text: "\n"}},
+                        %{insertPageBreak: %{location: %{index: 10}}},
+                        %{insertText: %{location: %{index: 11}, text: ^text}},
                         %{
                           "updateTextStyle" => %{
-                            "range" => %{"startIndex" => 10, "endIndex" => 13},
+                            "range" => %{"startIndex" => 11, "endIndex" => 14},
                             "textStyle" => %{"bold" => false, "italic" => false},
                             "fields" => "bold,italic"
                           }
                         },
                         %{
                           "updateTextStyle" => %{
-                            "range" => %{"startIndex" => 31, "endIndex" => 35},
+                            "range" => %{"startIndex" => 32, "endIndex" => 36},
                             "textStyle" => %{"bold" => false, "italic" => false},
                             "fields" => "bold,italic"
                           }
@@ -1328,7 +1335,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
               [
                 %{
                   "paragraph" => %{
-                    "elements" => [%{"startIndex" => 10, "textRun" => %{"content" => text_a}}]
+                    "elements" => [%{"startIndex" => 11, "textRun" => %{"content" => text_a}}]
                   }
                 }
               ]
@@ -1379,7 +1386,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         {:ok, %{}}
       end
 
-      assert {:ok, {10, 499}} =
+      assert {:ok, {11, 499}} =
                GoogleDocsClient.append_template("target-id", "template-a",
                  get_fn: get_fn_1,
                  batch_fn: batch_fn_1
@@ -1429,7 +1436,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         }
       }
 
-      content_start_2 = ma2 + 31
+      content_start_2 = ma2 + 32
 
       doc1_2 = %{
         "body" => %{
@@ -1599,7 +1606,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
               [
                 %{
                   "paragraph" => %{
-                    "elements" => [%{"startIndex" => 10, "textRun" => %{"content" => text_a}}]
+                    "elements" => [%{"startIndex" => 11, "textRun" => %{"content" => text_a}}]
                   }
                 }
               ]
@@ -1648,7 +1655,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         {:ok, %{}}
       end
 
-      assert {:ok, {10, 299}} =
+      assert {:ok, {11, 299}} =
                GoogleDocsClient.append_template("target-id", "template-a",
                  get_fn: get_fn_1,
                  batch_fn: batch_fn_1
@@ -1701,7 +1708,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         {:ok, %{}}
       end
 
-      section2_content_start = ma + 31
+      section2_content_start = ma + 32
 
       assert {:ok, {^section2_content_start, section2_content_end}} =
                GoogleDocsClient.append_template("target-id", "template-c",
@@ -2164,33 +2171,34 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         {:ok, %{}}
       end
 
-      assert {:ok, {10, content_end}} =
+      assert {:ok, {11, content_end}} =
                GoogleDocsClient.append_template("target-id", "template-id",
                  get_fn: get_fn,
                  batch_fn: batch_fn
                )
 
-      assert content_end == 10 + String.length("Heading\nPlain text.\n")
+      assert content_end == 11 + String.length("Heading\nPlain text.\n")
 
       assert_receive {:batch, requests}
       refute_receive {:batch, _}
 
-      heading_paragraph_style = default_paragraph_style_request(10, 18)
-      plain_paragraph_style = default_paragraph_style_request(18, 30)
+      heading_paragraph_style = default_paragraph_style_request(11, 19)
+      plain_paragraph_style = default_paragraph_style_request(19, 31)
 
       assert [
-               %{insertPageBreak: %{location: %{index: 9}}},
-               %{insertText: %{location: %{index: 10}, text: "Heading\nPlain text.\n"}},
+               %{insertText: %{location: %{index: 9}, text: "\n"}},
+               %{insertPageBreak: %{location: %{index: 10}}},
+               %{insertText: %{location: %{index: 11}, text: "Heading\nPlain text.\n"}},
                %{
                  "updateTextStyle" => %{
-                   "range" => %{"startIndex" => 10, "endIndex" => 18},
+                   "range" => %{"startIndex" => 11, "endIndex" => 19},
                    "textStyle" => %{"bold" => true, "italic" => false},
                    "fields" => "bold,italic"
                  }
                },
                %{
                  "updateTextStyle" => %{
-                   "range" => %{"startIndex" => 18, "endIndex" => 30},
+                   "range" => %{"startIndex" => 19, "endIndex" => 31},
                    "textStyle" => %{"bold" => false, "italic" => false},
                    "fields" => "bold,italic"
                  }
@@ -2540,7 +2548,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
       heading_style = %{
         "updateParagraphStyle" => %{
-          "range" => %{"startIndex" => 10, "endIndex" => 18},
+          "range" => %{"startIndex" => 11, "endIndex" => 19},
           "paragraphStyle" => %{
             "alignment" => "CENTER",
             "namedStyleType" => "HEADING_1",
@@ -2554,7 +2562,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         }
       }
 
-      plain_style = default_paragraph_style_request(18, 30)
+      plain_style = default_paragraph_style_request(19, 31)
 
       assert paragraph_style_requests == [heading_style, plain_style]
     end
@@ -2610,18 +2618,141 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
       bullet_requests = Enum.filter(requests, &Map.has_key?(&1, "createParagraphBullets"))
 
-      # content_start = 10, "First\n" = 6 units, "Second\n" = 7 units — one
-      # merged range spanning both paragraphs (10 to 10+6+7=23), so the
+      # content_start = 11, "First\n" = 6 units, "Second\n" = 7 units — one
+      # merged range spanning both paragraphs (11 to 11+6+7=24), so the
       # target document gets one continuous numbered list (1, 2) instead of
       # two separate single-item lists (each restarting at 1).
       assert bullet_requests == [
                %{
                  "createParagraphBullets" => %{
-                   "range" => %{"startIndex" => 10, "endIndex" => 23},
+                   "range" => %{"startIndex" => 11, "endIndex" => 24},
                    "bulletPreset" => "NUMBERED_DECIMAL_ALPHA_ROMAN"
                  }
                }
              ]
+    end
+  end
+
+  describe "append_template/3 — leading paragraph break guarantees a fresh first paragraph" do
+    test "inserts \"\\n\" then the page break then content, content_start landing two past insert_index" do
+      template_doc = %{"body" => %{"content" => [styled_paragraph_block(["Plain\n"])]}}
+
+      target_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "endIndex" => 10,
+                    "textRun" => %{"content" => "Existing\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template_doc}}
+        "target-id" -> {:ok, %{body: target_doc}}
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(self(), {:batch, requests})
+        {:ok, %{}}
+      end
+
+      # insert_index = document_end_index(target_doc) - 1 = 9. page break
+      # lands at 10 (one past the leading "\n"). content_start = 11 (one
+      # past the page break) — the whole point of the leading "\n": without
+      # it content_start would be 10, landing one before the target's own
+      # closing character instead of in a fresh paragraph.
+      assert {:ok, {11, 17}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, requests}
+
+      assert [
+               %{insertText: %{location: %{index: 9}, text: "\n"}},
+               %{insertPageBreak: %{location: %{index: 10}}},
+               %{insertText: %{location: %{index: 11}, text: "Plain\n"}}
+               | _rest
+             ] = requests
+    end
+
+    test "the appended section's first body paragraph is styled correctly regardless of whether the target's own tail text happens to end in a newline" do
+      for target_text <- ["Existing", "Existing\n"] do
+        template_doc = %{
+          "body" => %{
+            "content" => [
+              paragraph_block(["Heading\n"], paragraph_style: %{"alignment" => "CENTER"}),
+              styled_paragraph_block(["Body.\n"])
+            ]
+          }
+        }
+
+        target_doc = %{
+          "body" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{
+                      "startIndex" => 1,
+                      "endIndex" => String.length(target_text) + 1,
+                      "textRun" => %{"content" => target_text}
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+
+        get_fn = fn
+          "template-id" -> {:ok, %{body: template_doc}}
+          "target-id" -> {:ok, %{body: target_doc}}
+        end
+
+        batch_fn = fn "target-id", requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{}}
+        end
+
+        assert {:ok, {content_start, _}} =
+                 GoogleDocsClient.append_template("target-id", "template-id",
+                   get_fn: get_fn,
+                   batch_fn: batch_fn
+                 )
+
+        assert_receive {:batch, requests}
+
+        paragraph_style_requests =
+          Enum.filter(requests, &Map.has_key?(&1, "updateParagraphStyle"))
+
+        alignments =
+          Enum.map(
+            paragraph_style_requests,
+            & &1["updateParagraphStyle"]["paragraphStyle"]["alignment"]
+          )
+
+        # Both paragraphs get styled, the first ("Heading", CENTER) included
+        # — unlike the discarded conditional-skip attempt at this fix, this
+        # no longer depends at all on whether target_text ends in "\n".
+        assert alignments == ["CENTER", "START"],
+               "target_text: #{inspect(target_text)}, got: #{inspect(alignments)}"
+
+        assert [heading_range, _body_range] =
+                 Enum.map(paragraph_style_requests, & &1["updateParagraphStyle"]["range"])
+
+        assert heading_range == %{"startIndex" => content_start, "endIndex" => content_start + 8}
+      end
     end
   end
 end
