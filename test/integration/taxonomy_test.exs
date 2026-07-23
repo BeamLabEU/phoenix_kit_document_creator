@@ -58,6 +58,32 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
         assert {:error, changeset} = Taxonomy.create_category(%{name: String.duplicate("a", 256)})
         assert %{name: [_ | _]} = errors_on(changeset)
       end
+
+      test "appends a new category after existing ones instead of tying at position 0" do
+        first = create_category!(%{name: "First"})
+        assert first.position == 0
+
+        second = create_category!(%{name: "Second"})
+        assert second.position == 1
+
+        third = create_category!(%{name: "Third"})
+        assert third.position == 2
+      end
+
+      test "an explicit position is not overridden by the append default" do
+        create_category!(%{name: "First"})
+
+        assert {:ok, cat} = Taxonomy.create_category(%{name: "Pinned", position: 0})
+        assert cat.position == 0
+      end
+
+      test "trashed categories are ignored when computing the append position" do
+        cat = create_category!(%{name: "Trashed"})
+        {:ok, _} = Taxonomy.trash_category(cat)
+
+        assert {:ok, next} = Taxonomy.create_category(%{name: "Next"})
+        assert next.position == 0
+      end
     end
 
     describe "get_category/1 and get_category!/1" do
@@ -157,6 +183,46 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
 
         assert %{category_uuid: [_ | _]} = errors_on(changeset)
       end
+
+      test "appends a new type after existing ones within the same category" do
+        cat = create_category!()
+
+        first = create_type!(cat.uuid, %{name: "First"})
+        assert first.position == 0
+
+        second = create_type!(cat.uuid, %{name: "Second"})
+        assert second.position == 1
+      end
+
+      test "position append is scoped per category — a sibling category starts fresh" do
+        cat1 = create_category!()
+        cat2 = create_category!()
+
+        create_type!(cat1.uuid, %{name: "T1"})
+        create_type!(cat1.uuid, %{name: "T2"})
+
+        first_in_cat2 = create_type!(cat2.uuid, %{name: "Other"})
+        assert first_in_cat2.position == 0
+      end
+
+      test "an explicit position is not overridden by the append default" do
+        cat = create_category!()
+        create_type!(cat.uuid, %{name: "First"})
+
+        assert {:ok, type} =
+                 Taxonomy.create_type(%{name: "Pinned", category_uuid: cat.uuid, position: 0})
+
+        assert type.position == 0
+      end
+
+      test "trashed types are ignored when computing the append position" do
+        cat = create_category!()
+        trashed = create_type!(cat.uuid, %{name: "Trashed"})
+        {:ok, _} = Taxonomy.trash_type(trashed)
+
+        assert {:ok, next} = Taxonomy.create_type(%{name: "Next", category_uuid: cat.uuid})
+        assert next.position == 0
+      end
     end
 
     describe "get_type/1 and get_type!/1" do
@@ -171,6 +237,28 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
         assert_raise Ecto.NoResultsError, fn ->
           Taxonomy.get_type!("00000000-0000-0000-0000-000000000000")
         end
+      end
+    end
+
+    describe "get_active_type/1" do
+      test "returns the type when it is active" do
+        cat = create_category!()
+        type = create_type!(cat.uuid)
+        assert Taxonomy.get_active_type(type.uuid) == type
+      end
+
+      test "returns nil for a trashed type" do
+        cat = create_category!()
+        type = create_type!(cat.uuid)
+        {:ok, trashed} = Taxonomy.trash_type(type)
+
+        assert Taxonomy.get_active_type(trashed.uuid) == nil
+        # get_type/1, unlike get_active_type/1, still returns the row.
+        assert Taxonomy.get_type(trashed.uuid) != nil
+      end
+
+      test "returns nil for a missing uuid" do
+        assert Taxonomy.get_active_type("00000000-0000-0000-0000-000000000000") == nil
       end
     end
 

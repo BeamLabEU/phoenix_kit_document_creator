@@ -2,6 +2,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
   use PhoenixKitDocumentCreator.LiveCase
 
   alias PhoenixKitDocumentCreator.Documents
+  alias PhoenixKitDocumentCreator.Taxonomy
 
   describe "mount — Google not connected (test env default)" do
     # In the LV test endpoint there are no Google credentials wired up,
@@ -1338,5 +1339,136 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       # Second pick is applied
       assert state.modal_image_values["photos"] == %{"media_ids" => ["second-uuid"]}
     end
+  end
+
+  describe "category/type filter — qualifies same-named types across categories" do
+    # `render_category_picker`/the "All Types" filter both read live from
+    # Taxonomy, so these need real category/type rows even though the file
+    # list itself is faked via `:sys.replace_state` (like the sort-header
+    # test above) instead of a full Drive sync.
+
+    test "types with the same name under different categories are prefixed, but only when no category is chosen",
+         %{conn: conn} do
+      {:ok, cat_a} = Taxonomy.create_category(%{name: "Klient document"})
+      {:ok, cat_b} = Taxonomy.create_category(%{name: "Tootmine"})
+      {:ok, _} = Taxonomy.create_type(%{name: "Hooldusjuhend", category_uuid: cat_a.uuid})
+      {:ok, _} = Taxonomy.create_type(%{name: "Hooldusjuhend", category_uuid: cat_b.uuid})
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      html = force_connected_render(view, documents: [])
+
+      # No category filter selected — the flattened "All Types" list
+      # disambiguates same-named types with their owning category's name.
+      assert html =~ "Klient document / Hooldusjuhend"
+      assert html =~ "Tootmine / Hooldusjuhend"
+
+      # Selecting a category narrows the type filter back to plain names.
+      html_scoped =
+        force_connected_render(view,
+          documents: [],
+          filters: %{
+            "category" => cat_a.uuid,
+            "type" => "",
+            "lang" => "",
+            "sub_status" => "",
+            "q" => ""
+          }
+        )
+
+      assert html_scoped =~ "Hooldusjuhend"
+      refute html_scoped =~ "Klient document / Hooldusjuhend"
+      refute html_scoped =~ "Tootmine / Hooldusjuhend"
+    end
+  end
+
+  describe "category/type picker — stale taxonomy refs (trashed category/type)" do
+    # Same rationale as above: real Taxonomy rows, faked file list.
+
+    test "a file tagged with a trashed category shows a placeholder instead of silently clearing",
+         %{conn: conn} do
+      {:ok, cat} = Taxonomy.create_category(%{name: "WillBeTrashed"})
+      {:ok, trashed_cat} = Taxonomy.trash_category(cat)
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      doc = stub_file("stale-cat-doc", category_uuid: trashed_cat.uuid)
+      html = force_connected_render(view, documents: [doc])
+
+      assert html =~ "— deleted category —"
+    end
+
+    test "a file tagged with a trashed type shows a (deleted type) placeholder",
+         %{conn: conn} do
+      {:ok, cat} = Taxonomy.create_category(%{name: "Cat"})
+      {:ok, type} = Taxonomy.create_type(%{name: "T", category_uuid: cat.uuid})
+      {:ok, trashed_type} = Taxonomy.trash_type(type)
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      doc = stub_file("stale-type-doc", category_uuid: cat.uuid, type_uuid: trashed_type.uuid)
+      html = force_connected_render(view, documents: [doc])
+
+      assert html =~ "(deleted type)"
+    end
+
+    test "trash view shows a deleted-category badge instead of hiding the assignment",
+         %{conn: conn} do
+      {:ok, cat} = Taxonomy.create_category(%{name: "GoneCat"})
+      {:ok, trashed_cat} = Taxonomy.trash_category(cat)
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      doc =
+        "trashed-file-stale-cat"
+        |> stub_file(category_uuid: trashed_cat.uuid)
+        |> Map.put("status", "trashed")
+
+      html = force_connected_render(view, trashed_documents: [doc], status_mode: "trashed")
+
+      assert html =~ "deleted category"
+    end
+  end
+
+  # ── Shared helpers for the assign-injection tests above ──────────────
+
+  # Bare file map shaped like `Documents.schema_to_file_map/1`'s output —
+  # only the keys the render path actually reads.
+  defp stub_file(id, opts) do
+    %{
+      "id" => id,
+      "name" => "File #{id}",
+      "status" => nil,
+      "inserted_at" => nil,
+      "modifiedTime" => nil,
+      "data" => %{},
+      "path" => nil,
+      "category_uuid" => Keyword.get(opts, :category_uuid),
+      "type_uuid" => Keyword.get(opts, :type_uuid)
+    }
+  end
+
+  # Injects assigns directly into the LV's socket (bypassing Drive sync
+  # entirely) and forces a fresh render — same technique as the
+  # "sort header cells render in list view" test above, generalized to
+  # accept arbitrary assigns.
+  defp force_connected_render(view, assigns) do
+    base = [loaded: true, loading: false, google_connected: true]
+
+    :sys.replace_state(view.pid, fn state ->
+      new_socket =
+        Enum.reduce(Keyword.merge(base, assigns), state.socket, fn {key, value}, socket ->
+          Phoenix.Component.assign(socket, key, value)
+        end)
+
+      %{state | socket: new_socket}
+    end)
+
+    send(view.pid, :__rerender__)
+    render(view)
   end
 end
