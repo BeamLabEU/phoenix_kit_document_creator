@@ -1630,10 +1630,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @doc """
   Append a template's content to an existing Google Doc via batchUpdate.
 
-  Inserts a page break followed by the content of `template_doc_id` into
-  `target_doc_id`. Returns `{:ok, {start_index, end_index}}` representing the
-  character range of the inserted content — callers use this for
-  section-scoped substitution.
+  Inserts a paragraph break, a page break, then the content of
+  `template_doc_id` into `target_doc_id`. Returns `{:ok, {start_index,
+  end_index}}` representing the character range of the inserted content —
+  callers use this for section-scoped substitution.
 
   Paragraph text is inserted via a single `insertText`, same as before this
   function also handled tables. Tables are NOT part of that flattened text —
@@ -1680,11 +1680,46 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   silently inherit formatting from neighboring content already in the
   target document.
 
+  Paragraph-level style — alignment, line spacing, space above/below, named
+  style type (headings), start/first-line indentation — is captured the
+  same way and replayed via `updateParagraphStyle`
+  (`paragraph_style_requests/2`), same anti-inheritance guarantee: every
+  field is always stated explicitly. List bullets are replayed via
+  `createParagraphBullets` (`paragraph_bullet_requests/2`), resolving
+  bulleted vs numbered from the source and mapping to Google's own default
+  preset for that family — this reproduces glyph *family*, not an arbitrary
+  custom glyph/format exactly (see `extract_bullet_info/2`'s doc).
+
+  The leading `insertText(insert_index, "\\n")` exists ONLY to make this
+  safe for the appended section's own first paragraph. `insertPageBreak`
+  inserts an inline element — it does not split a paragraph — and, without
+  it, the appended content would start one position before the target
+  document's own closing character. Verified live: that closing character
+  is not a separate, shiftable paragraph separator, it's the document's
+  shared terminal marker, so inserting immediately before it (as this
+  function did before this `"\\n"` was added) always continued the
+  target's existing last paragraph — meaning `updateParagraphStyle`/
+  `createParagraphBullets` on the appended section's first paragraph (they
+  target whole paragraphs, not sub-ranges) silently reformatted the
+  *preceding* section's trailing text too. A first attempt at fixing this
+  tried detecting the condition instead of forcing it (skip styling that
+  first paragraph only when the target's own last paragraph didn't already
+  end in `"\\n"`) — that check always came back "safe" for real documents,
+  since a paragraph's own trailing `"\\n"`, when present, IS the shared
+  terminal marker rather than a boundary the appended content lands after,
+  so the check was inert and still corrupted the preceding paragraph live.
+  Explicitly inserting a real paragraph break first, ahead of the page
+  break, is what actually guarantees the appended section starts in a
+  fresh, empty paragraph — the same guarantee a table's cells already get
+  for free from a bare `insertTable`. `content_start` shifts by one extra
+  unit accordingly (`insert_index + 2`, not `+ 1`) to land after both the
+  new paragraph break and the page break; every offset downstream
+  (`body_runs`, `body_paragraphs`, the table marker pipeline) is anchored
+  at `content_start` and unaffected by the shift itself.
+
   Known limitations: cell shading, borders, and merged cells are not
   restored — `insertTable` creates a bare table beyond the column widths
-  above. Paragraph-level formatting (alignment, named heading styles, list
-  bullets) is not replayed, only character-level text style. Nested tables
-  (a table inside a table cell) are not supported.
+  above. Nested tables (a table inside a table cell) are not supported.
 
   Options (used in tests):
     * `:get_fn` — overrides `get_document/1` (used for both the template
@@ -1703,11 +1738,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
          {:ok, %{body: current_doc}} <- get_fn.(target_doc_id) do
       end_index = document_end_index(current_doc)
       insert_index = max(end_index - 1, 1)
-      content_start = insert_index + 1
+      page_break_index = insert_index + 1
+      content_start = page_break_index + 1
 
+      # A literal "\n" inserted here, one position ahead of everything else,
+      # is what makes paragraph-level styling safe for this section's own
+      # first paragraph — see this function's doc for why it's needed:
+      # insertPageBreak alone inserts an inline element, it does not split a
+      # paragraph, so without this the appended content would always start
+      # inside the target's existing last paragraph, and
+      # updateParagraphStyle/createParagraphBullets (whole-paragraph,
+      # not sub-range) would reformat that pre-existing content too.
       requests =
         [
-          %{insertPageBreak: %{location: %{index: insert_index}}},
+          %{insertText: %{location: %{index: insert_index}, text: "\n"}},
+          %{insertPageBreak: %{location: %{index: page_break_index}}},
           %{insertText: %{location: %{index: content_start}, text: text}}
         ] ++
           text_style_requests(content_start, body_runs) ++
