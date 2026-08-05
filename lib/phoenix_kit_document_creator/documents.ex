@@ -1286,6 +1286,75 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
+  @doc """
+  Documents linked to a project (the projects hub's Documents tab),
+  newest first. Same visibility rule as `list_documents_from_db/0`
+  (published/lost/unfiled with a Google doc id).
+  """
+  @spec list_documents_for_project(String.t()) :: [map()]
+  def list_documents_for_project(project_uuid) when is_binary(project_uuid) do
+    import Ecto.Query
+
+    from(d in Document,
+      where:
+        d.project_uuid == ^project_uuid and
+          d.status in ["published", "lost", "unfiled"] and
+          not is_nil(d.google_doc_id),
+      order_by: [desc: d.inserted_at]
+    )
+    |> repo().all()
+    |> Enum.map(&schema_to_file_map/1)
+  rescue
+    _ -> []
+  end
+
+  @doc """
+  Documents with NO project link (attach candidates for the hub tab).
+  """
+  @spec list_unlinked_documents() :: [map()]
+  def list_unlinked_documents do
+    import Ecto.Query
+
+    from(d in Document,
+      where:
+        is_nil(d.project_uuid) and
+          d.status in ["published", "lost", "unfiled"] and
+          not is_nil(d.google_doc_id),
+      order_by: [desc: d.inserted_at]
+    )
+    |> repo().all()
+    |> Enum.map(&schema_to_file_map/1)
+  rescue
+    _ -> []
+  end
+
+  @doc """
+  Links (or with `nil`, unlinks) a document to a project by the
+  document's ROW uuid. Mirrors `update_document_taxonomy/3`'s shape.
+  """
+  @spec set_document_project(String.t(), String.t() | nil) ::
+          {:ok, map()} | {:error, term()}
+  def set_document_project(document_uuid, project_uuid)
+      when is_binary(document_uuid) do
+    case repo().get(Document, document_uuid) do
+      nil ->
+        {:error, :not_found}
+
+      document ->
+        document
+        |> Document.changeset(%{project_uuid: project_uuid})
+        |> repo().update()
+        |> case do
+          {:ok, updated} ->
+            broadcast_files_changed()
+            {:ok, schema_to_file_map(updated)}
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
   defp put_if_present(attrs, source, key) do
     if Map.has_key?(source, key),
       do: Map.put(attrs, key, Map.get(source, key)),
