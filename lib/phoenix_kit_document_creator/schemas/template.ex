@@ -14,6 +14,8 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   use PhoenixKit.SchemaPrefix
   import Ecto.Changeset
 
+  alias PhoenixKit.Utils.Slug
+
   @type t :: %__MODULE__{}
 
   @primary_key {:uuid, UUIDv7, autogenerate: true}
@@ -120,13 +122,10 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     end
   end
 
-  defp slugify(name) do
-    name
-    |> String.downcase()
-    |> String.replace(~r/[^a-z0-9\s-]/, "")
-    |> String.replace(~r/[\s-]+/, "-")
-    |> String.trim("-")
-  end
+  # Core's rule, not a local copy. The pipeline this replaced deleted every
+  # non-ASCII character, so a Cyrillic or Greek name produced an EMPTY slug and
+  # German lost its umlauts. Slug.slugify/2 romanizes instead.
+  defp slugify(name), do: Slug.slugify(name)
 
   @doc "Changeset for upserting from Google Drive sync data."
   def sync_changeset(template, attrs) do
