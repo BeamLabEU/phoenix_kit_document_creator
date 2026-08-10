@@ -6,8 +6,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
   table (and any `{{var}}` placeholder that lived only inside one). These
   tests cover the fix: `flatten_template_with_table_markers/1` (Phase 0),
   `find_table_marker_ranges/1` + `table_skeleton_requests/2` (Phase 1),
-  `fill_table_cells_text/2` (Phase 2), and the full `append_template/3`
-  orchestration via injected `:get_fn`/`:batch_fn`.
+  the cell-fill phase (`build_table_fill_requests/3`, private — exercised
+  through the flow tests), and the full `append_template/3` orchestration
+  via injected `:get_fn`/`:batch_fn`.
   """
 
   use ExUnit.Case, async: true
@@ -201,7 +202,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
   # Same shape as `skeleton_table_block/3`, but cells carry real text —
   # simulating a table from an earlier section that has already been
-  # through Phase 2 (fill_table_cells_text/2).
+  # through the Phase 2 cell fill (`build_table_fill_requests/3`).
   defp filled_table_block(start_index, end_index, cell_start_texts) do
     %{
       "startIndex" => start_index,
