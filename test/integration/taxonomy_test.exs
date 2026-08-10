@@ -223,6 +223,24 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
         assert {:ok, next} = Taxonomy.create_type(%{name: "Next", category_uuid: cat.uuid})
         assert next.position == 0
       end
+
+      # Regression: the position lookup runs before the changeset, and the
+      # form's "Select a category" prompt submits category_uuid as "" —
+      # which used to reach the query and raise Ecto.Query.CastError
+      # instead of returning the changeset's validation error.
+      test "returns error (not a raise) when category_uuid is blank" do
+        assert {:error, changeset} =
+                 Taxonomy.create_type(%{"name" => "Invoice", "category_uuid" => ""})
+
+        assert %{category_uuid: [_ | _]} = errors_on(changeset)
+      end
+
+      test "returns error (not a raise) when category_uuid is malformed" do
+        assert {:error, changeset} =
+                 Taxonomy.create_type(%{"name" => "Invoice", "category_uuid" => "not-a-uuid"})
+
+        assert %{category_uuid: [_ | _]} = errors_on(changeset)
+      end
     end
 
     describe "get_type/1 and get_type!/1" do
