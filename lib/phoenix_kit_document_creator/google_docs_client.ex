@@ -1666,8 +1666,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
        replace each with a bare table of the right size
        (`table_skeleton_requests/2`) in one batchUpdate.
     3. Re-fetch again, identify the newly-inserted tables (`match_new_tables/3`,
-       reused as-is), and fill every cell with its captured text
-       (`fill_table_cells_text/2`) in one batchUpdate. Any `{{var}}`
+       reused as-is), and fill every cell with its captured text, character
+       and paragraph style, and column widths (`build_table_fill_requests/3`,
+       private) in one batchUpdate. Any `{{var}}`
        placeholder that lived inside a table cell is now physically present
        in the document, so it substitutes normally in
        `Composer.apply_substitutions/4` like any other text.
@@ -1771,6 +1772,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         ] ++
           text_style_requests(content_start, body_runs) ++
           paragraph_style_requests(content_start, body_paragraphs) ++
+          clear_inherited_bullets(content_start, text) ++
           paragraph_bullet_requests(content_start, body_paragraphs)
 
       case batch_fn.(target_doc_id, requests) do
@@ -1863,8 +1865,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   `%{marker_index: pos_integer(), rows: pos_integer(), columns: pos_integer(),
   cell_texts: [String.t()]}`, one entry per table, in document order.
   `cell_texts` is row-major (row 0's cells left-to-right, then row 1's, ...),
-  one entry per table cell — the same order `extract_table_cells/1` (private)
-  and `fill_table_cells_text/2` enumerate cells in.
+  one entry per table cell — the same order `extract_table_cells/1` and the
+  cell-fill phase (`build_table_fill_requests/3`, both private) enumerate
+  cells in.
 
   Nested tables (a table inside a table cell) are not supported: a cell's
   text is captured from its paragraph blocks only, same limitation the
@@ -2142,7 +2145,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # own captured `paragraphStyle`/`bullet`), offsets local to the cell
   # starting at 0. Deliberately does NOT mirror `cell_style_runs/1`'s
   # trailing-newline strip: unlike a run's `text`/`length` (which must match
-  # what `fill_table_cells_text/2` actually inserts), a paragraph's natural,
+  # what the cell fill actually inserts, see `cell_fill_requests/4`), a paragraph's natural,
   # un-stripped length already lands the style range exactly where the
   # paragraph ends up structurally in the target — the cell's last paragraph
   # reuses the pre-existing bare cell's own trailing newline instead of
@@ -2358,24 +2361,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end)
   end
 
-  @doc """
-  Phase 2 of the append-with-tables pipeline (see `append_template/3`): text
-  variant of `fill_table_cells/3`. Emits `insertText` requests for each
-  cell's captured text, last-first so earlier inserts don't shift later
-  indices. A cell whose captured text is empty is left untouched (its
-  default empty paragraph already reads as empty).
-  """
-  @spec fill_table_cells_text([%{insert_index: integer()}], [String.t()]) :: [map()]
-  def fill_table_cells_text(cells, cell_texts) when is_list(cells) and is_list(cell_texts) do
-    cells
-    |> Enum.zip(cell_texts)
-    |> Enum.reverse()
-    |> Enum.map(fn {%{insert_index: idx}, text} -> text_insert_request(idx, text) end)
-    |> Enum.reject(&is_nil/1)
-  end
-
-  defp text_insert_request(_idx, ""), do: nil
-
   defp text_insert_request(idx, text),
     do: %{"insertText" => %{"location" => %{"index" => idx}, "text" => text}}
 
@@ -2500,7 +2485,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   Ranges deliberately use the paragraph's own natural (un-stripped) length,
   even for a table cell's last paragraph whose *text* had its trailing
-  newline stripped before insertion (see `fill_table_cells_text/2`) — the
+  newline stripped before insertion (see `cell_fill_requests/4`) — the
   cell's pre-existing bare paragraph supplies that newline structurally
   either way, so the natural length lands the range exactly on it. See
   `cell_paragraph_spans/2`'s doc for the full argument.
@@ -2554,6 +2539,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   Spans with no `bullet` (not a list item) or zero `length` (see
   `paragraph_style_requests/2`) are excluded before grouping.
+
+  Requests are emitted in DESCENDING range order: `createParagraphBullets`
+  strips leading tabs from paragraphs in its range, which shifts every
+  later index — applying the highest range first means any shift lands
+  only below ranges that are already done, the same reasoning as every
+  other index-shifting pass in this module.
   """
   @spec paragraph_bullet_requests(integer(), [map()]) :: [map()]
   def paragraph_bullet_requests(base_index, spans) when is_list(spans) do
@@ -2571,6 +2562,32 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         }
       }
     end)
+    |> Enum.reverse()
+  end
+
+  # List membership lives on `paragraph.bullet`, which updateParagraphStyle
+  # cannot touch — only deleteParagraphBullets clears it. When the target
+  # document's last paragraph is a list item, the "\n" split that opens the
+  # append (see append_template/3) leaves the fresh first paragraph a list
+  # item too, so the appended section's heading would render with a stray
+  # bullet glyph. One delete over the whole inserted body clears anything
+  # inherited; the createParagraphBullets requests that follow re-create the
+  # section's own captured lists. Deleting a bullet removes no text (nesting
+  # is preserved via indent, a paragraph-style change), so indices are
+  # unaffected. Skipped for an empty body — Google rejects an empty range.
+  defp clear_inherited_bullets(_content_start, ""), do: []
+
+  defp clear_inherited_bullets(content_start, text) do
+    [
+      %{
+        "deleteParagraphBullets" => %{
+          "range" => %{
+            "startIndex" => content_start,
+            "endIndex" => content_start + utf16_units(text)
+          }
+        }
+      }
+    ]
   end
 
   defp group_contiguous_bullet_spans(spans) do
@@ -2641,7 +2658,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     column_width_requests ++ cell_fill_requests_list
   end
 
-  defp cell_fill_requests(_idx, "", _runs, _paragraphs), do: []
+  # An empty cell inserts no text, but its captured paragraph style must
+  # still replay against the cell's pre-existing bare paragraph — a blank
+  # but CENTER/END-aligned cell (spacer column, empty signature cell) would
+  # otherwise silently revert to START. Padded cells from a ragged source
+  # row carry no captured paragraphs, so they emit nothing here.
+  defp cell_fill_requests(idx, "", _runs, paragraphs),
+    do: paragraph_style_requests(idx, paragraphs)
 
   defp cell_fill_requests(idx, text, runs, paragraphs) do
     [text_insert_request(idx, text) | text_style_requests(idx, runs)] ++

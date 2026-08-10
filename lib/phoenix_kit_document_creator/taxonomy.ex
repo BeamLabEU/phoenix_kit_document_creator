@@ -787,6 +787,11 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
     end
   end
 
+  # Read-then-insert with no transaction or unique constraint: two
+  # concurrent creates can tie for the same position. Accepted — position
+  # has no uniqueness requirement, ties order by name (as they always did
+  # under the old default-0 behaviour) and one drag fixes them; a
+  # serialized insert isn't worth the locking here.
   defp next_category_position do
     Category
     |> apply_status_filter([])
