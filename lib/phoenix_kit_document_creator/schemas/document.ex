@@ -70,6 +70,9 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     field(:data, :map, default: %{})
     field(:thumbnail, :string)
     field(:created_by_uuid, Ecto.UUID)
+    # V1 of the module's own migration chain: per-project linkage for
+    # the projects hub (nullable; ON DELETE SET NULL).
+    field(:project_uuid, Ecto.UUID)
 
     timestamps(type: :utc_datetime)
   end
@@ -96,12 +99,14 @@ defmodule PhoenixKitDocumentCreator.Schemas.Document do
     :config,
     :data,
     :thumbnail,
-    :created_by_uuid
+    :created_by_uuid,
+    :project_uuid
   ]
 
   def changeset(document, attrs) do
     document
     |> cast(attrs, @required_fields ++ @optional_fields)
+    |> foreign_key_constraint(:project_uuid)
     |> validate_required(@required_fields)
     |> validate_length(:name, min: 1, max: 255)
     |> validate_inclusion(:status, @statuses)

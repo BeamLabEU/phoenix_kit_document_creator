@@ -72,6 +72,19 @@ repo_available =
       # `feedback_run_tests_via_parent.md`.
       PhoenixKit.Migration.ensure_current(TestRepo, log: false)
 
+      # The module-owned chain (V1: documents.project_uuid), version-keyed
+      # so a bump re-applies — the projects-repo pattern.
+      Ecto.Migrator.run(
+        TestRepo,
+        [
+          {PhoenixKitDocumentCreator.Migrations.Schema.current_version(),
+           PhoenixKitDocumentCreator.Test.SchemaMigration}
+        ],
+        :up,
+        all: true,
+        log: false
+      )
+
       Ecto.Adapters.SQL.Sandbox.mode(TestRepo, :manual)
       true
     rescue

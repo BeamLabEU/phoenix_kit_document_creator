@@ -79,10 +79,38 @@ defmodule PhoenixKitDocumentCreator do
   @impl PhoenixKit.Module
   def version, do: @version
 
-  # No `migration_module/0` override — migrations are handled by
-  # PhoenixKit core (V86 + V94 create the doc tables; this module owns
-  # no migrations of its own). The `PhoenixKit.Module` behaviour treats
-  # the callback as optional, so omitting it is the canonical pattern.
+  @impl PhoenixKit.Module
+  # Module-owned migration chain adopted (the decentralization protocol;
+  # projects is the reference impl). Core still CREATES the doc tables
+  # (V86 + V94); this chain only iterates on them — V1 adds
+  # `project_uuid` for the projects hub's Documents tab.
+  def migration_module, do: PhoenixKitDocumentCreator.Migrations.Schema
+
+  # Project-extension catalog entry for the `phoenix_kit_projects` hub —
+  # duck-typed contract (no dependency on that package, no `@impl`).
+  # Linkage is PER-DOCUMENT (documents.project_uuid, V1 of this module's
+  # own migration chain), not config-based: a project holds many docs.
+  def phoenix_kit_project_extensions do
+    [
+      %{
+        key: "document_creator_docs",
+        name: "Documents",
+        description: "Link Document Creator documents to this project",
+        icon: "hero-document-text",
+        module_key: "document_creator",
+        default_enabled: false,
+        tabs: [
+          %{
+            key: "documents",
+            label: "Documents",
+            icon: "hero-document-text",
+            lv: PhoenixKitDocumentCreator.Web.ProjectDocumentsLive
+          }
+        ],
+        permission_actions: [:view, :edit_tasks]
+      }
+    ]
+  end
 
   @impl PhoenixKit.Module
   def permission_metadata do
