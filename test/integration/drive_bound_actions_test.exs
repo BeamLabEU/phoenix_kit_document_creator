@@ -122,6 +122,73 @@ defmodule PhoenixKitDocumentCreator.Integration.DriveBoundActionsTest do
     end
   end
 
+  describe "delete_document/2 — orphaned rows (Drive file already gone)" do
+    test "soft-deletes a row already marked lost when the Drive GET returns 404" do
+      file_id = "drv-doc-lost-1"
+      actor_uuid = Ecto.UUID.generate()
+      stub_folder_resolution!()
+
+      TestRepo.insert!(%Document{name: "Lost Doc", google_doc_id: file_id, status: "lost"})
+
+      StubIntegrations.stub_request(
+        :get,
+        ~r{/drive/v3/files/#{Regex.escape(file_id)}(\?|$)},
+        {:ok,
+         %{status: 404, body: %{"error" => %{"code" => 404, "message" => "File not found."}}}}
+      )
+
+      assert :ok = Documents.delete_document(file_id, actor_uuid: actor_uuid)
+
+      row = TestRepo.get_by(Document, google_doc_id: file_id)
+      assert row.status == "trashed"
+
+      assert_activity_logged("document.deleted",
+        actor_uuid: actor_uuid,
+        metadata_has: %{"google_doc_id" => file_id}
+      )
+    end
+
+    # Drive answers 404 (not 403) for a live file the current connection
+    # merely can't read — e.g. after re-pointing the Google connection or
+    # an unshare. Only a row an independent sync pass has already marked
+    # "lost" may be trashed without a successful move; anything else would
+    # strand a live file as permanently "trashed".
+    test "fails the delete when the row is not lost and the Drive GET returns 404" do
+      file_id = "drv-doc-live-404"
+      stub_folder_resolution!()
+
+      TestRepo.insert!(%Document{name: "Live Doc", google_doc_id: file_id, status: "published"})
+
+      StubIntegrations.stub_request(
+        :get,
+        ~r{/drive/v3/files/#{Regex.escape(file_id)}(\?|$)},
+        {:ok,
+         %{status: 404, body: %{"error" => %{"code" => 404, "message" => "File not found."}}}}
+      )
+
+      assert {:error, :drive_file_not_found} =
+               Documents.delete_document(file_id, actor_uuid: Ecto.UUID.generate())
+
+      row = TestRepo.get_by(Document, google_doc_id: file_id)
+      assert row.status == "published"
+    end
+
+    test "fails the delete when no row exists and the Drive GET returns 404" do
+      file_id = "drv-doc-norow-404"
+      stub_folder_resolution!()
+
+      StubIntegrations.stub_request(
+        :get,
+        ~r{/drive/v3/files/#{Regex.escape(file_id)}(\?|$)},
+        {:ok,
+         %{status: 404, body: %{"error" => %{"code" => 404, "message" => "File not found."}}}}
+      )
+
+      assert {:error, :drive_file_not_found} =
+               Documents.delete_document(file_id, actor_uuid: Ecto.UUID.generate())
+    end
+  end
+
   describe "delete_template/2 — happy path" do
     test "logs template.deleted on :ok" do
       actor_uuid = Ecto.UUID.generate()
