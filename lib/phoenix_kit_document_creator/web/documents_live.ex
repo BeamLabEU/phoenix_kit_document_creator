@@ -1087,11 +1087,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <% filter_types =
           case @filters["category"] do
             "" ->
+              # No category chosen — types from every category are flattened
+              # into one list, so same-named types under different categories
+              # (e.g. "Hooldusjuhend" under both "Klient document" and
+              # "Tootmine") would otherwise be indistinguishable. Prefix with
+              # the owning category's name only in this flattened state; the
+              # single-category branch below needs no prefix.
               filter_cats
               |> Enum.flat_map(fn cat ->
                 cat.uuid
                 |> Taxonomy.list_types_for_category()
-                |> Enum.map(&{&1.uuid, &1.name})
+                |> Enum.map(&{&1.uuid, "#{cat.name} / #{&1.name}"})
               end)
 
             cat_uuid ->
@@ -1958,6 +1964,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   defp render_category_picker(assigns) do
     # Resolve display names from the precomputed lookup maps (no DB call per row).
+    # `category_names` / `type_names` (built in `assign_files/2`) only cover
+    # active categories/types, so a file whose stored category_uuid/type_uuid
+    # points at a trashed (or otherwise missing) row resolves to a nil name
+    # here — that's the "stale ref" signal used below to render a visible
+    # placeholder instead of silently falling back to "No category"/"No type".
     assigns =
       Map.merge(assigns, %{
         # Resolve the layout variant once; the template branches on `@card?`.
@@ -1965,7 +1976,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         cat_name: assigns.category_names[assigns.file["category_uuid"]],
         type_name: assigns.type_names[assigns.file["type_uuid"]],
         # Types for the currently selected category (nil → empty list).
-        type_options: Map.get(assigns.types_by_category, assigns.file["category_uuid"], [])
+        type_options: Map.get(assigns.types_by_category, assigns.file["category_uuid"], []),
+        cat_stale?: stale_taxonomy_ref?(assigns.file["category_uuid"], assigns.category_names),
+        type_stale?: stale_taxonomy_ref?(assigns.file["type_uuid"], assigns.type_names)
       })
 
     ~H"""
@@ -1987,7 +2000,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       @card? && "flex-wrap basis-full w-full"
     ]}>
       <%= if @status_mode == "trashed" do %>
-        <%!-- In trash view: read-only name badges --%>
+        <%!-- In trash view: read-only name badges. A stale ref (category/type
+             itself trashed or gone) renders a placeholder badge instead of
+             silently vanishing, so the file's former assignment stays visible. --%>
         <span
           :if={@cat_name}
           class="badge badge-xs badge-secondary"
@@ -1996,11 +2011,25 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           {@cat_name}
         </span>
         <span
+          :if={@cat_stale?}
+          class="badge badge-xs badge-ghost italic"
+          title={gettext("This category was deleted")}
+        >
+          {gettext("deleted category")}
+        </span>
+        <span
           :if={@type_name}
           class="badge badge-xs badge-outline"
           title={gettext("Type")}
         >
           {@type_name}
+        </span>
+        <span
+          :if={@type_stale?}
+          class="badge badge-xs badge-ghost italic"
+          title={gettext("This type was deleted")}
+        >
+          {gettext("deleted type")}
         </span>
       <% else %>
         <%!--
@@ -2024,6 +2053,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             title={gettext("Category")}
           >
             <option value="">{gettext("No category")}</option>
+            <%!-- Stored category_uuid isn't among the active options (trashed
+                 or deleted) — show it as a disabled placeholder instead of
+                 letting the browser fall back to "No category" looking
+                 selected, which would misrepresent (and on any future
+                 full-form submit, silently clear) the stored assignment. --%>
+            <option :if={@cat_stale?} value={@file["category_uuid"]} selected disabled>
+              {gettext("— deleted category —")}
+            </option>
             <%= for {uuid, name} <- @cat_options do %>
               <option value={uuid} selected={@file["category_uuid"] == uuid}>{name}</option>
             <% end %>
@@ -2046,6 +2083,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             title={gettext("Type")}
           >
             <option value="">{gettext("No type")}</option>
+            <%!-- Stored type_uuid isn't among the active options for this
+                 category (trashed or deleted) — same placeholder pattern as
+                 the category select above. --%>
+            <option :if={@type_stale?} value={@file["type_uuid"]} selected disabled>
+              {gettext("(deleted type)")}
+            </option>
             <%= for {uuid, name} <- @type_options do %>
               <option value={uuid} selected={@file["type_uuid"] == uuid}>{name}</option>
             <% end %>
@@ -2055,6 +2098,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     </div>
     """
   end
+
+  # A file's stored category_uuid/type_uuid is "stale" when it's set but
+  # absent from the precomputed active-names lookup — i.e. it points at a
+  # category/type that's been trashed (or otherwise no longer exists).
+  defp stale_taxonomy_ref?(nil, _names), do: false
+  defp stale_taxonomy_ref?(uuid, names), do: not Map.has_key?(names, uuid)
 
   attr(:thumbnail, :any, default: nil, doc: "Thumbnail URL, or nil while loading.")
 

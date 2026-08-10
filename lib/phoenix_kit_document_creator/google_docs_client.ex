@@ -741,7 +741,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @spec get_document(String.t()) :: {:ok, map()} | {:error, term()}
   def get_document(doc_id) do
     with {:ok, fid} <- validate_file_id(doc_id) do
-      authenticated_request(:get, "#{@docs_base}/documents/#{fid}")
+      # Same status check batch_update/2 got: without it a 404/403/5xx
+      # error body flows into the append pipeline as a "document",
+      # document_end_index/1 reads it as 1, and the appended section
+      # lands at the top of the target document with no error anywhere.
+      case authenticated_request(:get, "#{@docs_base}/documents/#{fid}") do
+        {:ok, %{status: status} = resp} when status in 200..299 ->
+          {:ok, resp}
+
+        {:ok, %{body: body}} ->
+          log_drive_error("documents.get failed", body)
+          {:error, :get_document_failed}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -749,9 +763,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @spec batch_update(String.t(), [map()]) :: {:ok, map()} | {:error, term()}
   def batch_update(doc_id, requests) when is_list(requests) do
     with {:ok, fid} <- validate_file_id(doc_id) do
-      authenticated_request(:post, "#{@docs_base}/documents/#{fid}:batchUpdate",
-        json: %{requests: requests}
-      )
+      case authenticated_request(:post, "#{@docs_base}/documents/#{fid}:batchUpdate",
+             json: %{requests: requests}
+           ) do
+        {:ok, %{status: status} = resp} when status in 200..299 ->
+          {:ok, resp}
+
+        {:ok, %{body: body}} ->
+          log_drive_error("batchUpdate failed", body)
+          {:error, :batch_update_failed}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -1385,8 +1409,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           {:ok, %{status: status}} when status in 200..299 ->
             :ok
 
-          {:ok, %{status: 404}} ->
-            {:error, :drive_file_not_found}
+          # A 404 on the PATCH is ambiguous: the file was just fetched above,
+          # so the missing resource is most likely the DESTINATION folder.
+          # Keep it distinct from :drive_file_not_found (initial GET 404) so
+          # callers can treat "file already gone" and "bad destination"
+          # differently — conflating them once let deletes DB-trash entries
+          # whose live Drive files then got resurrected by the next sync.
+          {:ok, %{status: 404, body: body}} ->
+            log_drive_error("move failed (404, likely destination folder)", body)
+            {:error, :move_failed}
 
           {:ok, %{body: body}} ->
             log_drive_error("move failed", body)
@@ -1613,42 +1644,1031 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @doc """
   Append a template's content to an existing Google Doc via batchUpdate.
 
-  Inserts a page break followed by the full text content of `template_doc_id`
-  into `target_doc_id`. Returns `{:ok, {start_index, end_index}}` representing
-  the character range of the inserted content — callers use this for
-  section-scoped substitution.
+  Inserts a paragraph break, a page break, then the content of
+  `template_doc_id` into `target_doc_id`. Returns `{:ok, {start_index,
+  end_index}}` representing the character range of the inserted content —
+  callers use this for section-scoped substitution.
+
+  Paragraph text is inserted via a single `insertText`, same as before this
+  function also handled tables. Tables are NOT part of that flattened text —
+  there is no Docs API primitive for "paste another document's table here" —
+  so they are rebuilt in two extra batchUpdate passes, reusing the exact
+  pattern already proven for image-grid tables (`table_image_inserts/3` ->
+  re-fetch -> `match_new_tables/3` -> `fill_table_cells/3`):
+
+    1. `flatten_template_with_table_markers/1` walks the template like
+       `get_document_text/1` does, but emits a unique marker token at each
+       table's position (instead of silently dropping it) and captures the
+       table's `{rows, columns, cell text}` separately, in document order.
+       The marked-up text is inserted via the same single `insertText` as
+       before.
+    2. Re-fetch, locate the markers (`find_table_marker_ranges/1`), and
+       replace each with a bare table of the right size
+       (`table_skeleton_requests/2`) in one batchUpdate.
+    3. Re-fetch again, identify the newly-inserted tables (`match_new_tables/3`,
+       reused as-is), and fill every cell with its captured text, character
+       and paragraph style, and column widths (`build_table_fill_requests/3`,
+       private) in one batchUpdate. Any `{{var}}`
+       placeholder that lived inside a table cell is now physically present
+       in the document, so it substitutes normally in
+       `Composer.apply_substitutions/4` like any other text.
+
+  Templates with no tables skip steps 2-3 entirely — this reduces to exactly
+  the previous single-`insertText` behaviour, with no extra Docs API calls.
+
+  Formatting fidelity: table column widths
+  (`tableStyle.tableColumnProperties`, fixed-width columns only — evenly
+  distributed is `insertTable`'s own default) are captured during flatten
+  and replayed via `updateTableColumnProperties` in the Phase 2 (cell-fill)
+  batch, targeting the table's real post-insert `startIndex` from the
+  re-fetch already done for cell matching — NOT the Phase 1b skeleton
+  batch, since `insertTable`'s own `location` index cannot be trusted as
+  the resulting table's position (verified live: Google inserts an
+  implicit paragraph break ahead of a table landing mid-paragraph, shifting
+  its real `startIndex` by one from the requested location — see
+  `table_column_width_requests/2`'s doc). Per-run character style — bold,
+  italic, font size, foreground color — is captured for both table cell
+  text and the section's own (non-table) body text, and replayed via
+  `updateTextStyle` immediately after the corresponding `insertText`. Every
+  inserted character is covered by an explicit range, including `bold:
+  false`/`italic: false` for plain runs, so freshly inserted text can never
+  silently inherit formatting from neighboring content already in the
+  target document.
+
+  Paragraph-level style — alignment, line spacing, space above/below, named
+  style type (headings), start/first-line indentation — is captured the
+  same way and replayed via `updateParagraphStyle`
+  (`paragraph_style_requests/2`), same anti-inheritance guarantee: every
+  field is always stated explicitly. List bullets are replayed via
+  `createParagraphBullets` (`paragraph_bullet_requests/2`), resolving
+  bulleted vs numbered from the source and mapping to Google's own default
+  preset for that family — this reproduces glyph *family*, not an arbitrary
+  custom glyph/format exactly (see `extract_bullet_info/2`'s doc).
+
+  The leading `insertText(insert_index, "\\n")` exists ONLY to make this
+  safe for the appended section's own first paragraph. `insertPageBreak`
+  inserts an inline element — it does not split a paragraph — and, without
+  it, the appended content would start one position before the target
+  document's own closing character. Verified live: that closing character
+  is not a separate, shiftable paragraph separator, it's the document's
+  shared terminal marker, so inserting immediately before it (as this
+  function did before this `"\\n"` was added) always continued the
+  target's existing last paragraph — meaning `updateParagraphStyle`/
+  `createParagraphBullets` on the appended section's first paragraph (they
+  target whole paragraphs, not sub-ranges) silently reformatted the
+  *preceding* section's trailing text too. A first attempt at fixing this
+  tried detecting the condition instead of forcing it (skip styling that
+  first paragraph only when the target's own last paragraph didn't already
+  end in `"\\n"`) — that check always came back "safe" for real documents,
+  since a paragraph's own trailing `"\\n"`, when present, IS the shared
+  terminal marker rather than a boundary the appended content lands after,
+  so the check was inert and still corrupted the preceding paragraph live.
+  Explicitly inserting a real paragraph break first, ahead of the page
+  break, is what actually guarantees the appended section starts in a
+  fresh, empty paragraph — the same guarantee a table's cells already get
+  for free from a bare `insertTable`. `content_start` shifts by one extra
+  unit accordingly (`insert_index + 2`, not `+ 1`) to land after both the
+  new paragraph break and the page break; every offset downstream
+  (`body_runs`, `body_paragraphs`, the table marker pipeline) is anchored
+  at `content_start` and unaffected by the shift itself.
+
+  Known limitations: cell shading, borders, and merged cells are not
+  restored — `insertTable` creates a bare table beyond the column widths
+  above. Nested tables (a table inside a table cell) are not supported.
+
+  Options (used in tests):
+    * `:get_fn` — overrides `get_document/1` (used for both the template
+      fetch and every target-document re-fetch)
+    * `:batch_fn` — overrides `batch_update/2`
   """
-  @spec append_template(String.t(), String.t()) ::
+  @spec append_template(String.t(), String.t(), keyword()) ::
           {:ok, {integer(), integer()}} | {:error, term()}
-  def append_template(target_doc_id, template_doc_id) do
-    with {:ok, text} <- get_document_text(template_doc_id),
-         {:ok, %{body: current_doc}} <- get_document(target_doc_id) do
+  def append_template(target_doc_id, template_doc_id, opts \\ []) do
+    get_fn = Keyword.get(opts, :get_fn, &get_document/1)
+    batch_fn = Keyword.get(opts, :batch_fn, &batch_update/2)
+
+    with {:ok, %{body: template_doc}} <- get_fn.(template_doc_id),
+         {text, tables, body_runs, body_paragraphs} =
+           flatten_template_with_table_markers_and_styles(template_doc),
+         {:ok, %{body: current_doc}} <- get_fn.(target_doc_id) do
       end_index = document_end_index(current_doc)
       insert_index = max(end_index - 1, 1)
+      page_break_index = insert_index + 1
+      content_start = page_break_index + 1
 
-      requests = [
-        %{insertPageBreak: %{location: %{index: insert_index}}},
-        %{
-          insertText: %{
-            location: %{index: insert_index + 1},
-            text: text
-          }
-        }
-      ]
+      # A literal "\n" inserted here, one position ahead of everything else,
+      # is what makes paragraph-level styling safe for this section's own
+      # first paragraph — see this function's doc for why it's needed:
+      # insertPageBreak alone inserts an inline element, it does not split a
+      # paragraph, so without this the appended content would always start
+      # inside the target's existing last paragraph, and
+      # updateParagraphStyle/createParagraphBullets (whole-paragraph,
+      # not sub-range) would reformat that pre-existing content too.
+      requests =
+        [
+          %{insertText: %{location: %{index: insert_index}, text: "\n"}},
+          %{insertPageBreak: %{location: %{index: page_break_index}}},
+          %{insertText: %{location: %{index: content_start}, text: text}}
+        ] ++
+          text_style_requests(content_start, body_runs) ++
+          paragraph_style_requests(content_start, body_paragraphs) ++
+          clear_inherited_bullets(content_start, text) ++
+          paragraph_bullet_requests(content_start, body_paragraphs)
 
-      case batch_update(target_doc_id, requests) do
+      case batch_fn.(target_doc_id, requests) do
         {:ok, _} ->
-          content_start = insert_index + 1
-          # Use UTF-16 unit count — Google Docs indices count UTF-16 code units,
-          # not graphemes. For BMP-only text these are equal; emoji and rare CJK
-          # codepoints occupy two UTF-16 units (a surrogate pair).
-          content_end = content_start + utf16_units(text)
-          {:ok, {content_start, content_end}}
+          finish_append_template(target_doc_id, content_start, text, tables, get_fn, batch_fn)
 
         {:error, _} = err ->
           err
       end
     end
+  end
+
+  # No tables in this template — previous behaviour, no extra Docs API calls.
+  # UTF-16 unit count is used because Google Docs indices count UTF-16 code
+  # units, not graphemes: for BMP-only text these are equal, but emoji and
+  # rare CJK codepoints occupy two UTF-16 units (a surrogate pair).
+  defp finish_append_template(_target_doc_id, content_start, text, [], _get_fn, _batch_fn) do
+    {:ok, {content_start, content_start + utf16_units(text)}}
+  end
+
+  # Tables present: rebuild them via the marker -> skeleton -> fill pipeline
+  # described in append_template/3's doc. A final re-fetch computes the true
+  # content_end from the actual document state (rather than the marked-up
+  # text's length), since inserting real tables changes the document's
+  # length beyond what the marker text occupied — and Google may add its own
+  # structural padding around an inserted table that isn't worth predicting
+  # analytically when a re-fetch gives the exact answer.
+  defp finish_append_template(target_doc_id, content_start, _text, tables, get_fn, batch_fn) do
+    tables_by_index = Map.new(tables, &{&1.marker_index, &1})
+
+    with {:ok, %{body: doc1}} <- get_fn.(target_doc_id),
+         marker_ranges = find_table_marker_ranges(doc1),
+         :ok <- verify_marker_count(marker_ranges, tables),
+         pre_existing_starts = doc1 |> collect_tables() |> Enum.map(& &1["startIndex"]),
+         skeleton_requests = table_skeleton_requests(marker_ranges, tables_by_index),
+         {:ok, _} <- maybe_batch(batch_fn, target_doc_id, skeleton_requests),
+         {:ok, %{body: doc2}} <- get_fn.(target_doc_id),
+         slot_starts = marker_ranges |> Enum.map(& &1.start_index) |> Enum.sort(),
+         tables_asc = doc2 |> collect_tables() |> Enum.sort_by(& &1["startIndex"]),
+         {:ok, new_tables} <- match_new_tables(tables_asc, pre_existing_starts, slot_starts),
+         fill_requests = build_table_fill_requests(marker_ranges, new_tables, tables_by_index),
+         {:ok, _} <- maybe_batch(batch_fn, target_doc_id, fill_requests),
+         {:ok, %{body: final_doc}} <- get_fn.(target_doc_id) do
+      {:ok, {content_start, document_end_index(final_doc) - 1}}
+    else
+      :mismatch ->
+        Logger.error(
+          "append_template: table match mismatch while appending tables into doc #{target_doc_id}"
+        )
+
+        {:error, :table_match_mismatch}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp verify_marker_count(marker_ranges, tables) do
+    if length(marker_ranges) == length(tables) do
+      :ok
+    else
+      {:error, :table_marker_count_mismatch}
+    end
+  end
+
+  # Sentinel wrapped in spaces (per the diagnosis's own recommendation) so it
+  # reads as ordinary, API-safe plain text — no reliance on control
+  # characters or private-use codepoints surviving an insertText round-trip.
+  # The surrounding spaces are part of the match (and the delete), so no
+  # stray whitespace is left behind once the marker is replaced.
+  @table_marker_regex ~r/ __PKDC_TABLE_(\d+)__ /
+
+  defp table_marker(n), do: " __PKDC_TABLE_#{n}__ "
+
+  @doc """
+  Phase 0 of the append-with-tables pipeline (see `append_template/3`).
+
+  Flattens a template document's body the same way `get_document_text/1`
+  does for paragraphs, but instead of silently skipping table blocks, emits a
+  unique marker token at each table's position and captures its structure
+  separately.
+
+  This is a distinct code path from `get_document_text/1` — that function's
+  existing behaviour (silently skipping tables) is relied on by its other
+  callers (`Documents.detect_variables/1`,
+  `Documents.image_slots_for_template/1`) and is intentionally left
+  untouched.
+
+  Returns `{text, tables}`. `tables` is a list of
+  `%{marker_index: pos_integer(), rows: pos_integer(), columns: pos_integer(),
+  cell_texts: [String.t()]}`, one entry per table, in document order.
+  `cell_texts` is row-major (row 0's cells left-to-right, then row 1's, ...),
+  one entry per table cell — the same order `extract_table_cells/1` and the
+  cell-fill phase (`build_table_fill_requests/3`, both private) enumerate
+  cells in.
+
+  Nested tables (a table inside a table cell) are not supported: a cell's
+  text is captured from its paragraph blocks only, same limitation the
+  top-level flatten has.
+
+  This is a thin wrapper around `flatten_template_with_table_markers_and_styles/1`
+  that drops its 3rd/4th return values (`body_runs`/`body_paragraphs`) — kept
+  at its original 2-tuple arity so existing callers are unaffected by the
+  style-capture addition.
+  """
+  @spec flatten_template_with_table_markers(map()) :: {String.t(), [map()]}
+  def flatten_template_with_table_markers(doc) do
+    {text, tables, _body_runs, _body_paragraphs} =
+      flatten_template_with_table_markers_and_styles(doc)
+
+    {text, tables}
+  end
+
+  @doc """
+  Same walk as `flatten_template_with_table_markers/1`, additionally
+  capturing per-run character style (bold, italic, font size, foreground
+  color) and per-paragraph style (alignment, line spacing, space
+  above/below, named style type, indentation, list bullet) — see
+  `append_template/3`'s "Formatting fidelity" doc section.
+
+  Returns `{text, tables, body_runs, body_paragraphs}`:
+
+    * `text`, `tables` — identical to `flatten_template_with_table_markers/1`,
+      except each table map in `tables` gains three keys: `column_properties`
+      (the source table's `tableStyle.tableColumnProperties`, normalized to
+      `%{width_type, magnitude, unit}`, one per column, `[]` if the source
+      table has none), `cell_runs` (one run-list per cell, parallel to
+      `cell_texts`, same order — see `text_style_requests/2`'s run shape) and
+      `cell_paragraphs` (one paragraph-span-list per cell, parallel to
+      `cell_texts`, same order — see `paragraph_style_requests/2`'s span
+      shape).
+    * `body_runs` — the non-table body text's per-run style spans, same run
+      shape as a `cell_runs` entry, with `start_offset`/`length` in UTF-16
+      units relative to the start of `text` (table markers consume offset
+      but contribute no run — they're deleted before any style request
+      referencing them would apply).
+    * `body_paragraphs` — the non-table body text's per-paragraph style
+      spans, same shape as a `cell_paragraphs` entry, offsets relative to the
+      start of `text`.
+  """
+  @spec flatten_template_with_table_markers_and_styles(map()) ::
+          {String.t(), [map()], [map()], [map()]}
+  def flatten_template_with_table_markers_and_styles(doc) do
+    blocks = get_in(doc, ["body", "content"]) |> List.wrap()
+    doc_lists = get_in(doc, ["lists"]) || %{}
+
+    {rev_chunks, rev_tables, rev_body_runs, rev_body_paragraphs, _next_marker, _offset} =
+      Enum.reduce(blocks, {[], [], [], [], 1, 0}, &flatten_block_with_styles(&1, &2, doc_lists))
+
+    text = rev_chunks |> Enum.reverse() |> Enum.join()
+
+    {text, Enum.reverse(rev_tables), Enum.reverse(rev_body_runs),
+     Enum.reverse(rev_body_paragraphs)}
+  end
+
+  defp flatten_block_with_styles(
+         %{"paragraph" => %{"elements" => elements} = paragraph},
+         {chunks, tables, body_runs, body_paragraphs, n, offset},
+         doc_lists
+       ) do
+    runs = text_runs_with_styles(elements, offset)
+    para_text = Enum.map_join(runs, & &1.text)
+    length = utf16_units(para_text)
+    new_offset = offset + length
+    span = paragraph_span(paragraph, offset, length, doc_lists)
+
+    {[para_text | chunks], tables, Enum.reverse(runs) ++ body_runs, [span | body_paragraphs], n,
+     new_offset}
+  end
+
+  defp flatten_block_with_styles(
+         %{"table" => table},
+         {chunks, tables, body_runs, body_paragraphs, n, offset},
+         doc_lists
+       ) do
+    {rows, columns} = table_dimensions(table)
+    table_rows = Map.get(table, "tableRows", [])
+
+    # Each row is normalized to exactly `columns` entries: merged cells make
+    # source rows narrower than the declared column count, but insertTable
+    # always creates a rectangular table and the fill phase zips captured
+    # cells against it positionally — a short row would shift every later
+    # cell's content left by one, silently. Padded cells are "" and get no
+    # fill requests.
+    cell_texts = Enum.flat_map(table_rows, &normalize_row(row_cell_texts(&1), columns, ""))
+    cell_runs = Enum.flat_map(table_rows, &normalize_row(row_cell_runs(&1), columns, []))
+
+    cell_paragraphs =
+      Enum.flat_map(table_rows, &normalize_row(row_cell_paragraphs(&1, doc_lists), columns, []))
+
+    column_properties = extract_column_properties(table)
+
+    table_info = %{
+      marker_index: n,
+      rows: rows,
+      columns: columns,
+      cell_texts: cell_texts,
+      cell_runs: cell_runs,
+      cell_paragraphs: cell_paragraphs,
+      column_properties: column_properties
+    }
+
+    marker = table_marker(n)
+    new_offset = offset + utf16_units(marker)
+
+    {[marker | chunks], [table_info | tables], body_runs, body_paragraphs, n + 1, new_offset}
+  end
+
+  defp flatten_block_with_styles(_block, acc, _doc_lists), do: acc
+
+  # Walks a paragraph's `elements` list (or a table cell's, flattened across
+  # its own paragraph blocks — see `cell_style_runs/1`) and returns one run
+  # per non-empty textRun: `%{text, start_offset, length, bold, italic,
+  # font_size, color}`. `start_offset`/`length` are UTF-16 units, threaded
+  # from `start_offset` so callers can place runs at an absolute document
+  # index later (`text_style_requests/2`). Elements without a `"textRun"`
+  # key (or with empty content) contribute no run and no offset advance —
+  # same no-op `get_in(...) || ""` fallback `flatten_block_with_styles/2`
+  # relied on before style capture was added.
+  defp text_runs_with_styles(elements, start_offset) do
+    {rev_runs, _final_offset} =
+      Enum.reduce(elements, {[], start_offset}, fn el, {acc, offset} ->
+        content = get_in(el, ["textRun", "content"]) || ""
+
+        if content == "" do
+          {acc, offset}
+        else
+          style = get_in(el, ["textRun", "textStyle"]) || %{}
+          len = utf16_units(content)
+
+          run = %{
+            text: content,
+            start_offset: offset,
+            length: len,
+            bold: Map.get(style, "bold", false),
+            italic: Map.get(style, "italic", false),
+            font_size: get_in(style, ["fontSize", "magnitude"]),
+            color: get_in(style, ["foregroundColor", "color", "rgbColor"])
+          }
+
+          {[run | acc], offset + len}
+        end
+      end)
+
+    Enum.reverse(rev_runs)
+  end
+
+  # Column widths the source table explicitly set. Only `FIXED_WIDTH`
+  # columns carry a `width` worth replaying — `EVENLY_DISTRIBUTED` (or a
+  # column with no captured property at all) is already `insertTable`'s own
+  # default, so `table_column_width_requests/2` skips it rather than
+  # emitting a no-op request.
+  defp extract_column_properties(%{"tableStyle" => %{"tableColumnProperties" => props}})
+       when is_list(props) do
+    Enum.map(props, &normalize_column_property/1)
+  end
+
+  defp extract_column_properties(_), do: []
+
+  defp normalize_column_property(%{
+         "widthType" => "FIXED_WIDTH",
+         "width" => %{"magnitude" => mag} = width
+       })
+       when is_number(mag) do
+    %{width_type: "FIXED_WIDTH", magnitude: mag * 1.0, unit: Map.get(width, "unit", "PT")}
+  end
+
+  defp normalize_column_property(%{"widthType" => width_type}) do
+    %{width_type: width_type, magnitude: nil, unit: nil}
+  end
+
+  defp normalize_column_property(_), do: %{width_type: nil, magnitude: nil, unit: nil}
+
+  defp table_dimensions(%{"rows" => r, "columns" => c}) when is_integer(r) and is_integer(c) do
+    {max(r, 1), max(c, 1)}
+  end
+
+  defp table_dimensions(%{"tableRows" => rows}) do
+    columns = rows |> Enum.map(&row_length/1) |> Enum.max(fn -> 1 end)
+    {max(length(rows), 1), max(columns, 1)}
+  end
+
+  defp table_dimensions(_), do: {1, 1}
+
+  defp row_length(%{"tableCells" => cells}), do: length(cells)
+  defp row_length(_), do: 0
+
+  defp row_cell_texts(%{"tableCells" => cells}), do: Enum.map(cells, &cell_text/1)
+  defp row_cell_texts(_), do: []
+
+  # Pad (or trim) one captured row to the table's declared column count so
+  # the row-major cell lists always align positionally with the rectangular
+  # table `insertTable` creates. See the call sites in
+  # `flatten_block_with_styles/3`.
+  defp normalize_row(cells, columns, filler) do
+    case length(cells) do
+      n when n < columns -> cells ++ List.duplicate(filler, columns - n)
+      n when n > columns -> Enum.take(cells, columns)
+      _ -> cells
+    end
+  end
+
+  # Same join `get_document_text/1` uses, scoped to one cell's content, minus
+  # the trailing newline contributed by the cell's last paragraph (that
+  # newline is already present in the target table's default empty
+  # paragraph, so keeping ours too would leave a spurious blank trailing
+  # line in every filled cell).
+  defp cell_text(%{"content" => content}) do
+    content
+    |> Enum.flat_map(fn el -> get_in(el, ["paragraph", "elements"]) || [] end)
+    |> Enum.map_join(fn el -> get_in(el, ["textRun", "content"]) || "" end)
+    |> strip_trailing_newline()
+  end
+
+  defp cell_text(_), do: ""
+
+  defp strip_trailing_newline(text) do
+    if String.ends_with?(text, "\n") do
+      binary_part(text, 0, byte_size(text) - 1)
+    else
+      text
+    end
+  end
+
+  defp row_cell_runs(%{"tableCells" => cells}), do: Enum.map(cells, &cell_style_runs/1)
+  defp row_cell_runs(_), do: []
+
+  # Per-run style variant of `cell_text/1` — same traversal (flatten across
+  # the cell's paragraph blocks, offsets local to the cell starting at 0
+  # since each cell gets its own `insertText`), trimming the same trailing
+  # newline `cell_text/1` trims, off the last run instead of the joined
+  # string. `Enum.map_join(cell_style_runs(cell), & &1.text)` always equals
+  # `cell_text(cell)` — same source data, decomposed differently.
+  defp cell_style_runs(%{"content" => content}) do
+    content
+    |> Enum.flat_map(fn el -> get_in(el, ["paragraph", "elements"]) || [] end)
+    |> text_runs_with_styles(0)
+    |> strip_trailing_newline_from_runs()
+    |> Enum.reject(&(&1.text == ""))
+  end
+
+  defp cell_style_runs(_), do: []
+
+  defp strip_trailing_newline_from_runs([]), do: []
+
+  defp strip_trailing_newline_from_runs(runs) do
+    {init, [last]} = Enum.split(runs, -1)
+
+    if String.ends_with?(last.text, "\n") do
+      init ++
+        [
+          %{
+            last
+            | text: binary_part(last.text, 0, byte_size(last.text) - 1),
+              length: last.length - 1
+          }
+        ]
+    else
+      runs
+    end
+  end
+
+  defp row_cell_paragraphs(%{"tableCells" => cells}, doc_lists),
+    do: Enum.map(cells, &cell_paragraph_spans(&1, doc_lists))
+
+  defp row_cell_paragraphs(_, _doc_lists), do: []
+
+  # Per-paragraph style variant of `cell_style_runs/1` — walks the cell's own
+  # paragraph blocks (not flattened across them, since each one needs its
+  # own captured `paragraphStyle`/`bullet`), offsets local to the cell
+  # starting at 0. Deliberately does NOT mirror `cell_style_runs/1`'s
+  # trailing-newline strip: unlike a run's `text`/`length` (which must match
+  # what the cell fill actually inserts, see `cell_fill_requests/4`), a paragraph's natural,
+  # un-stripped length already lands the style range exactly where the
+  # paragraph ends up structurally in the target — the cell's last paragraph
+  # reuses the pre-existing bare cell's own trailing newline instead of
+  # having one inserted, and that pre-existing newline occupies exactly the
+  # one UTF-16 unit the un-stripped length accounts for. See
+  # `paragraph_style_requests/2`'s doc for the general rule.
+  defp cell_paragraph_spans(%{"content" => content}, doc_lists) do
+    {rev_spans, _offset} =
+      Enum.reduce(content, {[], 0}, fn
+        %{"paragraph" => paragraph}, {spans, offset} ->
+          elements = paragraph["elements"] || []
+
+          para_text =
+            Enum.map_join(elements, fn el -> get_in(el, ["textRun", "content"]) || "" end)
+
+          length = utf16_units(para_text)
+          span = paragraph_span(paragraph, offset, length, doc_lists)
+          {[span | spans], offset + length}
+
+        _other, acc ->
+          acc
+      end)
+
+    Enum.reverse(rev_spans)
+  end
+
+  defp cell_paragraph_spans(_, _doc_lists), do: []
+
+  # Alignment/spacing/named-style defaults a paragraph gets when Google omits
+  # the corresponding `paragraphStyle` key (i.e. what a paragraph with no
+  # explicit style already renders as) — used for the anti-inheritance
+  # guarantee: a captured span always states every field explicitly, so a
+  # freshly inserted/split paragraph in the target document can never
+  # silently inherit alignment/spacing/named style from whatever paragraph
+  # sat at the insertion point, the same philosophy `text_style_fields/1`
+  # already applies to bold/italic.
+  @default_alignment "START"
+  @default_line_spacing 100.0
+  @default_named_style_type "NORMAL_TEXT"
+  @zero_dimension %{magnitude: 0.0, unit: "PT"}
+
+  defp paragraph_span(paragraph, start_offset, length, doc_lists) do
+    %{
+      start_offset: start_offset,
+      length: length,
+      style: extract_paragraph_style(paragraph, doc_lists),
+      bullet: extract_bullet_info(paragraph, doc_lists)
+    }
+  end
+
+  defp extract_paragraph_style(paragraph, _doc_lists) do
+    style = Map.get(paragraph, "paragraphStyle", %{})
+
+    %{
+      alignment: Map.get(style, "alignment", @default_alignment),
+      line_spacing: numeric_or_default(Map.get(style, "lineSpacing"), @default_line_spacing),
+      space_above: dimension_or_default(Map.get(style, "spaceAbove")),
+      space_below: dimension_or_default(Map.get(style, "spaceBelow")),
+      named_style_type: Map.get(style, "namedStyleType", @default_named_style_type),
+      indent_start: dimension_or_default(Map.get(style, "indentStart")),
+      indent_first_line: dimension_or_default(Map.get(style, "indentFirstLine"))
+    }
+  end
+
+  defp numeric_or_default(n, _default) when is_number(n), do: n * 1.0
+  defp numeric_or_default(_, default), do: default
+
+  defp dimension_or_default(%{"magnitude" => m} = dimension) when is_number(m) do
+    %{magnitude: m * 1.0, unit: Map.get(dimension, "unit", "PT")}
+  end
+
+  defp dimension_or_default(_), do: @zero_dimension
+
+  # List membership: only glyph *family* (bulleted vs numbered) is
+  # reproduced, via Google's own default preset for that family
+  # (`BULLET_DISC_CIRCLE_SQUARE` / `NUMBERED_DECIMAL_ALPHA_ROMAN`) — not the
+  # source list's exact glyph/format at each nesting level. `createParagraphBullets`
+  # only accepts a fixed enum of ~20 presets, so reproducing a custom glyph
+  # sequence exactly would require matching the source's per-level
+  # glyphType/glyphSymbol against every preset's own known sequence; for the
+  # overwhelming common case (a list created via the Docs UI's default
+  # "bulleted list"/"numbered list" buttons) this already matches exactly,
+  # and is a documented approximation, not silent data loss, for the rest.
+  @numbered_glyph_types ~w(DECIMAL ZERO_DECIMAL UPPER_ALPHA ALPHA UPPER_ROMAN ROMAN)
+
+  defp extract_bullet_info(%{"bullet" => %{"listId" => list_id} = bullet}, doc_lists) do
+    level = Map.get(bullet, "nestingLevel", 0)
+    %{list_id: list_id, preset: resolve_bullet_preset(list_id, level, doc_lists)}
+  end
+
+  defp extract_bullet_info(_paragraph, _doc_lists), do: nil
+
+  defp resolve_bullet_preset(list_id, level, doc_lists) do
+    nesting_levels = get_in(doc_lists, [list_id, "listProperties", "nestingLevels"]) || []
+
+    case Enum.at(nesting_levels, level) do
+      %{"glyphType" => glyph_type} when glyph_type in @numbered_glyph_types ->
+        "NUMBERED_DECIMAL_ALPHA_ROMAN"
+
+      _ ->
+        "BULLET_DISC_CIRCLE_SQUARE"
+    end
+  end
+
+  @doc """
+  Phase 1a of the append-with-tables pipeline (see `append_template/3`):
+  locate `flatten_template_with_table_markers/1` marker tokens in an
+  already-fetched document. Mirrors `find_text_var_ranges/2`'s UTF-16 index
+  arithmetic (`Regex.scan(..., return: :index)` yields byte offsets; Google
+  Docs indices count UTF-16 code units).
+  """
+  @spec find_table_marker_ranges(map()) :: [
+          %{marker_index: integer(), start_index: integer(), end_index: integer()}
+        ]
+  def find_table_marker_ranges(doc) do
+    doc
+    |> body_text_runs()
+    |> Enum.flat_map(&extract_marker_ranges/1)
+  end
+
+  defp extract_marker_ranges(%{"textRun" => %{"content" => content}, "startIndex" => base}) do
+    Regex.scan(@table_marker_regex, content, return: :index)
+    |> Enum.map(fn [{full_byte_start, full_byte_len}, {idx_byte_start, idx_byte_len}] ->
+      u16_start = content |> binary_part(0, full_byte_start) |> utf16_units()
+      u16_len = content |> binary_part(full_byte_start, full_byte_len) |> utf16_units()
+      marker_index = content |> binary_part(idx_byte_start, idx_byte_len) |> String.to_integer()
+
+      %{
+        marker_index: marker_index,
+        start_index: base + u16_start,
+        end_index: base + u16_start + u16_len
+      }
+    end)
+  end
+
+  defp extract_marker_ranges(_), do: []
+
+  @doc """
+  Phase 1b of the append-with-tables pipeline (see `append_template/3`): for
+  each located marker, delete the marker text and insert a bare table of its
+  captured dimensions at that position. Sorted descending by `start_index`
+  (same convention as `substitute_all_text/4` and
+  `build_image_batch_requests/3`) so earlier replacements in the list don't
+  shift the indices of markers still to be processed.
+
+  Column widths are deliberately NOT applied here even though the table's
+  captured `column_properties` are available at this point — see
+  `table_column_width_requests/2`'s doc for why `insertTable`'s `location`
+  index cannot be trusted as the resulting table's real `tableStartLocation`.
+  """
+  @spec table_skeleton_requests([map()], %{integer() => map()}) :: [map()]
+  def table_skeleton_requests(marker_ranges, tables_by_index) do
+    marker_ranges
+    |> Enum.sort_by(& &1.start_index, :desc)
+    |> Enum.flat_map(fn %{marker_index: idx, start_index: s, end_index: e} ->
+      %{rows: rows, columns: columns} = Map.fetch!(tables_by_index, idx)
+
+      [
+        %{"deleteContentRange" => %{"range" => %{"startIndex" => s, "endIndex" => e}}},
+        %{"insertTable" => %{"rows" => rows, "columns" => columns, "location" => %{"index" => s}}}
+      ]
+    end)
+  end
+
+  @doc """
+  Column-width companion used by `build_table_fill_requests/3` (Phase 2, NOT
+  the Phase 1b skeleton batch — see below). `table_start_index` must be a
+  table's real, post-insert `startIndex` from a re-fetched document (the
+  same value `extract_table_cells/1`'s caller already has via
+  `match_new_tables/3`'s matched table element), never the `location.index`
+  an `insertTable` request was given. `column_properties` is a table's
+  captured `column_properties` list (see
+  `flatten_template_with_table_markers_and_styles/1`), index-aligned to the
+  table's columns.
+
+  Verified live against the real Docs API: `insertTable` at `location.index
+  = 8` produced a table whose actual `startIndex` was `9`, one past the
+  requested location — Google inserts an implicit paragraph break ahead of
+  a table landing mid-paragraph, and `updateTableColumnProperties` rejects
+  the un-adjusted index with `INVALID_ARGUMENT: The provided table start
+  location is invalid`. This is exactly why `finish_append_template/6`
+  re-fetches after the skeleton batch before filling cells — this function
+  rides along on that same re-fetch instead of trying to predict the offset
+  analytically.
+
+  Only `FIXED_WIDTH` columns produce a request — `EVENLY_DISTRIBUTED` (or a
+  column with no captured property) is already what a bare `insertTable`
+  produces, so emitting a request for it would be a no-op round trip. One
+  request per fixed column (the Docs API's `columnIndices` field lets one
+  request retarget several columns sharing an identical width, but per-
+  column source widths are rarely identical in practice, so this keeps the
+  mapping simple and correct over minimizing request count).
+  """
+  @spec table_column_width_requests(integer(), [map()]) :: [map()]
+  def table_column_width_requests(table_start_index, column_properties) do
+    column_properties
+    |> Enum.with_index()
+    |> Enum.filter(fn {prop, _i} ->
+      prop.width_type == "FIXED_WIDTH" and is_number(prop.magnitude)
+    end)
+    |> Enum.map(fn {prop, i} ->
+      %{
+        "updateTableColumnProperties" => %{
+          "tableStartLocation" => %{"index" => table_start_index},
+          "columnIndices" => [i],
+          "tableColumnProperties" => %{
+            "widthType" => "FIXED_WIDTH",
+            "width" => %{"magnitude" => prop.magnitude, "unit" => prop.unit || "PT"}
+          },
+          "fields" => "width,widthType"
+        }
+      }
+    end)
+  end
+
+  defp text_insert_request(idx, text),
+    do: %{"insertText" => %{"location" => %{"index" => idx}, "text" => text}}
+
+  @doc """
+  Builds `updateTextStyle` requests replaying captured per-run character
+  style (see `flatten_template_with_table_markers_and_styles/1`'s `cell_runs`
+  / `body_runs`), anchored at `base_index` — the same index the
+  corresponding `insertText` used. Adjacent runs sharing identical style are
+  merged into one range first, but every non-empty run is still covered,
+  including a plain run's explicit `bold: false`/`italic: false` — this is
+  deliberate: a freshly inserted blob of text otherwise inherits its style
+  from whatever character precedes it in the target document, so leaving a
+  plain run unstyled would silently pick up bold/italic from neighboring
+  content (seen live: an appended section's plain paragraph inheriting bold
+  from an adjacent heading).
+
+  Safe to batch immediately after the insert it styles: text style changes
+  never shift document character indices, so nothing else in the same batch
+  needs to account for these requests' presence.
+  """
+  @spec text_style_requests(integer(), [map()]) :: [map()]
+  def text_style_requests(base_index, runs) when is_list(runs) do
+    runs
+    |> merge_style_runs()
+    |> Enum.filter(&(&1.length > 0))
+    |> Enum.map(fn run ->
+      text_style_request(
+        base_index + run.start_offset,
+        base_index + run.start_offset + run.length,
+        run
+      )
+    end)
+  end
+
+  defp merge_style_runs([]), do: []
+
+  defp merge_style_runs([first | rest]) do
+    rest
+    |> Enum.reduce([first], fn run, [prev | acc] ->
+      if contiguous_same_style?(prev, run) do
+        [%{prev | length: prev.length + run.length} | acc]
+      else
+        [run, prev | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp contiguous_same_style?(prev, run) do
+    prev.start_offset + prev.length == run.start_offset and
+      prev.bold == run.bold and prev.italic == run.italic and
+      prev.font_size == run.font_size and prev.color == run.color
+  end
+
+  defp text_style_request(range_start, range_end, style) do
+    {text_style, fields} = text_style_fields(style)
+
+    %{
+      "updateTextStyle" => %{
+        "range" => %{"startIndex" => range_start, "endIndex" => range_end},
+        "textStyle" => text_style,
+        "fields" => fields
+      }
+    }
+  end
+
+  # Bold/italic are always set explicitly (see text_style_requests/2's doc —
+  # this is the anti-inheritance guarantee). Font size and foreground color
+  # are only included, in both the textStyle object and the fields mask,
+  # when the source run actually carried one.
+  defp text_style_fields(%{bold: bold, italic: italic, font_size: font_size, color: color}) do
+    style = %{"bold" => bold, "italic" => italic}
+    fields = ["bold", "italic"]
+
+    {style, fields} =
+      if is_number(font_size) do
+        {Map.put(style, "fontSize", %{"magnitude" => font_size * 1.0, "unit" => "PT"}),
+         fields ++ ["fontSize"]}
+      else
+        {style, fields}
+      end
+
+    case color do
+      rgb_color when is_map(rgb_color) ->
+        # `is_map/1`, not "non-empty map": Google omits zero-valued RGB
+        # channels, so pure black is a legitimate `%{}` — that still means
+        # "this run has an explicit foreground color (black)", distinct from
+        # `nil` ("no foregroundColor captured at all").
+        {Map.put(style, "foregroundColor", %{"color" => %{"rgbColor" => rgb_color}}),
+         Enum.join(fields ++ ["foregroundColor"], ",")}
+
+      _ ->
+        {style, Enum.join(fields, ",")}
+    end
+  end
+
+  @doc """
+  Builds `updateParagraphStyle` requests replaying captured paragraph style
+  (alignment, line spacing, space above/below, named style type,
+  start/first-line indentation — see
+  `flatten_template_with_table_markers_and_styles/1`'s `cell_paragraphs` /
+  `body_paragraphs`), anchored at `base_index` the same way
+  `text_style_requests/2` anchors character runs.
+
+  Every field is always included in the request, including values that
+  merely reproduce Google's own default (`alignment: "START"`, `lineSpacing:
+  100.0`, zero spacing/indentation, `namedStyleType: "NORMAL_TEXT"`) — the
+  same anti-inheritance guarantee `text_style_fields/1` applies to
+  bold/italic: a newly split paragraph in the target document otherwise
+  inherits alignment/spacing/named style from whatever paragraph sat at the
+  insertion point (e.g. an appended section's plain paragraph picking up
+  CENTER alignment from a neighboring heading), not from the source
+  template.
+
+  Unlike `text_style_requests/2`, spans are never merged — each paragraph
+  gets its own request, since paragraphs are already discrete units (no
+  benefit to coalescing, even when two adjacent ones share identical style).
+  A span whose `length` is 0 (a paragraph with no textRun at all — doesn't
+  happen for a real, non-empty paragraph, since even a blank line carries a
+  `"\\n"`-only run) is skipped: with zero characters, it contributes no
+  offset and doesn't exist as distinct content in the inserted text either.
+
+  Ranges deliberately use the paragraph's own natural (un-stripped) length,
+  even for a table cell's last paragraph whose *text* had its trailing
+  newline stripped before insertion (see `cell_fill_requests/4`) — the
+  cell's pre-existing bare paragraph supplies that newline structurally
+  either way, so the natural length lands the range exactly on it. See
+  `cell_paragraph_spans/2`'s doc for the full argument.
+
+  Safe to batch immediately after the insert/fill it styles: like character
+  style changes, paragraph style changes never shift document indices.
+  """
+  @spec paragraph_style_requests(integer(), [map()]) :: [map()]
+  def paragraph_style_requests(base_index, spans) when is_list(spans) do
+    spans
+    |> Enum.filter(&(&1.length > 0))
+    |> Enum.map(fn span ->
+      paragraph_style_request(
+        base_index + span.start_offset,
+        base_index + span.start_offset + span.length,
+        span.style
+      )
+    end)
+  end
+
+  defp paragraph_style_request(range_start, range_end, style) do
+    %{
+      "updateParagraphStyle" => %{
+        "range" => %{"startIndex" => range_start, "endIndex" => range_end},
+        "paragraphStyle" => %{
+          "alignment" => style.alignment,
+          "lineSpacing" => style.line_spacing,
+          "spaceAbove" => dimension_payload(style.space_above),
+          "spaceBelow" => dimension_payload(style.space_below),
+          "namedStyleType" => style.named_style_type,
+          "indentStart" => dimension_payload(style.indent_start),
+          "indentFirstLine" => dimension_payload(style.indent_first_line)
+        },
+        "fields" =>
+          "alignment,lineSpacing,spaceAbove,spaceBelow,namedStyleType,indentStart,indentFirstLine"
+      }
+    }
+  end
+
+  defp dimension_payload(%{magnitude: magnitude, unit: unit}),
+    do: %{"magnitude" => magnitude, "unit" => unit}
+
+  @doc """
+  Builds `createParagraphBullets` requests replaying captured list
+  membership (see `extract_bullet_info/2`'s doc for what "replaying" means
+  here — glyph *family*, not exact glyph/format). Contiguous spans (no gap
+  in offsets, same source `listId`) are merged into a single request
+  spanning the whole run, so consecutive list items land in one target list
+  (numbered items continuing count 1, 2, 3, ... instead of each restarting
+  at 1) rather than `length(spans)` separate single-paragraph lists.
+
+  Spans with no `bullet` (not a list item) or zero `length` (see
+  `paragraph_style_requests/2`) are excluded before grouping.
+
+  Requests are emitted in DESCENDING range order: `createParagraphBullets`
+  strips leading tabs from paragraphs in its range, which shifts every
+  later index — applying the highest range first means any shift lands
+  only below ranges that are already done, the same reasoning as every
+  other index-shifting pass in this module.
+  """
+  @spec paragraph_bullet_requests(integer(), [map()]) :: [map()]
+  def paragraph_bullet_requests(base_index, spans) when is_list(spans) do
+    spans
+    |> Enum.filter(&(&1.length > 0 and not is_nil(&1.bullet)))
+    |> group_contiguous_bullet_spans()
+    |> Enum.map(fn {first, last} ->
+      %{
+        "createParagraphBullets" => %{
+          "range" => %{
+            "startIndex" => base_index + first.start_offset,
+            "endIndex" => base_index + last.start_offset + last.length
+          },
+          "bulletPreset" => first.bullet.preset
+        }
+      }
+    end)
+    |> Enum.reverse()
+  end
+
+  # List membership lives on `paragraph.bullet`, which updateParagraphStyle
+  # cannot touch — only deleteParagraphBullets clears it. When the target
+  # document's last paragraph is a list item, the "\n" split that opens the
+  # append (see append_template/3) leaves the fresh first paragraph a list
+  # item too, so the appended section's heading would render with a stray
+  # bullet glyph. One delete over the whole inserted body clears anything
+  # inherited; the createParagraphBullets requests that follow re-create the
+  # section's own captured lists. Deleting a bullet removes no text (nesting
+  # is preserved via indent, a paragraph-style change), so indices are
+  # unaffected. Skipped for an empty body — Google rejects an empty range.
+  defp clear_inherited_bullets(_content_start, ""), do: []
+
+  defp clear_inherited_bullets(content_start, text) do
+    [
+      %{
+        "deleteParagraphBullets" => %{
+          "range" => %{
+            "startIndex" => content_start,
+            "endIndex" => content_start + utf16_units(text)
+          }
+        }
+      }
+    ]
+  end
+
+  defp group_contiguous_bullet_spans(spans) do
+    spans
+    |> Enum.reduce([], &extend_or_start_bullet_group/2)
+    |> Enum.reverse()
+  end
+
+  defp extend_or_start_bullet_group(span, [{first, prev} | rest] = acc) do
+    if contiguous_same_list?(prev, span) do
+      [{first, span} | rest]
+    else
+      [{span, span} | acc]
+    end
+  end
+
+  defp extend_or_start_bullet_group(span, []), do: [{span, span}]
+
+  defp contiguous_same_list?(prev, span) do
+    prev.start_offset + prev.length == span.start_offset and
+      prev.bullet.list_id == span.bullet.list_id
+  end
+
+  # Column widths are applied here (Phase 2), not alongside the Phase 1b
+  # skeleton — see `table_column_width_requests/2`'s doc: `table_el` here
+  # comes from a document re-fetched AFTER the skeleton batch, so
+  # `table_el["startIndex"]` is the table's real position, unlike the
+  # marker's `start_index` a skeleton-phase request would have had to guess
+  # at. Column-width requests don't shift character indices, so they're
+  # safe to run in any order relative to the cell-fill requests below —
+  # placed first here only for readability (structure before content).
+  #
+  # Merges every matched table's cell fills into one globally-ordered request
+  # list. Fills must be applied in descending index order ACROSS tables (not
+  # just within one), since an earlier insert would otherwise shift a later
+  # table's captured cell indices. Each cell's `insertText` is immediately
+  # followed by its `text_style_requests/2` (safe within the same descending
+  # pass — style requests don't shift indices, see that function's doc).
+  defp build_table_fill_requests(marker_ranges, new_tables, tables_by_index) do
+    matched = marker_ranges |> Enum.sort_by(& &1.start_index) |> Enum.zip(new_tables)
+
+    column_width_requests =
+      Enum.flat_map(matched, fn {%{marker_index: idx}, table_el} ->
+        table_info = Map.fetch!(tables_by_index, idx)
+        column_properties = Map.get(table_info, :column_properties, [])
+        table_column_width_requests(table_el["startIndex"], column_properties)
+      end)
+
+    cell_fill_requests_list =
+      matched
+      |> Enum.flat_map(fn {%{marker_index: idx}, table_el} ->
+        table_info = Map.fetch!(tables_by_index, idx)
+        cell_texts = table_info.cell_texts
+        cell_runs_list = Map.get(table_info, :cell_runs, List.duplicate([], length(cell_texts)))
+
+        cell_paragraphs_list =
+          Map.get(table_info, :cell_paragraphs, List.duplicate([], length(cell_texts)))
+
+        cells = extract_table_cells(table_el)
+
+        Enum.zip([cells, cell_texts, cell_runs_list, cell_paragraphs_list])
+      end)
+      |> Enum.sort_by(fn {%{insert_index: idx}, _text, _runs, _paragraphs} -> idx end, :desc)
+      |> Enum.flat_map(fn {%{insert_index: idx}, text, runs, paragraphs} ->
+        cell_fill_requests(idx, text, runs, paragraphs)
+      end)
+
+    column_width_requests ++ cell_fill_requests_list
+  end
+
+  # An empty cell inserts no text, but its captured paragraph style must
+  # still replay against the cell's pre-existing bare paragraph — a blank
+  # but CENTER/END-aligned cell (spacer column, empty signature cell) would
+  # otherwise silently revert to START. Padded cells from a ragged source
+  # row carry no captured paragraphs, so they emit nothing here.
+  defp cell_fill_requests(idx, "", _runs, paragraphs),
+    do: paragraph_style_requests(idx, paragraphs)
+
+  defp cell_fill_requests(idx, text, runs, paragraphs) do
+    [text_insert_request(idx, text) | text_style_requests(idx, runs)] ++
+      paragraph_style_requests(idx, paragraphs) ++ paragraph_bullet_requests(idx, paragraphs)
   end
 
   @doc """
@@ -1712,10 +2732,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       end)
       |> Enum.sort_by(fn {_, s, _, _} -> s end, :desc)
       |> Enum.flat_map(fn {_, s, e, value} ->
-        [
-          %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}},
-          %{insertText: %{location: %{index: s}, text: value}}
-        ]
+        delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
+
+        # Google rejects insertText with empty text, and batchUpdate is atomic —
+        # one empty value would void every substitution in the batch. A blank
+        # variable clears its placeholder, mirroring the image path's behavior.
+        case value do
+          "" -> [delete]
+          _ -> [delete, %{insertText: %{location: %{index: s}, text: value}}]
+        end
       end)
 
     maybe_batch(&batch_update/2, doc_id, requests)
@@ -1769,7 +2794,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     # Phase 2 can reconstruct the pre/new table interleaving (see
     # match_new_tables/3) and identify the newly inserted tables.
     pre_existing_table_starts =
-      doc2 |> collect_tables() |> Enum.map(& &1["table"]["startIndex"])
+      doc2 |> collect_tables() |> Enum.map(& &1["startIndex"])
 
     with {:ok, _} <- maybe_batch(&batch_update/2, doc_id, phase1_requests) do
       if table_ranges == [] do
@@ -1803,7 +2828,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       tables_asc =
         doc3
         |> collect_tables()
-        |> Enum.sort_by(fn el -> el["table"]["startIndex"] end, :asc)
+        |> Enum.sort_by(fn el -> el["startIndex"] end, :asc)
 
       case match_new_tables(tables_asc, pre_existing_table_starts, slot_starts) do
         :mismatch ->
@@ -1841,7 +2866,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
-  # Walk doc body content and collect all table elements in document order.
+  # Walk doc body content and collect all table StructuralElements, in
+  # document order. Each returned element is the *block*, e.g.
+  # `%{"startIndex" => _, "endIndex" => _, "table" => %{"rows" => _, ...}}`
+  # — `startIndex`/`endIndex` are fields of the block itself, NOT of the
+  # nested `"table"` object (the Docs API's `Table` resource has no
+  # `startIndex` field of its own). Callers locating a table's position must
+  # read `el["startIndex"]`, never `el["table"]["startIndex"]` (that always
+  # returns `nil` and silently corrupts any index-based ordering built on
+  # top of it — see match_new_tables/3's callers).
   defp collect_tables(doc) do
     (get_in(doc, ["body", "content"]) || [])
     |> Enum.filter(&Map.has_key?(&1, "table"))

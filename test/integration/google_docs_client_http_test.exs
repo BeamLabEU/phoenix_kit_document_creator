@@ -208,6 +208,29 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
     test "rejects invalid file id without HTTP" do
       assert {:error, :invalid_file_id} = GoogleDocsClient.get_document("../etc")
     end
+
+    # Regression: without the status check a 404 error body flowed into the
+    # append pipeline as a "document", document_end_index/1 read it as 1,
+    # and the appended section landed at the top of the target document.
+    test "returns {:error, :get_document_failed} on 404" do
+      StubIntegrations.stub_request(
+        :get,
+        "/v1/documents/doc-404",
+        {:ok, %{status: 404, body: %{"error" => %{"code" => 404, "message" => "Not found"}}}}
+      )
+
+      assert {:error, :get_document_failed} = GoogleDocsClient.get_document("doc-404")
+    end
+
+    test "returns {:error, :get_document_failed} on 5xx" do
+      StubIntegrations.stub_request(
+        :get,
+        "/v1/documents/doc-500",
+        {:ok, %{status: 500, body: %{"error" => %{"message" => "backend"}}}}
+      )
+
+      assert {:error, :get_document_failed} = GoogleDocsClient.get_document("doc-500")
+    end
   end
 
   describe "batch_update/2" do
@@ -224,6 +247,77 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
 
     test "rejects invalid file id without HTTP" do
       assert {:error, :invalid_file_id} = GoogleDocsClient.batch_update("../bad", [])
+    end
+
+    # Regression for the silent-batchUpdate bug: a 400 used to come back as
+    # {:ok, resp} and every caller reported success on an unmodified doc.
+    test "returns {:error, :batch_update_failed} on 400" do
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok,
+         %{status: 400, body: %{"error" => %{"code" => 400, "message" => "Invalid request"}}}}
+      )
+
+      assert {:error, :batch_update_failed} =
+               GoogleDocsClient.batch_update("doc-1", [%{insertText: %{}}])
+    end
+  end
+
+  describe "substitute_all_sections/3 — blank variable handling" do
+    # Google's batchUpdate is atomic and rejects insertText with empty text,
+    # so a single blank variable used to void every substitution in the
+    # batch. A blank value must emit ONLY the deleteContentRange.
+    test "a blank value clears its placeholder without a paired insertText" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "textRun" => %{"content" => "Hi {{a}} and {{b}}!\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      StubIntegrations.stub_request(
+        :get,
+        "/v1/documents/doc-sub",
+        {:ok, %{status: 200, body: doc}}
+      )
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [%{position: 0, variable_values: %{"a" => "X", "b" => ""}, image_params: %{}}]
+      ranges = %{0 => {1, 30}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("doc-sub", sections, ranges)
+
+      batch_bodies =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            do: opts[:json].requests
+
+      # One text-phase batch (no image fills → no image batch), in
+      # descending index order: {{b}} (blank → delete only), then {{a}}
+      # (delete + insert).
+      assert [
+               [
+                 %{deleteContentRange: %{range: %{startIndex: 14, endIndex: 19}}},
+                 %{deleteContentRange: %{range: %{startIndex: 4, endIndex: 9}}},
+                 %{insertText: %{location: %{index: 4}, text: "X"}}
+               ]
+             ] = batch_bodies
     end
   end
 
@@ -268,10 +362,10 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
         {:ok, %{status: 500, body: %{"error" => "boom"}}}
       )
 
-      # `get_document/1` returns the raw `{:ok, response}` map, the
-      # text extractor accepts any 2xx and produces "" if no content.
-      # Pin the actual contract — non-200 surfaces the response as-is.
-      assert {:ok, _} = GoogleDocsClient.get_document_text("doc-1")
+      # `get_document/1` checks the HTTP status (same contract as
+      # `batch_update/2`) — a non-2xx no longer surfaces its error body
+      # as a document, it fails loudly.
+      assert {:error, :get_document_failed} = GoogleDocsClient.get_document_text("doc-1")
     end
   end
 

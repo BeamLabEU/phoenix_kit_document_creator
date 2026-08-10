@@ -1784,18 +1784,60 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   defp move_to_deleted_folder(file_id, folder_key, actor_uuid) do
-    with {:ok, folder_id} <- resolve_deleted_folder_id(folder_key),
-         :ok <- GoogleDocsClient.move_file(file_id, folder_id) do
-      update_file_by_google_doc_id(file_id, %{
-        status: "trashed",
-        folder_id: folder_id,
-        path: deleted_folder_path(folder_key)
-      })
+    with {:ok, folder_id} <- resolve_deleted_folder_id(folder_key) do
+      case GoogleDocsClient.move_file(file_id, folder_id) do
+        :ok ->
+          finish_soft_delete(file_id, folder_key, folder_id, actor_uuid)
 
-      stamp_deleted_data(deleted_schema(folder_key), file_id, actor_uuid)
+        # The Drive file no longer exists (orphaned DB row — the file was
+        # hard-deleted directly in Drive and sync marked the row "lost").
+        # There is nothing to move; the delete should still succeed by
+        # trashing the DB row, otherwise such rows can never be removed from
+        # the UI. Gated on the row already being "lost" because Drive answers
+        # 404 (not 403) for a live file the current connection merely can't
+        # read — e.g. after re-pointing the Google connection or an unshare —
+        # and trashing such a row would strand it forever (sync never
+        # reconsiders "trashed"). "lost" means an independent sync pass has
+        # already confirmed the file is gone. Distinct from a missing
+        # destination folder, which surfaces as {:error, :move_failed} and
+        # correctly fails the delete.
+        {:error, :drive_file_not_found} = err ->
+          soft_delete_if_lost(file_id, folder_key, folder_id, actor_uuid, err)
 
-      :ok
+        {:error, _} = err ->
+          err
+      end
     end
+  end
+
+  defp finish_soft_delete(file_id, folder_key, folder_id, actor_uuid) do
+    update_file_by_google_doc_id(file_id, %{
+      status: "trashed",
+      folder_id: folder_id,
+      path: deleted_folder_path(folder_key)
+    })
+
+    stamp_deleted_data(deleted_schema(folder_key), file_id, actor_uuid)
+
+    :ok
+  end
+
+  defp soft_delete_if_lost(file_id, folder_key, folder_id, actor_uuid, err) do
+    if file_marked_lost?(folder_key, file_id) do
+      finish_soft_delete(file_id, folder_key, folder_id, actor_uuid)
+    else
+      err
+    end
+  end
+
+  defp file_marked_lost?(folder_key, google_doc_id) do
+    status =
+      deleted_schema(folder_key)
+      |> where([r], r.google_doc_id == ^google_doc_id)
+      |> select([r], r.status)
+      |> repo().one()
+
+    status == "lost"
   end
 
   # A given google_doc_id lives in exactly one of these tables, so we stamp /

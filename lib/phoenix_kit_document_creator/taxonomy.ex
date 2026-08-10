@@ -133,12 +133,14 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   ## Optional attributes
 
-    * `:description`, `:position` (default 0), `:status` (default `"active"`),
-      `:data`
+    * `:description`, `:position` (default: appended after the last active
+      category), `:status` (default `"active"`), `:data`
   """
   @spec create_category(map(), keyword()) ::
           {:ok, Category.t()} | {:error, Ecto.Changeset.t(Category.t())}
   def create_category(attrs, opts \\ []) do
+    attrs = put_default_position(attrs, &next_category_position/0)
+
     case %Category{} |> Category.changeset(attrs) |> repo().insert() do
       {:ok, category} = ok ->
         log_activity(%{
@@ -438,6 +440,25 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   @spec get_type!(Ecto.UUID.t()) :: Type.t()
   def get_type!(uuid), do: repo().get!(Type, uuid)
 
+  @doc """
+  Fetches a type by UUID, but only when it is currently active. Returns
+  `nil` for trashed types as well as missing uuids.
+
+  `get_type/1` returns the row regardless of status, which is correct for
+  callers that need the record itself (e.g. restoring or permanently
+  deleting it) but wrong for anywhere a type's name is rendered as a live
+  label for end users — that would surface a soft-deleted type's name as
+  if it were still a normal, selectable option. Use `get_active_type/1` in
+  those spots instead.
+  """
+  @spec get_active_type(Ecto.UUID.t()) :: Type.t() | nil
+  def get_active_type(uuid) do
+    case get_type(uuid) do
+      %Type{status: "active"} = type -> type
+      _ -> nil
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Type — write
   # ---------------------------------------------------------------------------
@@ -452,11 +473,28 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   ## Optional attributes
 
-    * `:description`, `:position`, `:status`, `:data`
+    * `:description`, `:position` (default: appended after the last active
+      type in the same category), `:status`, `:data`
   """
   @spec create_type(map(), keyword()) ::
           {:ok, Type.t()} | {:error, Ecto.Changeset.t(Type.t())}
   def create_type(attrs, opts \\ []) do
+    attrs =
+      put_default_position(attrs, fn ->
+        # The position lookup runs before the changeset, so a blank or
+        # malformed uuid (e.g. the form's "Select a category" prompt
+        # submitting "") must not reach the query — Ecto would raise a
+        # CastError instead of letting the changeset return its
+        # validation error.
+        with uuid when is_binary(uuid) <-
+               Map.get(attrs, :category_uuid) || Map.get(attrs, "category_uuid"),
+             {:ok, uuid} <- Ecto.UUID.cast(uuid) do
+          next_type_position(uuid)
+        else
+          _ -> 0
+        end
+      end)
+
     case %Type{} |> Type.changeset(attrs) |> repo().insert() do
       {:ok, type} = ok ->
         log_activity(%{
@@ -729,6 +767,49 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
+
+  # Injects a default `:position`/`"position"` (matching the caller's key
+  # style, since Ecto.Changeset.cast/3 rejects a params map with mixed atom
+  # and string keys) unless the caller already supplied one explicitly.
+  # Without this, every new category/type lands at the schema default of 0
+  # and ties for first place with whatever else is already there, forcing
+  # an immediate manual drag to move it to the end of the list.
+  defp put_default_position(attrs, position_fun) do
+    cond do
+      Map.has_key?(attrs, :position) or Map.has_key?(attrs, "position") ->
+        attrs
+
+      Enum.any?(attrs, fn {key, _value} -> is_atom(key) end) ->
+        Map.put(attrs, :position, position_fun.())
+
+      true ->
+        Map.put(attrs, "position", position_fun.())
+    end
+  end
+
+  # Read-then-insert with no transaction or unique constraint: two
+  # concurrent creates can tie for the same position. Accepted — position
+  # has no uniqueness requirement, ties order by name (as they always did
+  # under the old default-0 behaviour) and one drag fixes them; a
+  # serialized insert isn't worth the locking here.
+  defp next_category_position do
+    Category
+    |> apply_status_filter([])
+    |> select([c], max(c.position))
+    |> repo().one()
+    |> next_position()
+  end
+
+  defp next_type_position(category_uuid) do
+    from(t in Type, where: t.category_uuid == ^category_uuid)
+    |> apply_status_filter([])
+    |> select([t], max(t.position))
+    |> repo().one()
+    |> next_position()
+  end
+
+  defp next_position(nil), do: 0
+  defp next_position(max), do: max + 1
 
   # Reads the most recent trash activity log entry for the given level and uuid
   # and returns the type/template uuids that were cascade-trashed at the time as
