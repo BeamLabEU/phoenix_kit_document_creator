@@ -420,6 +420,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert Enum.at(table.cell_paragraphs, 2) == []
     end
 
+    test "body run offsets count UTF-16 units — diacritics don't shift the following run" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            styled_paragraph_block(["õäü ok\n"]),
+            styled_paragraph_block([{"Bold\n", %{"bold" => true}}])
+          ]
+        }
+      }
+
+      assert {_text, [], body_runs, _body_paragraphs} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      # "õäü ok\n" is 7 UTF-16 units (each diacritic is one unit) but 10
+      # bytes — byte-based offsets would misplace the bold run's style range
+      # by three units.
+      assert [%{start_offset: 0, length: 7}, %{start_offset: 7, length: 5, bold: true}] =
+               body_runs
+    end
+
     test "a row wider than the declared column count is trimmed to it" do
       doc = %{
         "body" => %{
@@ -641,6 +661,37 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       doc = doc_with_text("nothing special here", 1)
       assert GoogleDocsClient.find_table_marker_ranges(doc) == []
     end
+
+    # Google Docs indices count UTF-16 code units. The real templates are
+    # Estonian — õ/ä/ü are 2 UTF-8 bytes but 1 UTF-16 unit, so byte-based
+    # arithmetic would overshoot; these fixtures are the ones that separate
+    # utf16_units/1 from byte_size/1 (and, with the emoji below, from
+    # String.length/1 too).
+    test "preceding BMP diacritics count as one UTF-16 unit each, not their byte width" do
+      marker = " __PKDC_TABLE_1__ "
+      prefix = "Tähelepanu õäü\n"
+      doc = doc_with_text(prefix <> marker, 11)
+
+      assert [range] = GoogleDocsClient.find_table_marker_ranges(doc)
+
+      # 15 codepoints, all BMP → 15 UTF-16 units (byte_size is 19 — ä/õ/ü
+      # are 2 bytes each — so byte math would report 30).
+      assert range.start_index == 11 + 15
+      assert range.end_index == 11 + 15 + String.length(marker)
+    end
+
+    test "a preceding emoji counts as two UTF-16 units (surrogate pair), not one grapheme" do
+      marker = " __PKDC_TABLE_1__ "
+      prefix = "😀 heading\n"
+      doc = doc_with_text(prefix <> marker, 11)
+
+      assert [range] = GoogleDocsClient.find_table_marker_ranges(doc)
+
+      # "😀 heading\n" is 10 graphemes (String.length) but 11 UTF-16 units —
+      # the emoji is a surrogate pair. Grapheme-based math would land one
+      # unit short.
+      assert range.start_index == 11 + 11
+    end
   end
 
   describe "table_skeleton_requests/2" do
@@ -853,29 +904,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
     end
   end
 
-  describe "fill_table_cells_text/2" do
-    test "inserts each cell's text, last-first" do
-      cells = [%{insert_index: 101}, %{insert_index: 104}]
-      reqs = GoogleDocsClient.fill_table_cells_text(cells, ["X", "Y"])
-
-      assert reqs == [
-               %{"insertText" => %{"location" => %{"index" => 104}, "text" => "Y"}},
-               %{"insertText" => %{"location" => %{"index" => 101}, "text" => "X"}}
-             ]
-    end
-
-    test "skips cells whose captured text is empty" do
-      cells = [%{insert_index: 1}, %{insert_index: 2}, %{insert_index: 3}]
-      reqs = GoogleDocsClient.fill_table_cells_text(cells, ["", "middle", ""])
-
-      assert reqs == [%{"insertText" => %{"location" => %{"index" => 2}, "text" => "middle"}}]
-    end
-
-    test "empty cell_texts list produces no requests" do
-      assert GoogleDocsClient.fill_table_cells_text([%{insert_index: 1}], []) == []
-    end
-  end
-
   describe "append_template/3 — no tables (regression: unchanged behaviour)" do
     test "single insertText, no extra Docs API calls, same index math as before" do
       template_doc = %{
@@ -952,7 +980,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                             "fields" => "bold,italic"
                           }
                         },
-                        ^paragraph_style
+                        ^paragraph_style,
+                        %{
+                          "deleteParagraphBullets" => %{
+                            "range" => %{"startIndex" => 11, "endIndex" => 23}
+                          }
+                        }
                       ]}
 
       refute_receive {:batch, _}
@@ -1126,8 +1159,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                           }
                         },
                         ^hi_paragraph_style,
-                        ^bye_paragraph_style
+                        ^bye_paragraph_style,
+                        %{
+                          "deleteParagraphBullets" => %{
+                            "range" => %{"startIndex" => 11, "endIndex" => delete_bullets_end}
+                          }
+                        }
                       ]}
+
+      # The inherited-bullet sweep covers the whole inserted body — marker
+      # text included (ASCII, so String.length == UTF-16 units here).
+      assert delete_bullets_end == 11 + String.length(text)
 
       # Phase 1: skeleton — delete the marker, insert a bare 1x2 table at its
       # position. Neither template table declares tableStyle.tableColumnProperties
@@ -1183,6 +1225,146 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
       refute_receive {:batch, _}
       assert :counters.get(target_docs, 1) == 4
+    end
+
+    test "an empty styled cell gets its paragraph style replayed with no insertText" do
+      template_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "table" => %{
+                "rows" => 1,
+                "columns" => 1,
+                "tableRows" => [
+                  %{
+                    "tableCells" => [
+                      %{
+                        "content" => [
+                          %{
+                            "paragraph" => %{
+                              "elements" => [%{"textRun" => %{"content" => "\n"}}],
+                              "paragraphStyle" => %{"alignment" => "CENTER"}
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      {text, _tables} = GoogleDocsClient.flatten_template_with_table_markers(template_doc)
+
+      initial_target_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 1,
+                    "endIndex" => 10,
+                    "textRun" => %{"content" => "Existing\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      doc1 = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [%{"startIndex" => 11, "textRun" => %{"content" => text}}]
+              }
+            }
+          ]
+        }
+      }
+
+      [%{marker_index: 1, start_index: marker_start}] =
+        GoogleDocsClient.find_table_marker_ranges(doc1)
+
+      doc2 = %{
+        "body" => %{
+          "content" => [
+            %{
+              "startIndex" => marker_start,
+              "table" => %{
+                "tableRows" => [
+                  %{"tableCells" => [%{"startIndex" => 100, "content" => []}]}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      final_doc = %{
+        "body" => %{
+          "content" => [
+            %{"paragraph" => %{"elements" => [%{"startIndex" => 1, "endIndex" => 200}]}}
+          ]
+        }
+      }
+
+      target_docs = :counters.new(1, [])
+
+      get_fn = fn
+        "template-id" ->
+          {:ok, %{body: template_doc}}
+
+        "target-id" ->
+          call = :counters.get(target_docs, 1)
+          :counters.add(target_docs, 1, 1)
+
+          case call do
+            0 -> {:ok, %{body: initial_target_doc}}
+            1 -> {:ok, %{body: doc1}}
+            2 -> {:ok, %{body: doc2}}
+            3 -> {:ok, %{body: final_doc}}
+          end
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(self(), {:batch, requests})
+        {:ok, %{}}
+      end
+
+      assert {:ok, _} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, _phase0}
+      assert_receive {:batch, _phase1_skeleton}
+
+      # Phase 2: the cell inserts nothing (text is empty) but its captured
+      # CENTER alignment still replays against the new cell's pre-existing
+      # bare paragraph — a blank spacer/signature cell must not silently
+      # revert to START.
+      assert_receive {:batch, phase2}
+
+      refute Enum.any?(phase2, &Map.has_key?(&1, "insertText"))
+
+      assert [
+               %{
+                 "updateParagraphStyle" => %{
+                   "range" => %{"startIndex" => 101, "endIndex" => 102},
+                   "paragraphStyle" => %{"alignment" => "CENTER"}
+                 }
+               }
+             ] = phase2
+
+      refute_receive {:batch, _}
     end
 
     test "returns {:error, :table_marker_count_mismatch} when a marker goes missing" do
@@ -1588,13 +1770,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
           {idx, text}
         end)
 
-      assert Enum.sort(fill_targets) ==
-               Enum.sort([
-                 {mb1 + 11, "B1a"},
-                 {mb1 + 14, "B1b"},
-                 {mb2 + 11, "B2a"},
-                 {mb2 + 14, "B2b"}
-               ])
+      # Exact DESCENDING order across tables, not just the right set: an
+      # ascending fill would let an earlier insert shift a later table's
+      # captured cell indices.
+      assert fill_targets == [
+               {mb2 + 14, "B2b"},
+               {mb2 + 11, "B2a"},
+               {mb1 + 14, "B1b"},
+               {mb1 + 11, "B1a"}
+             ]
 
       refute Enum.any?(fill_targets, fn {idx, _} ->
                idx in [ma1 + 11, ma1 + 14, ma2 + 11, ma2 + 14]
@@ -2251,7 +2435,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                  }
                },
                ^heading_paragraph_style,
-               ^plain_paragraph_style
+               ^plain_paragraph_style,
+               %{
+                 "deleteParagraphBullets" => %{
+                   "range" => %{"startIndex" => 11, "endIndex" => 31}
+                 }
+               }
              ] = requests
     end
   end
@@ -2339,6 +2528,48 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert cell_para.length == 5
       assert cell_para.style.alignment == "END"
       assert table.cell_texts == ["Cell"]
+    end
+
+    test "an empty cell still captures its paragraph span so its style can replay" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "table" => %{
+                "rows" => 1,
+                "columns" => 1,
+                "tableRows" => [
+                  %{
+                    "tableCells" => [
+                      %{
+                        "content" => [
+                          %{
+                            "paragraph" => %{
+                              "elements" => [%{"textRun" => %{"content" => "\n"}}],
+                              "paragraphStyle" => %{"alignment" => "CENTER"}
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      assert {_text, [table], _, _} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      # The cell's text is empty (nothing to insert), but the bare
+      # paragraph's span survives with its alignment — cell_fill_requests/4
+      # replays it against the new cell's pre-existing paragraph.
+      assert table.cell_texts == [""]
+      assert [[cell_para]] = table.cell_paragraphs
+      assert cell_para.length == 1
+      assert cell_para.style.alignment == "CENTER"
     end
 
     test "resolves a numbered preset from doc[\"lists\"] when the level's nesting has a glyphType" do
@@ -2486,17 +2717,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         }
       ]
 
+      # Descending range order: createParagraphBullets strips leading tabs,
+      # which would shift any later (higher) range — highest goes first.
       assert GoogleDocsClient.paragraph_bullet_requests(0, spans) == [
-               %{
-                 "createParagraphBullets" => %{
-                   "range" => %{"startIndex" => 0, "endIndex" => 5},
-                   "bulletPreset" => "BULLET_DISC_CIRCLE_SQUARE"
-                 }
-               },
                %{
                  "createParagraphBullets" => %{
                    "range" => %{"startIndex" => 5, "endIndex" => 10},
                    "bulletPreset" => "NUMBERED_DECIMAL_ALPHA_ROMAN"
+                 }
+               },
+               %{
+                 "createParagraphBullets" => %{
+                   "range" => %{"startIndex" => 0, "endIndex" => 5},
+                   "bulletPreset" => "BULLET_DISC_CIRCLE_SQUARE"
                  }
                }
              ]
@@ -2514,13 +2747,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert GoogleDocsClient.paragraph_bullet_requests(0, spans) == [
                %{
                  "createParagraphBullets" => %{
-                   "range" => %{"startIndex" => 0, "endIndex" => 5},
+                   "range" => %{"startIndex" => 10, "endIndex" => 15},
                    "bulletPreset" => "BULLET_DISC_CIRCLE_SQUARE"
                  }
                },
                %{
                  "createParagraphBullets" => %{
-                   "range" => %{"startIndex" => 10, "endIndex" => 15},
+                   "range" => %{"startIndex" => 0, "endIndex" => 5},
                    "bulletPreset" => "BULLET_DISC_CIRCLE_SQUARE"
                  }
                }
@@ -2677,6 +2910,27 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                  }
                }
              ]
+
+      # The inherited-bullet sweep (deleteParagraphBullets over the whole
+      # inserted body) must run BEFORE the section's own creates within the
+      # batch: a target document ending in a list item leaks its bullet
+      # onto the fresh first paragraph via the "\n" split, and the sweep is
+      # what clears it — sweeping after the creates would wipe the
+      # section's own lists instead.
+      delete_at =
+        Enum.find_index(requests, &Map.has_key?(&1, "deleteParagraphBullets"))
+
+      first_create_at =
+        Enum.find_index(requests, &Map.has_key?(&1, "createParagraphBullets"))
+
+      assert is_integer(delete_at)
+      assert delete_at < first_create_at
+
+      assert %{
+               "deleteParagraphBullets" => %{
+                 "range" => %{"startIndex" => 11, "endIndex" => 24}
+               }
+             } = Enum.at(requests, delete_at)
     end
   end
 
