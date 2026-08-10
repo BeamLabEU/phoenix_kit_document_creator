@@ -390,6 +390,53 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert table.column_properties == []
     end
 
+    # Regression: merged cells make a source row narrower than the declared
+    # column count, but insertTable always creates a rectangular table and
+    # the fill phase zips captured cells against it positionally — a short
+    # row used to shift every later cell's content left by one, silently
+    # (row 1's text spilling into the merged header row).
+    test "a row shorter than the declared column count is padded so cells stay row-aligned" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            table_block(
+              rows: 2,
+              columns: 3,
+              row_texts: [["H\n", "H2\n"], ["a\n", "b\n", "c\n"]]
+            )
+          ]
+        }
+      }
+
+      assert {_text, [table], _, _} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      # Row-major, exactly rows × columns entries; the merged-header row's
+      # missing third cell pads as "" (no fill request), row 1 stays in row 1.
+      assert table.cell_texts == ["H", "H2", "", "a", "b", "c"]
+      assert length(table.cell_runs) == 6
+      assert Enum.at(table.cell_runs, 2) == []
+      assert length(table.cell_paragraphs) == 6
+      assert Enum.at(table.cell_paragraphs, 2) == []
+    end
+
+    test "a row wider than the declared column count is trimmed to it" do
+      doc = %{
+        "body" => %{
+          "content" => [
+            table_block(rows: 1, columns: 2, row_texts: [["a\n", "b\n", "c\n"]])
+          ]
+        }
+      }
+
+      assert {_text, [table], _, _} =
+               GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      assert table.cell_texts == ["a", "b"]
+      assert length(table.cell_runs) == 2
+      assert length(table.cell_paragraphs) == 2
+    end
+
     test "cell_runs captures per-run style and strips only the cell's trailing newline" do
       doc = %{
         "body" => %{
