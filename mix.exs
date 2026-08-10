@@ -1,7 +1,7 @@
 defmodule PhoenixKitDocumentCreator.MixProject do
   use Mix.Project
 
-  @version "0.4.8"
+  @version "0.5.0"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_document_creator"
 
   def project do
@@ -74,7 +74,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
   defp deps do
     [
       # PhoenixKit provides the Module behaviour and Settings API.
-      {:phoenix_kit, ">= 1.7.189 and < 3.0.0"},
+      {:phoenix_kit, "~> 2.0"},
 
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.2"},

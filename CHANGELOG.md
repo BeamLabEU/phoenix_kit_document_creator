@@ -1,3 +1,64 @@
+## 0.5.0 - 2026-08-10
+
+### Changed
+
+- **⚠️ Requires `phoenix_kit ~> 2.0`.** The core pin moved to `~> 2.0`, so this
+  release no longer resolves against core 1.7.
+
+  Core 2.0.0 squashes the migration chain into a single `V135` baseline and makes
+  V135 the chain's floor: `mix ecto.migrate` now *refuses* on a database below it
+  rather than migrating. Check `mix phoenix_kit.status` **before** upgrading. A
+  host below V135 must install `phoenix_kit 1.7.236` — the migration bridge, the
+  last release carrying the full pre-squash chain — migrate until the reported
+  version is at least V135, and only then move to 2.0.
+
+  This package does not call migration internals, so the change is the pin
+  itself.
+
+### Fixed
+
+- **Silent `batchUpdate` failures (PR #33).** `batch_update/2` was the only
+  client function that never checked HTTP status — a 400 from Google returned
+  `{:ok, resp}` and every caller reported success on an unmodified document.
+  `batchUpdate` is atomic and rejects `insertText` with empty text, so a single
+  blank variable voided **every** substitution in a composed document, with no
+  error and no log. Blank values now emit only the `deleteContentRange`.
+- **Dropped tables on append (PR #33).** `append_template/2` flattened via
+  `get_document_text/1`, which walks only paragraph blocks, so tables — and any
+  `{{var}}` living solely inside a table cell — were silently discarded.
+- **Cross-section table corruption (PR #33).** Pre-existing table positions were
+  read from `el["table"]["startIndex"]`, a field that does not exist in the real
+  API (`startIndex` belongs to the surrounding `StructuralElement`). Every
+  pre-existing table reported `nil`, and Erlang term ordering sorts `nil` after
+  every integer — so once more than one table-bearing section was appended, a
+  later section's cell text was written into an earlier section's table. Fixed
+  at all four call sites; the existing test mocks had encoded the bug rather
+  than the real API shape and were corrected.
+- **Formatting loss on append (PR #33).** Column widths, character styles,
+  alignment, line spacing, named styles, indents and list bullets now survive an
+  append, each stated explicitly (including `bold: false`) so a fresh insert
+  cannot inherit a neighbour's formatting.
+- **Section boundaries merged paragraphs (PR #33).** `insertPageBreak` inserts
+  an inline element, not a paragraph break, so an appended section's first
+  paragraph structurally merged with the target's last one and reformatted the
+  preceding section's tail. A literal newline now precedes the page break.
+- **Delete succeeds for orphaned rows (PR #33).** A row whose Drive file was
+  hard-deleted out-of-band could never be removed — `move_to_deleted_folder`
+  treated the 404 as fatal. A missing file now proceeds with the DB soft-delete;
+  a 404 on the move PATCH stays distinct as `:move_failed`.
+- **Template slugs were still ASCII-only (PR #32).** The delegation to core's
+  `Slug.slugify/1` added in #31 was a silent no-op: `transliterate` defaults to
+  `false`, so the `[^a-z0-9]+` pass still deleted every Cyrillic character and a
+  Cyrillic or Greek template name produced an **empty** slug — exactly the bug
+  #31 set out to fix. Now passes `transliterate: true`.
+
+### Changed
+
+- Taxonomy UX (PR #33): new categories/types default to one past the highest
+  active sibling instead of position 0; stale references to trashed
+  categories/types render a visible placeholder instead of looking cleared; the
+  flattened "All Types" filter prefixes each type with its owning category.
+
 ## 0.4.8 - 2026-06-16
 
 ### Changed
