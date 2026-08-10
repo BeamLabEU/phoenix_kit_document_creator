@@ -1947,9 +1947,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
        ) do
     {rows, columns} = table_dimensions(table)
     table_rows = Map.get(table, "tableRows", [])
-    cell_texts = Enum.flat_map(table_rows, &row_cell_texts/1)
-    cell_runs = Enum.flat_map(table_rows, &row_cell_runs/1)
-    cell_paragraphs = Enum.flat_map(table_rows, &row_cell_paragraphs(&1, doc_lists))
+
+    # Each row is normalized to exactly `columns` entries: merged cells make
+    # source rows narrower than the declared column count, but insertTable
+    # always creates a rectangular table and the fill phase zips captured
+    # cells against it positionally — a short row would shift every later
+    # cell's content left by one, silently. Padded cells are "" and get no
+    # fill requests.
+    cell_texts = Enum.flat_map(table_rows, &normalize_row(row_cell_texts(&1), columns, ""))
+    cell_runs = Enum.flat_map(table_rows, &normalize_row(row_cell_runs(&1), columns, []))
+
+    cell_paragraphs =
+      Enum.flat_map(table_rows, &normalize_row(row_cell_paragraphs(&1, doc_lists), columns, []))
+
     column_properties = extract_column_properties(table)
 
     table_info = %{
@@ -2049,6 +2059,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp row_cell_texts(%{"tableCells" => cells}), do: Enum.map(cells, &cell_text/1)
   defp row_cell_texts(_), do: []
+
+  # Pad (or trim) one captured row to the table's declared column count so
+  # the row-major cell lists always align positionally with the rectangular
+  # table `insertTable` creates. See the call sites in
+  # `flatten_block_with_styles/3`.
+  defp normalize_row(cells, columns, filler) do
+    case length(cells) do
+      n when n < columns -> cells ++ List.duplicate(filler, columns - n)
+      n when n > columns -> Enum.take(cells, columns)
+      _ -> cells
+    end
+  end
 
   # Same join `get_document_text/1` uses, scoped to one cell's content, minus
   # the trailing newline contributed by the cell's last paragraph (that
