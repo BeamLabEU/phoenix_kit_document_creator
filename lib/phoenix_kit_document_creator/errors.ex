@@ -32,6 +32,7 @@ defmodule PhoenixKitDocumentCreator.Errors do
           | :file_trashed
           | :folder_not_found
           | :folder_search_failed
+          | :get_document_failed
           | :get_file_parents_failed
           | :invalid_action
           | :invalid_file_id
@@ -77,6 +78,7 @@ defmodule PhoenixKitDocumentCreator.Errors do
   def message(:file_trashed), do: gettext("File is in the Drive trash")
   def message(:folder_not_found), do: gettext("Folder not found")
   def message(:folder_search_failed), do: gettext("Failed to search Drive for the folder")
+  def message(:get_document_failed), do: gettext("Failed to read the Google Doc")
   def message(:get_file_parents_failed), do: gettext("Failed to read file parents from Drive")
   def message(:invalid_action), do: gettext("Invalid action")
   def message(:invalid_file_id), do: gettext("Invalid file ID")

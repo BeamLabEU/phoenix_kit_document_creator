@@ -741,7 +741,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @spec get_document(String.t()) :: {:ok, map()} | {:error, term()}
   def get_document(doc_id) do
     with {:ok, fid} <- validate_file_id(doc_id) do
-      authenticated_request(:get, "#{@docs_base}/documents/#{fid}")
+      # Same status check batch_update/2 got: without it a 404/403/5xx
+      # error body flows into the append pipeline as a "document",
+      # document_end_index/1 reads it as 1, and the appended section
+      # lands at the top of the target document with no error anywhere.
+      case authenticated_request(:get, "#{@docs_base}/documents/#{fid}") do
+        {:ok, %{status: status} = resp} when status in 200..299 ->
+          {:ok, resp}
+
+        {:ok, %{body: body}} ->
+          log_drive_error("documents.get failed", body)
+          {:error, :get_document_failed}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
