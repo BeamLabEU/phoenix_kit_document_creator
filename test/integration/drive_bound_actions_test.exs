@@ -421,7 +421,11 @@ defmodule PhoenixKitDocumentCreator.Integration.DriveBoundActionsTest do
                Documents.restore_document(file_id, actor_uuid: Ecto.UUID.generate())
     end
 
-    test "returns {:error, :drive_file_not_found} when PATCH move returns 404" do
+    # The GET just confirmed the file exists, so a 404 on the PATCH itself
+    # most likely means the DESTINATION folder is missing. move_file/2 keeps
+    # that distinct from :drive_file_not_found (initial GET 404) so delete
+    # can't DB-trash a live file whose deleted-folder went missing.
+    test "returns {:error, :move_failed} when PATCH move returns 404" do
       file_id = "drv-doc-404-patch"
       stub_folder_resolution!()
 
@@ -438,7 +442,7 @@ defmodule PhoenixKitDocumentCreator.Integration.DriveBoundActionsTest do
          %{status: 404, body: %{"error" => %{"code" => 404, "message" => "File not found."}}}}
       )
 
-      assert {:error, :drive_file_not_found} =
+      assert {:error, :move_failed} =
                Documents.restore_document(file_id, actor_uuid: Ecto.UUID.generate())
     end
   end
