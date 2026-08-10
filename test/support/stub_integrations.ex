@@ -234,7 +234,9 @@ defmodule PhoenixKitDocumentCreator.Test.StubIntegrations do
 
   @spec authenticated_request(String.t(), atom(), String.t(), keyword()) ::
           {:ok, map()} | {:error, term()}
-  def authenticated_request(_provider_key, method, url, _opts) do
+  def authenticated_request(_provider_key, method, url, opts) do
+    record_request(method, url, opts)
+
     matching =
       Enum.find(rules(), fn
         {^method, %Regex{} = re, _} -> Regex.match?(re, url)
@@ -246,6 +248,35 @@ defmodule PhoenixKitDocumentCreator.Test.StubIntegrations do
       {_, _, response} -> response
       nil -> {:error, {:unstubbed_request, method, url}}
     end
+  end
+
+  @doc """
+  Every HTTP call the stub has dispatched this test, oldest first, as
+  `{method, url, opts}` tuples. `opts` is the keyword list the client
+  passed to `authenticated_request/4` — request-shape assertions read
+  the batchUpdate payload from `opts[:json].requests`.
+  """
+  @spec recorded_requests() :: [{atom(), String.t(), keyword()}]
+  def recorded_requests do
+    ensure_table()
+
+    case :ets.lookup(@ets_table, :recorded) do
+      [{:recorded, list}] -> Enum.reverse(list)
+      [] -> []
+    end
+  end
+
+  defp record_request(method, url, opts) do
+    ensure_table()
+
+    existing =
+      case :ets.lookup(@ets_table, :recorded) do
+        [{:recorded, list}] -> list
+        [] -> []
+      end
+
+    :ets.insert(@ets_table, {:recorded, [{method, url, opts} | existing]})
+    :ok
   end
 
   # ── Private helpers ─────────────────────────────────────────────────
