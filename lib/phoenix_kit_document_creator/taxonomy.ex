@@ -481,9 +481,17 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   def create_type(attrs, opts \\ []) do
     attrs =
       put_default_position(attrs, fn ->
-        case Map.get(attrs, :category_uuid) || Map.get(attrs, "category_uuid") do
-          nil -> 0
-          category_uuid -> next_type_position(category_uuid)
+        # The position lookup runs before the changeset, so a blank or
+        # malformed uuid (e.g. the form's "Select a category" prompt
+        # submitting "") must not reach the query — Ecto would raise a
+        # CastError instead of letting the changeset return its
+        # validation error.
+        with uuid when is_binary(uuid) <-
+               Map.get(attrs, :category_uuid) || Map.get(attrs, "category_uuid"),
+             {:ok, uuid} <- Ecto.UUID.cast(uuid) do
+          next_type_position(uuid)
+        else
+          _ -> 0
         end
       end)
 
