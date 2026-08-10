@@ -74,7 +74,7 @@ defmodule PhoenixKitDocumentCreator.MixProject do
   defp deps do
     [
       # PhoenixKit provides the Module behaviour and Settings API.
-      {:phoenix_kit, "~> 1.7.189"},
+      {:phoenix_kit, ">= 1.7.189 and < 3.0.0"},
 
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.2"},
