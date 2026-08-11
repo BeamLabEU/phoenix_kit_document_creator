@@ -375,7 +375,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
         }
       }
 
-      {:ok, calls} = Agent.start_link(fn -> 0 end)
+      calls = start_supervised!({Agent, fn -> 0 end})
 
       StubIntegrations.stub_request(:get, "/v1/documents/doc-shift", fn ->
         n = Agent.get_and_update(calls, fn n -> {n, n + 1} end)
@@ -469,7 +469,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
         }
       }
 
-      {:ok, calls} = Agent.start_link(fn -> 0 end)
+      calls = start_supervised!({Agent, fn -> 0 end})
 
       StubIntegrations.stub_request(:get, "/v1/documents/doc-crlf", fn ->
         n = Agent.get_and_update(calls, fn n -> {n, n + 1} end)

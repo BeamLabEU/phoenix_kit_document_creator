@@ -2701,7 +2701,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   the document is re-fetched between the two phases so image indices are accurate
   after text edits. All operations within a phase are batched in a single
   batchUpdate in reverse-index order so no substitution shifts the indices of
-  another.
+  another. Section ranges are also recalculated (`shift_ranges/2`) by the net
+  UTF-16 delta of every text replacement, so the image phase matches markers
+  against boundaries that reflect the edited document rather than the
+  original one.
   """
   @spec substitute_all_sections(String.t(), [map()], %{
           non_neg_integer() => {integer(), integer()}
