@@ -2723,6 +2723,24 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  # Google Docs silently strips these code points from any text sent through
+  # `insertText` — control characters (including CR, U+000D) and the Unicode
+  # Basic Multilingual Plane Private Use Area — per the "text" field docs on
+  # InsertTextRequest:
+  # https://developers.google.com/docs/api/reference/rest/v1/documents/request#InsertTextRequest
+  #
+  # A `:multiline` variable rendered from a `<textarea>` routinely contains
+  # CRLF line endings, so counting the raw value in UTF-16 units overstates
+  # the delta Google actually applies and drags every later section boundary
+  # rightward (see shift_ranges/2). Stripping here, once, and reusing this
+  # exact string both for the `insertText` request (apply_text_replacements/2)
+  # and for the delta arithmetic (shift_ranges/2) makes the two agree by
+  # construction — there is no second copy of the value that could drift out
+  # of sync with what Google actually inserts.
+  @docs_stripped_chars ~r/[\x{0000}-\x{0008}\x{000C}-\x{001F}\x{E000}-\x{F8FF}]/u
+
+  defp sanitize_insert_text(text), do: Regex.replace(@docs_stripped_chars, text, "")
+
   # Placeholder matches paired with their replacement values, as
   # `{key, start_index, end_index, value}`, sorted descending by start index so
   # applying them in order never shifts a not-yet-applied match.
@@ -2735,8 +2753,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       |> Enum.flat_map(&find_text_var_ranges(&1, all_keys))
       |> Enum.flat_map(fn %{key: key, start_index: s, end_index: e} = match ->
         case section_for_match(sections, ranges, match) do
-          nil -> []
-          section -> [{key, s, e, to_string(section.variable_values[key])}]
+          nil ->
+            []
+
+          section ->
+            value = section.variable_values[key] |> to_string() |> sanitize_insert_text()
+            [{key, s, e, value}]
         end
       end)
       |> Enum.sort_by(fn {_, s, _, _} -> s end, :desc)

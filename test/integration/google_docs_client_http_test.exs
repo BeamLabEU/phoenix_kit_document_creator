@@ -419,6 +419,110 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
     end
   end
 
+  describe "substitute_all_sections/3 — control characters Google strips from insertText" do
+    # `insertText` doesn't store a value verbatim: per the Docs API reference,
+    # it strips control characters (U+0000-U+0008, U+000C-U+001F — this
+    # includes CR, U+000D) and Private Use Area code points (U+E000-U+F8FF).
+    # A `:multiline` value from a <textarea> routinely carries CRLF line
+    # endings, so counting the raw value overstates the delta Google actually
+    # applies and drags every later section boundary right.
+    #
+    # "{{ notes }}" (11 units) is replaced by "rida1\r\nrida2\r\nrida3" — 19
+    # units raw, 17 once the two CRs are stripped. Section 1's image marker
+    # sits exactly at the correctly-shifted boundary (30 + 6 = 36); with the
+    # old unsanitized delta (+8) it would land outside the (wrongly) shifted
+    # range and be silently dropped — the same failure mode this PR exists
+    # to fix, reached through a different door.
+    test "a multiline value's CR is excluded from the shift delta, keeping the next section's image marker in range" do
+      before_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "{{ notes }}\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      after_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "rida1\nrida2\nrida3\n"}}
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 36, "textRun" => %{"content" => "{{ images: photos }}\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      StubIntegrations.stub_request(:get, "/v1/documents/doc-crlf", fn ->
+        n = Agent.get_and_update(calls, fn n -> {n, n + 1} end)
+        {:ok, %{status: 200, body: if(n == 0, do: before_doc, else: after_doc)}}
+      end)
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [
+        %{
+          position: 0,
+          variable_values: %{"notes" => "rida1\r\nrida2\r\nrida3"},
+          image_params: %{}
+        },
+        %{
+          position: 1,
+          variable_values: %{},
+          image_params: %{
+            "photos" => %{
+              "kind" => "image_list",
+              "columns" => 1,
+              "width_px" => 300,
+              "media" => [%{"uri" => "https://example.test/a.png"}]
+            }
+          }
+        }
+      ]
+
+      ranges = %{0 => {1, 30}, 1 => {30, 60}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("doc-crlf", sections, ranges)
+
+      all_requests =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            request <- opts[:json].requests,
+            do: request
+
+      # The insertText we actually send already has the CR stripped — the
+      # same string the delta was computed from, not the raw form value.
+      assert %{insertText: %{text: "rida1\nrida2\nrida3"}} =
+               Enum.find(all_requests, &match?(%{insertText: _}, &1))
+
+      image_requests = Enum.filter(all_requests, &match?(%{insertInlineImage: _}, &1))
+
+      assert [%{insertInlineImage: %{uri: "https://example.test/a.png"}}] = image_requests
+    end
+  end
+
   describe "shift_ranges/2" do
     test "moves boundaries by the net length change of earlier replacements" do
       # "{{ a }}" (7 units) → "LONGER" (6): −1, starting at index 3.
