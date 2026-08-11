@@ -562,6 +562,17 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
     test "returns the ranges unchanged when nothing was replaced" do
       assert GoogleDocsClient.shift_ranges(%{0 => {1, 20}}, []) == %{0 => {1, 20}}
     end
+
+    test "a replacement starting exactly on a boundary belongs to the following section and doesn't move that boundary's start" do
+      # "{{ k }}" → "x" (1 unit) replaces the 10 units at [50, 60), which is
+      # both section 0's end and section 1's start. It must not move either
+      # boundary's *start* (a replacement starting exactly at index N doesn't
+      # count toward `shift_at(deltas, N)`), but it does move section 1's end.
+      replacements = [{"k", 50, 60, "x"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 50}, 1 => {50, 100}}, replacements) ==
+               %{0 => {1, 50}, 1 => {50, 91}}
+    end
   end
 
   describe "replace_all_text/2" do
