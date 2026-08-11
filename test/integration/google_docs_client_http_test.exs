@@ -443,6 +443,18 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
       assert GoogleDocsClient.shift_ranges(%{0 => {1, 30}}, replacements) == %{0 => {1, 29}}
     end
 
+    test "counts a supplementary-plane character as two UTF-16 units" do
+      # The test above only rules out byte counting — "Kõiv" is 4 characters
+      # AND 4 UTF-16 units, so a codepoint-counting implementation would pass
+      # it too. An emoji separates the two: "a🎉b" is 3 codepoints but 4 UTF-16
+      # units, because U+1F389 is stored as a surrogate pair, and Google's
+      # indices count those as two. A 5-unit placeholder replaced by it
+      # therefore shifts later text by −1, not −2.
+      replacements = [{"a", 5, 10, "a🎉b"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 30}}, replacements) == %{0 => {1, 29}}
+    end
+
     test "returns the ranges unchanged when nothing was replaced" do
       assert GoogleDocsClient.shift_ranges(%{0 => {1, 20}}, []) == %{0 => {1, 20}}
     end
