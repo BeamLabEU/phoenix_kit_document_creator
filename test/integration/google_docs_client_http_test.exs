@@ -321,6 +321,133 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
     end
   end
 
+  describe "substitute_all_sections/3 — section ranges after text substitution" do
+    # Text substitution changes the document's length, moving every index that
+    # follows an edit. The image phase re-fetches the document (so marker
+    # indices are current) but used to match those fresh indices against the
+    # PRE-substitution section ranges: in a multi-section compose, a later
+    # section's `{{ images: name }}` marker drifts out of its own stale range
+    # and is silently skipped — no images, no error.
+    test "an image marker that shifted with the text is still filled" do
+      # Section 0 holds a placeholder that SHRINKS by 10 units when filled
+      # ("{{ customer }}" = 14 → "Acme" = 4); section 1 holds the image marker.
+      before_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "Tellija: {{ customer }}\n"}}
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 25, "textRun" => %{"content" => "{{ images: photos }}\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      # What the second GET sees: section 0's text is now 10 units shorter, so
+      # the marker sits at 15 instead of 25.
+      after_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "Tellija: Acme\n"}}
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 15, "textRun" => %{"content" => "{{ images: photos }}\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      {:ok, calls} = Agent.start_link(fn -> 0 end)
+
+      StubIntegrations.stub_request(:get, "/v1/documents/doc-shift", fn ->
+        n = Agent.get_and_update(calls, fn n -> {n, n + 1} end)
+        {:ok, %{status: 200, body: if(n == 0, do: before_doc, else: after_doc)}}
+      end)
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [
+        %{position: 0, variable_values: %{"customer" => "Acme"}, image_params: %{}},
+        %{
+          position: 1,
+          variable_values: %{},
+          image_params: %{
+            "photos" => %{
+              "kind" => "image_list",
+              "columns" => 1,
+              "width_px" => 300,
+              "media" => [%{"uri" => "https://example.test/a.png"}]
+            }
+          }
+        }
+      ]
+
+      ranges = %{0 => {1, 25}, 1 => {25, 46}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("doc-shift", sections, ranges)
+
+      image_requests =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            request <- opts[:json].requests,
+            Map.has_key?(request, :insertInlineImage),
+            do: request
+
+      assert [%{insertInlineImage: %{uri: "https://example.test/a.png"}}] = image_requests
+    end
+  end
+
+  describe "shift_ranges/2" do
+    test "moves boundaries by the net length change of earlier replacements" do
+      # "{{ a }}" (7 units) → "LONGER" (6): −1, starting at index 3.
+      replacements = [{"a", 3, 10, "LONGER"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 20}, 1 => {20, 40}}, replacements) ==
+               %{0 => {1, 19}, 1 => {19, 39}}
+    end
+
+    test "leaves a boundary that precedes every replacement untouched" do
+      replacements = [{"a", 30, 40, "x"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 20}, 1 => {20, 60}}, replacements) ==
+               %{0 => {1, 20}, 1 => {20, 51}}
+    end
+
+    test "counts a replacement value in UTF-16 code units, not bytes" do
+      # "õ" is 2 bytes in UTF-8 but 1 unit in Google's indexing; a 5-unit
+      # placeholder replaced by "Kõiv" (4 units) shifts later text by −1.
+      replacements = [{"a", 5, 10, "Kõiv"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 30}}, replacements) == %{0 => {1, 29}}
+    end
+
+    test "returns the ranges unchanged when nothing was replaced" do
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 20}}, []) == %{0 => {1, 20}}
+    end
+  end
+
   describe "replace_all_text/2" do
     test "delegates to batch_update for non-empty variables" do
       StubIntegrations.stub_request(

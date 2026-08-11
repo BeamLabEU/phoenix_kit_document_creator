@@ -2710,17 +2710,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def substitute_all_sections(doc_id, sections, ranges) do
     # Phase 1: text substitution — one fetch, one batchUpdate in reverse-index order.
     with {:ok, %{body: doc}} <- get_document(doc_id),
-         {:ok, _} <- substitute_all_text(doc_id, doc, sections, ranges),
+         {:ok, replacements} <- collect_text_replacements(doc, sections, ranges),
+         {:ok, _} <- apply_text_replacements(doc_id, replacements),
          # Phase 2: image substitution — re-fetch so indices are current after text edits.
          {:ok, %{body: doc2}} <- get_document(doc_id) do
-      substitute_all_images(doc_id, doc2, sections, ranges)
+      # Text substitution changed the document's length, so every index after an
+      # edit has moved. The image phase matches `{{ images: name }}` markers by
+      # index against each section's range — passing the pre-substitution ranges
+      # silently drops markers that drifted outside their (stale) section, which
+      # is exactly what happens to the last sections of a multi-section compose.
+      substitute_all_images(doc_id, doc2, sections, shift_ranges(ranges, replacements))
     end
   end
 
-  defp substitute_all_text(doc_id, doc, sections, ranges) do
+  # Placeholder matches paired with their replacement values, as
+  # `{key, start_index, end_index, value}`, sorted descending by start index so
+  # applying them in order never shifts a not-yet-applied match.
+  defp collect_text_replacements(doc, sections, ranges) do
     all_keys = sections |> Enum.flat_map(&Map.keys(&1.variable_values)) |> Enum.uniq()
 
-    requests =
+    replacements =
       doc
       |> body_text_runs()
       |> Enum.flat_map(&find_text_var_ranges(&1, all_keys))
@@ -2731,7 +2740,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         end
       end)
       |> Enum.sort_by(fn {_, s, _, _} -> s end, :desc)
-      |> Enum.flat_map(fn {_, s, e, value} ->
+
+    {:ok, replacements}
+  end
+
+  defp apply_text_replacements(doc_id, replacements) do
+    requests =
+      Enum.flat_map(replacements, fn {_, s, e, value} ->
         delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
 
         # Google rejects insertText with empty text, and batchUpdate is atomic —
@@ -2744,6 +2759,39 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       end)
 
     maybe_batch(&batch_update/2, doc_id, requests)
+  end
+
+  @doc false
+  # Moves each section boundary by the net length change of every replacement
+  # that starts before it. A replacement is `{key, start_index, end_index,
+  # value}`; its delta is `length(value) - (end_index - start_index)` in UTF-16
+  # code units — the unit Google Docs indices are expressed in.
+  #
+  # Boundaries are exclusive-end, so a replacement starting exactly at a
+  # boundary belongs to the following section and must not move that boundary's
+  # start; `<` (not `<=`) is deliberate on both edges.
+  @spec shift_ranges(%{non_neg_integer() => {integer(), integer()}}, [
+          {String.t(), integer(), integer(), String.t()}
+        ]) :: %{non_neg_integer() => {integer(), integer()}}
+  def shift_ranges(ranges, []), do: ranges
+
+  def shift_ranges(ranges, replacements) do
+    deltas =
+      Enum.map(replacements, fn {_key, s, e, value} ->
+        {s, utf16_units(value) - (e - s)}
+      end)
+
+    Map.new(ranges, fn {position, {range_start, range_end}} ->
+      {position,
+       {range_start + shift_at(deltas, range_start), range_end + shift_at(deltas, range_end)}}
+    end)
+  end
+
+  defp shift_at(deltas, index) do
+    deltas
+    |> Enum.filter(fn {s, _delta} -> s < index end)
+    |> Enum.map(fn {_s, delta} -> delta end)
+    |> Enum.sum()
   end
 
   defp substitute_all_images(doc_id, doc2, sections, ranges) do
