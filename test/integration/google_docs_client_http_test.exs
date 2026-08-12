@@ -321,6 +321,260 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
     end
   end
 
+  describe "substitute_all_sections/3 — section ranges after text substitution" do
+    # Text substitution changes the document's length, moving every index that
+    # follows an edit. The image phase re-fetches the document (so marker
+    # indices are current) but used to match those fresh indices against the
+    # PRE-substitution section ranges: in a multi-section compose, a later
+    # section's `{{ images: name }}` marker drifts out of its own stale range
+    # and is silently skipped — no images, no error.
+    test "an image marker that shifted with the text is still filled" do
+      # Section 0 holds a placeholder that SHRINKS by 10 units when filled
+      # ("{{ customer }}" = 14 → "Acme" = 4); section 1 holds the image marker.
+      before_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "Tellija: {{ customer }}\n"}}
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 25, "textRun" => %{"content" => "{{ images: photos }}\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      # What the second GET sees: section 0's text is now 10 units shorter, so
+      # the marker sits at 15 instead of 25.
+      after_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "Tellija: Acme\n"}}
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 15, "textRun" => %{"content" => "{{ images: photos }}\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      calls = start_supervised!({Agent, fn -> 0 end})
+
+      StubIntegrations.stub_request(:get, "/v1/documents/doc-shift", fn ->
+        n = Agent.get_and_update(calls, fn n -> {n, n + 1} end)
+        {:ok, %{status: 200, body: if(n == 0, do: before_doc, else: after_doc)}}
+      end)
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [
+        %{position: 0, variable_values: %{"customer" => "Acme"}, image_params: %{}},
+        %{
+          position: 1,
+          variable_values: %{},
+          image_params: %{
+            "photos" => %{
+              "kind" => "image_list",
+              "columns" => 1,
+              "width_px" => 300,
+              "media" => [%{"uri" => "https://example.test/a.png"}]
+            }
+          }
+        }
+      ]
+
+      ranges = %{0 => {1, 25}, 1 => {25, 46}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("doc-shift", sections, ranges)
+
+      image_requests =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            request <- opts[:json].requests,
+            Map.has_key?(request, :insertInlineImage),
+            do: request
+
+      assert [%{insertInlineImage: %{uri: "https://example.test/a.png"}}] = image_requests
+    end
+  end
+
+  describe "substitute_all_sections/3 — control characters Google strips from insertText" do
+    # `insertText` doesn't store a value verbatim: per the Docs API reference,
+    # it strips control characters (U+0000-U+0008, U+000C-U+001F — this
+    # includes CR, U+000D) and Private Use Area code points (U+E000-U+F8FF).
+    # A `:multiline` value from a <textarea> routinely carries CRLF line
+    # endings, so counting the raw value overstates the delta Google actually
+    # applies and drags every later section boundary right.
+    #
+    # "{{ notes }}" (11 units) is replaced by "rida1\r\nrida2\r\nrida3" — 19
+    # units raw, 17 once the two CRs are stripped. Section 1's image marker
+    # sits exactly at the correctly-shifted boundary (30 + 6 = 36); with the
+    # old unsanitized delta (+8) it would land outside the (wrongly) shifted
+    # range and be silently dropped — the same failure mode this PR exists
+    # to fix, reached through a different door.
+    test "a multiline value's CR is excluded from the shift delta, keeping the next section's image marker in range" do
+      before_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "{{ notes }}\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      after_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "rida1\nrida2\nrida3\n"}}
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 36, "textRun" => %{"content" => "{{ images: photos }}\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      calls = start_supervised!({Agent, fn -> 0 end})
+
+      StubIntegrations.stub_request(:get, "/v1/documents/doc-crlf", fn ->
+        n = Agent.get_and_update(calls, fn n -> {n, n + 1} end)
+        {:ok, %{status: 200, body: if(n == 0, do: before_doc, else: after_doc)}}
+      end)
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [
+        %{
+          position: 0,
+          variable_values: %{"notes" => "rida1\r\nrida2\r\nrida3"},
+          image_params: %{}
+        },
+        %{
+          position: 1,
+          variable_values: %{},
+          image_params: %{
+            "photos" => %{
+              "kind" => "image_list",
+              "columns" => 1,
+              "width_px" => 300,
+              "media" => [%{"uri" => "https://example.test/a.png"}]
+            }
+          }
+        }
+      ]
+
+      ranges = %{0 => {1, 30}, 1 => {30, 60}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("doc-crlf", sections, ranges)
+
+      all_requests =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            request <- opts[:json].requests,
+            do: request
+
+      # The insertText we actually send already has the CR stripped — the
+      # same string the delta was computed from, not the raw form value.
+      assert %{insertText: %{text: "rida1\nrida2\nrida3"}} =
+               Enum.find(all_requests, &match?(%{insertText: _}, &1))
+
+      image_requests = Enum.filter(all_requests, &match?(%{insertInlineImage: _}, &1))
+
+      assert [%{insertInlineImage: %{uri: "https://example.test/a.png"}}] = image_requests
+    end
+  end
+
+  describe "shift_ranges/2" do
+    test "moves boundaries by the net length change of earlier replacements" do
+      # "{{ a }}" (7 units) → "LONGER" (6): −1, starting at index 3.
+      replacements = [{"a", 3, 10, "LONGER"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 20}, 1 => {20, 40}}, replacements) ==
+               %{0 => {1, 19}, 1 => {19, 39}}
+    end
+
+    test "leaves a boundary that precedes every replacement untouched" do
+      replacements = [{"a", 30, 40, "x"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 20}, 1 => {20, 60}}, replacements) ==
+               %{0 => {1, 20}, 1 => {20, 51}}
+    end
+
+    test "counts a replacement value in UTF-16 code units, not bytes" do
+      # "õ" is 2 bytes in UTF-8 but 1 unit in Google's indexing; a 5-unit
+      # placeholder replaced by "Kõiv" (4 units) shifts later text by −1.
+      replacements = [{"a", 5, 10, "Kõiv"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 30}}, replacements) == %{0 => {1, 29}}
+    end
+
+    test "counts a supplementary-plane character as two UTF-16 units" do
+      # The test above only rules out byte counting — "Kõiv" is 4 characters
+      # AND 4 UTF-16 units, so a codepoint-counting implementation would pass
+      # it too. An emoji separates the two: "a🎉b" is 3 codepoints but 4 UTF-16
+      # units, because U+1F389 is stored as a surrogate pair, and Google's
+      # indices count those as two. A 5-unit placeholder replaced by it
+      # therefore shifts later text by −1, not −2.
+      replacements = [{"a", 5, 10, "a🎉b"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 30}}, replacements) == %{0 => {1, 29}}
+    end
+
+    test "returns the ranges unchanged when nothing was replaced" do
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 20}}, []) == %{0 => {1, 20}}
+    end
+
+    test "a replacement starting exactly on a boundary belongs to the following section and doesn't move that boundary's start" do
+      # "{{ k }}" → "x" (1 unit) replaces the 10 units at [50, 60), which is
+      # both section 0's end and section 1's start. It must not move either
+      # boundary's *start* (a replacement starting exactly at index N doesn't
+      # count toward `shift_at(deltas, N)`), but it does move section 1's end.
+      replacements = [{"k", 50, 60, "x"}]
+
+      assert GoogleDocsClient.shift_ranges(%{0 => {1, 50}, 1 => {50, 100}}, replacements) ==
+               %{0 => {1, 50}, 1 => {50, 91}}
+    end
+  end
+
   describe "replace_all_text/2" do
     test "delegates to batch_update for non-empty variables" do
       StubIntegrations.stub_request(
