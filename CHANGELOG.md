@@ -1,3 +1,41 @@
+## 0.5.2 - 2026-08-12
+
+### Fixed
+
+- **Images silently vanished from composed documents whose earlier sections
+  carried variables** (#35). Composing runs two phases — text substitution,
+  then images. The image phase re-fetches the document so marker indices are
+  current, but it matched those fresh indices against section ranges captured
+  *before* any text was substituted. Substitution changes the document's
+  length, so every index after an edit moves; a marker that drifted outside its
+  own stale range was filtered out and skipped.
+  `substitute_all_sections/3` still returned `:ok`, so nothing reported a
+  problem — the images simply were not there.
+
+  Measured on a live four-section compose: an image marker at 16145 with a
+  section range of `{16080, 16227}` moved to 15975 after the text phase
+  shortened the document by 170 units, falling below its own range, and ten
+  drawings disappeared without an error. This is why the bug looked
+  intermittent — the drift grows with how many variables the *preceding*
+  sections carry, so reordering templates so the image section follows
+  variable-heavy ones is enough to trigger it.
+
+  Section boundaries are now shifted by the net length change of every
+  replacement that starts before them (`shift_ranges/2`), counted in UTF-16
+  code units — the unit Google Docs indices are expressed in.
+- **Multiline values overstated that shift.** `insertText` does not store a
+  value verbatim: Google strips control characters (U+0000–U+0008,
+  U+000C–U+001F, which includes CR) and Private Use Area code points. A
+  `:multiline` variable from a `<textarea>` routinely carries CRLF endings, so
+  counting the raw value dragged every later boundary rightward. Values are now
+  sanitized once and that exact string is used both for the `insertText`
+  request and for the delta arithmetic, so the two agree by construction.
+
+### Changed
+
+- Dependency updates: `phoenix` 1.8.11, `beamlab_ex_aws_sqs` 5.0.1, `hackney`
+  4.7.4 and the transitive set.
+
 ## 0.5.1 - 2026-08-11
 
 ### Changed

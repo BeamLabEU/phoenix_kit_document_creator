@@ -2287,7 +2287,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Phase 1b of the append-with-tables pipeline (see `append_template/3`): for
   each located marker, delete the marker text and insert a bare table of its
   captured dimensions at that position. Sorted descending by `start_index`
-  (same convention as `substitute_all_text/4` and
+  (same convention as `collect_text_replacements/3` and
   `build_image_batch_requests/3`) so earlier replacements in the list don't
   shift the indices of markers still to be processed.
 
