@@ -2287,7 +2287,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Phase 1b of the append-with-tables pipeline (see `append_template/3`): for
   each located marker, delete the marker text and insert a bare table of its
   captured dimensions at that position. Sorted descending by `start_index`
-  (same convention as `substitute_all_text/4` and
+  (same convention as `collect_text_replacements/3` and
   `build_image_batch_requests/3`) so earlier replacements in the list don't
   shift the indices of markers still to be processed.
 
@@ -2701,7 +2701,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   the document is re-fetched between the two phases so image indices are accurate
   after text edits. All operations within a phase are batched in a single
   batchUpdate in reverse-index order so no substitution shifts the indices of
-  another.
+  another. Section ranges are also recalculated (`shift_ranges/2`) by the net
+  UTF-16 delta of every text replacement, so the image phase matches markers
+  against boundaries that reflect the edited document rather than the
+  original one.
   """
   @spec substitute_all_sections(String.t(), [map()], %{
           non_neg_integer() => {integer(), integer()}
@@ -2710,28 +2713,65 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def substitute_all_sections(doc_id, sections, ranges) do
     # Phase 1: text substitution — one fetch, one batchUpdate in reverse-index order.
     with {:ok, %{body: doc}} <- get_document(doc_id),
-         {:ok, _} <- substitute_all_text(doc_id, doc, sections, ranges),
+         {:ok, replacements} <- collect_text_replacements(doc, sections, ranges),
+         {:ok, _} <- apply_text_replacements(doc_id, replacements),
          # Phase 2: image substitution — re-fetch so indices are current after text edits.
          {:ok, %{body: doc2}} <- get_document(doc_id) do
-      substitute_all_images(doc_id, doc2, sections, ranges)
+      # Text substitution changed the document's length, so every index after an
+      # edit has moved. The image phase matches `{{ images: name }}` markers by
+      # index against each section's range — passing the pre-substitution ranges
+      # silently drops markers that drifted outside their (stale) section, which
+      # is exactly what happens to the last sections of a multi-section compose.
+      substitute_all_images(doc_id, doc2, sections, shift_ranges(ranges, replacements))
     end
   end
 
-  defp substitute_all_text(doc_id, doc, sections, ranges) do
+  # Google Docs silently strips these code points from any text sent through
+  # `insertText` — control characters (including CR, U+000D) and the Unicode
+  # Basic Multilingual Plane Private Use Area — per the "text" field docs on
+  # InsertTextRequest:
+  # https://developers.google.com/docs/api/reference/rest/v1/documents/request#InsertTextRequest
+  #
+  # A `:multiline` variable rendered from a `<textarea>` routinely contains
+  # CRLF line endings, so counting the raw value in UTF-16 units overstates
+  # the delta Google actually applies and drags every later section boundary
+  # rightward (see shift_ranges/2). Stripping here, once, and reusing this
+  # exact string both for the `insertText` request (apply_text_replacements/2)
+  # and for the delta arithmetic (shift_ranges/2) makes the two agree by
+  # construction — there is no second copy of the value that could drift out
+  # of sync with what Google actually inserts.
+  @docs_stripped_chars ~r/[\x{0000}-\x{0008}\x{000C}-\x{001F}\x{E000}-\x{F8FF}]/u
+
+  defp sanitize_insert_text(text), do: Regex.replace(@docs_stripped_chars, text, "")
+
+  # Placeholder matches paired with their replacement values, as
+  # `{key, start_index, end_index, value}`, sorted descending by start index so
+  # applying them in order never shifts a not-yet-applied match.
+  defp collect_text_replacements(doc, sections, ranges) do
     all_keys = sections |> Enum.flat_map(&Map.keys(&1.variable_values)) |> Enum.uniq()
 
-    requests =
+    replacements =
       doc
       |> body_text_runs()
       |> Enum.flat_map(&find_text_var_ranges(&1, all_keys))
       |> Enum.flat_map(fn %{key: key, start_index: s, end_index: e} = match ->
         case section_for_match(sections, ranges, match) do
-          nil -> []
-          section -> [{key, s, e, to_string(section.variable_values[key])}]
+          nil ->
+            []
+
+          section ->
+            value = section.variable_values[key] |> to_string() |> sanitize_insert_text()
+            [{key, s, e, value}]
         end
       end)
       |> Enum.sort_by(fn {_, s, _, _} -> s end, :desc)
-      |> Enum.flat_map(fn {_, s, e, value} ->
+
+    {:ok, replacements}
+  end
+
+  defp apply_text_replacements(doc_id, replacements) do
+    requests =
+      Enum.flat_map(replacements, fn {_, s, e, value} ->
         delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
 
         # Google rejects insertText with empty text, and batchUpdate is atomic —
@@ -2744,6 +2784,39 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       end)
 
     maybe_batch(&batch_update/2, doc_id, requests)
+  end
+
+  @doc false
+  # Moves each section boundary by the net length change of every replacement
+  # that starts before it. A replacement is `{key, start_index, end_index,
+  # value}`; its delta is `length(value) - (end_index - start_index)` in UTF-16
+  # code units — the unit Google Docs indices are expressed in.
+  #
+  # Boundaries are exclusive-end, so a replacement starting exactly at a
+  # boundary belongs to the following section and must not move that boundary's
+  # start; `<` (not `<=`) is deliberate on both edges.
+  @spec shift_ranges(%{non_neg_integer() => {integer(), integer()}}, [
+          {String.t(), integer(), integer(), String.t()}
+        ]) :: %{non_neg_integer() => {integer(), integer()}}
+  def shift_ranges(ranges, []), do: ranges
+
+  def shift_ranges(ranges, replacements) do
+    deltas =
+      Enum.map(replacements, fn {_key, s, e, value} ->
+        {s, utf16_units(value) - (e - s)}
+      end)
+
+    Map.new(ranges, fn {position, {range_start, range_end}} ->
+      {position,
+       {range_start + shift_at(deltas, range_start), range_end + shift_at(deltas, range_end)}}
+    end)
+  end
+
+  defp shift_at(deltas, index) do
+    deltas
+    |> Enum.filter(fn {s, _delta} -> s < index end)
+    |> Enum.map(fn {_s, delta} -> delta end)
+    |> Enum.sum()
   end
 
   defp substitute_all_images(doc_id, doc2, sections, ranges) do

@@ -42,7 +42,7 @@ defmodule PhoenixKitDocumentCreator.Test.StubIntegrations do
   @ets_table :pkdc_stub_integrations
 
   @typedoc "Canned response for a single HTTP call: `%Req.Response{}` or `{:error, term()}`."
-  @type canned :: {:ok, map()} | {:error, term()}
+  @type canned :: {:ok, map()} | {:error, term()} | (-> {:ok, map()} | {:error, term()})
 
   @doc "Mark the stub as 'connected' — `get_integration/1` returns `{:ok, _}`."
   @spec connected!(String.t()) :: :ok
@@ -245,6 +245,10 @@ defmodule PhoenixKitDocumentCreator.Test.StubIntegrations do
       end)
 
     case matching do
+      # A zero-arity function lets a test vary its answer per call — needed
+      # where the client fetches the same URL twice and the document has
+      # changed in between (text phase → image phase).
+      {_, _, response} when is_function(response, 0) -> response.()
       {_, _, response} -> response
       nil -> {:error, {:unstubbed_request, method, url}}
     end

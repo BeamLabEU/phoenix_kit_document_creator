@@ -125,7 +125,7 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   # Core's rule, not a local copy. The pipeline this replaced deleted every
   # non-ASCII character, so a Cyrillic or Greek name produced an EMPTY slug and
   # German lost its umlauts. Slug.slugify/2 romanizes instead.
-  defp slugify(name), do: Slug.slugify(name)
+  defp slugify(name), do: Slug.slugify(name, transliterate: true)
 
   @doc "Changeset for upserting from Google Drive sync data."
   def sync_changeset(template, attrs) do
