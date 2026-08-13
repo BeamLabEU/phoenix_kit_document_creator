@@ -9,6 +9,22 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   Note: Several fields (`content_html`, `content_css`, `content_native`, header/footer
   associations) are retained for database compatibility but are no longer used in the
   Google Docs workflow. A future migration should remove these columns.
+
+  ## Deprecated taxonomy columns (do not drop)
+
+  As of migration chain **V2**, a template's category/group membership is a
+  **many-to-many** relation stored in `phoenix_kit_doc_template_taxonomy`
+  (see `PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy`). The two
+  single-binding columns below are **deprecated** but deliberately **kept
+  and kept populated** as a mirror of the *primary* membership so the ANDI
+  consumer keeps working until it migrates to the join table:
+
+    * `category_uuid` — mirror of the lowest-`Category.position` membership
+    * `type_uuid` — that membership's group
+
+  Both are stamped with a deprecation `COMMENT` in the database (V2). They
+  must not be dropped without a coordinated ANDI migration; a later chain
+  version will remove them once ANDI reads memberships directly.
   """
   use Ecto.Schema
   use PhoenixKit.SchemaPrefix
