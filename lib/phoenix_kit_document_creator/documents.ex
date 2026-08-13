@@ -32,6 +32,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   alias PhoenixKitDocumentCreator.Schemas.DocumentSection
   alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Schemas.TemplatePreset
+  alias PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy
 
   @module_key "document_creator"
   @pubsub_topic "document_creator:files"
@@ -308,17 +309,29 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc """
-  Lists published `Template` structs for a category, ordered by name.
+  Lists published `Template` structs that belong to a category, ordered by
+  name.
+
+  Sourced through the many-to-many `phoenix_kit_doc_template_taxonomy` join
+  (V2), so a template that belongs to several categories is returned under
+  **each** of them. Each returned struct's `type_uuid` is overridden with
+  the group of *this* category's membership, so downstream grouping-by-type
+  stays correct per category.
 
   Returns full schema structs (not file maps) so callers get `variables`,
   `status`, and atom-key access. Used by the preset section editor.
   """
   @spec list_templates_for_category(binary()) :: [Template.t()]
   def list_templates_for_category(category_uuid) do
-    Template
-    |> where([t], t.category_uuid == ^category_uuid and t.status == "published")
-    |> order_by([t], asc: t.name)
+    from(t in Template,
+      join: m in TemplateTaxonomy,
+      on: m.template_uuid == t.uuid,
+      where: m.category_uuid == ^category_uuid and t.status == "published",
+      order_by: [asc: t.name],
+      select: {t, m.type_uuid}
+    )
     |> repo().all()
+    |> Enum.map(fn {template, type_uuid} -> %{template | type_uuid: type_uuid} end)
   end
 
   defp schema_to_file_map(record) do

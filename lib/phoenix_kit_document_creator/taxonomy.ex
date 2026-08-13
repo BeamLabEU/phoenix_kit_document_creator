@@ -30,6 +30,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   alias PhoenixKitDocumentCreator.Schemas.Category
   alias PhoenixKitDocumentCreator.Schemas.Template
+  alias PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy
   alias PhoenixKitDocumentCreator.Schemas.Type
 
   @module_key "document_creator"
@@ -689,6 +690,122 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Template membership (many-to-many: template ↔ category, with group)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Lists a template's category memberships (one row per category, each with
+  an optional group `type_uuid`), oldest first.
+  """
+  @spec list_memberships_for_template(Ecto.UUID.t()) :: [TemplateTaxonomy.t()]
+  def list_memberships_for_template(template_uuid) do
+    from(m in TemplateTaxonomy,
+      where: m.template_uuid == ^template_uuid,
+      order_by: [asc: m.inserted_at, asc: m.uuid]
+    )
+    |> repo().all()
+  end
+
+  @doc """
+  Replaces a template's full set of category memberships in one transaction.
+
+  `memberships` is a list of maps with a `:category_uuid` (required) and an
+  optional `:type_uuid` group (atom or string keys accepted). The write is
+  replace-all: existing rows for the template are deleted first, then the
+  given set is inserted. An empty list clears all memberships.
+
+  After the swap, the **primary** membership — the one whose category has
+  the lowest `Category.position` — is mirrored into the legacy
+  `templates.category_uuid`/`type_uuid` columns so backward-compatible
+  single-binding readers keep working (an empty set clears the mirror).
+
+  Broadcasts `{:doc_taxonomy_changed, :template, template_uuid}`.
+  """
+  @spec set_template_memberships(Ecto.UUID.t(), [map()], keyword()) ::
+          {:ok, [TemplateTaxonomy.t()]} | {:error, term()}
+  def set_template_memberships(template_uuid, memberships, opts \\ [])
+      when is_binary(template_uuid) and is_list(memberships) do
+    normalized = Enum.map(memberships, &normalize_membership/1)
+
+    result =
+      repo().transaction(fn ->
+        from(m in TemplateTaxonomy, where: m.template_uuid == ^template_uuid)
+        |> repo().delete_all()
+
+        inserted =
+          Enum.map(normalized, fn attrs ->
+            %TemplateTaxonomy{}
+            |> TemplateTaxonomy.changeset(Map.put(attrs, :template_uuid, template_uuid))
+            |> repo().insert()
+            |> case do
+              {:ok, row} -> row
+              {:error, changeset} -> repo().rollback(changeset)
+            end
+          end)
+
+        mirror_primary_membership(template_uuid, normalized)
+        inserted
+      end)
+
+    with {:ok, rows} <- result do
+      log_activity(%{
+        action: "doc_taxonomy.template.memberships_set",
+        mode: "manual",
+        actor_uuid: opts[:actor_uuid],
+        resource_type: "template",
+        resource_uuid: template_uuid,
+        metadata: %{"count" => length(rows)}
+      })
+
+      broadcast(:template, template_uuid)
+      {:ok, rows}
+    end
+  end
+
+  # Accepts atom- or string-keyed membership maps and returns an atom-keyed
+  # map suitable for `TemplateTaxonomy.changeset/2` (which rejects mixed keys).
+  defp normalize_membership(%{} = m) do
+    %{
+      category_uuid: Map.get(m, :category_uuid) || Map.get(m, "category_uuid"),
+      type_uuid: Map.get(m, :type_uuid) || Map.get(m, "type_uuid")
+    }
+  end
+
+  # Mirrors the primary membership into the legacy template columns. Empty
+  # membership set clears both columns.
+  defp mirror_primary_membership(template_uuid, []) do
+    from(t in Template, where: t.uuid == ^template_uuid)
+    |> repo().update_all(
+      set: [category_uuid: nil, type_uuid: nil, updated_at: DateTime.utc_now()]
+    )
+  end
+
+  defp mirror_primary_membership(template_uuid, memberships) do
+    cat_uuids = Enum.map(memberships, & &1.category_uuid)
+
+    positions =
+      from(c in Category, where: c.uuid in ^cat_uuids, select: {c.uuid, c.position})
+      |> repo().all()
+      |> Map.new()
+
+    # Lowest category position wins; ties break on category_uuid for a stable
+    # choice (a category missing a position row sorts last).
+    primary =
+      Enum.min_by(memberships, fn m ->
+        {Map.get(positions, m.category_uuid, 2_147_483_647), m.category_uuid}
+      end)
+
+    from(t in Template, where: t.uuid == ^template_uuid)
+    |> repo().update_all(
+      set: [
+        category_uuid: primary.category_uuid,
+        type_uuid: primary.type_uuid,
+        updated_at: DateTime.utc_now()
+      ]
+    )
   end
 
   # ---------------------------------------------------------------------------
