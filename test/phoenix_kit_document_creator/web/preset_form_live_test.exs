@@ -122,6 +122,9 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLiveTest do
         )
         |> Repo.insert()
 
+      # Category membership is the source of truth for the template picker.
+      {:ok, _} = Taxonomy.set_template_memberships(tmpl.uuid, [%{category_uuid: cat.uuid}])
+
       {:ok, view, _} =
         live(conn, "/en/admin/document-creator/categories/#{cat.uuid}/presets/new")
 
@@ -154,6 +157,9 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLiveTest do
           }
         )
         |> Repo.insert()
+
+      # Category membership is the source of truth for the template picker.
+      {:ok, _} = Taxonomy.set_template_memberships(tmpl.uuid, [%{category_uuid: cat.uuid}])
 
       {:ok, view, _} =
         live(conn, "/en/admin/document-creator/categories/#{cat.uuid}/presets/new")
