@@ -150,15 +150,16 @@ end
 
 # Exclude integration tests when DB is not available.
 #
-# `:requires_unreleased_core` is also excluded by default — those tests
-# exercise `PhoenixKit.Integrations.add_connection/3`'s strict-UUID
-# return shape (`{:ok, %{uuid: _}}`) which only exists in unpublished
-# core. The canonical test channel for those is via `phoenix_kit_parent`
-# (path-dep override). Standalone Hex `~> 1.7` runs would emit shape
-# mismatches; opt-in via `mix test --include requires_unreleased_core`
-# once the matching core version is published.
-exclude = [:requires_unreleased_core]
-exclude = if repo_available, do: exclude, else: [:integration | exclude]
+# `:requires_unreleased_core` used to be excluded by default: the tagged
+# tests exercise `PhoenixKit.Integrations.add_connection/3`'s strict-UUID
+# return shape (`{:ok, %{uuid: _}}`), which at the time existed only in
+# unpublished core, so a standalone Hex `~> 1.7` run emitted shape
+# mismatches. The comment said to drop the exclusion "once the matching
+# core version is published" — that happened at core 2.0, and this package
+# has pinned `{:phoenix_kit, "~> 2.0"}` since. Every version the pin can
+# resolve carries the shape, so the exclusion had stopped protecting
+# anything and was simply hiding four passing tests from every run.
+exclude = if repo_available, do: [], else: [:integration]
 
 # `:requires_phoenix_kit_i18n_api` gates tests that use
 # `PhoenixKit.Dashboard.Tab.localized_label/1` (the gettext_backend

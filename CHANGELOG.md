@@ -1,3 +1,61 @@
+## 0.6.0 - 2026-08-13
+
+### Added
+
+- **A template can belong to several categories at once** (#38). Membership
+  moves from the single `category_uuid`/`type_uuid` pair on
+  `phoenix_kit_doc_templates` to a many-to-many join table,
+  `phoenix_kit_doc_template_taxonomy` — one row per `(template, category)`
+  with its own optional group, unique on `(template_uuid, category_uuid)`.
+  The admin UI gains a per-row checkbox popover for templates; documents keep
+  their single-select dropdowns. `Taxonomy.set_template_memberships/3` is a
+  transactional replace-all, and `Documents.list_templates_for_category/1` now
+  sources through the join, so a multi-category template appears under each
+  category annotated with that category's group.
+
+- **Migration chain V2** creates the join table, backfills one row per template
+  that currently has a category, and stamps a deprecation `COMMENT` on the
+  legacy columns. ⚠️ **`down(target: 1)` destroys all multi-category data** —
+  it drops the join table, and only the single-binding legacy mirror survives.
+
+- **A "Standard groups" seed** (`Taxonomy.ensure_default_group_order/2`, plus a
+  button in the categories admin) puts the nine canonical ANDI groups in order.
+  Idempotent.
+
+### Changed
+
+- **The legacy `templates.category_uuid`/`type_uuid` columns are kept and kept
+  populated** as a backward-compatibility mirror of the *primary* membership
+  (the one whose category has the lowest `Category.position`), so the ANDI
+  consumer keeps working unchanged until it migrates to the join table. **Do
+  not drop them without a coordinated ANDI migration.** The mirror is
+  recomputed from surviving active memberships on category/group
+  trash and restore, so it never points at a trashed category and a
+  multi-category template does not vanish from single-category readers.
+
+- `trash_category/1` and `trash_type/1` no longer trash a template that still
+  belongs to another active category.
+
+- Dependency updates: `phoenix_kit` 2.3.0.
+
+### Fixed
+
+- **The image picker was hardcoded in Russian** (#37). Every visible string in
+  `Web.Components.ImagePicker` was a Russian literal — "Убрать", "Сбросить",
+  "Поиск по имени", "Файлы не найдены", "Назад", "Вперёд" — so an Estonian or
+  English user got Russian in the middle of an otherwise translated page. All
+  seven now go through Gettext, and the file counter became a real `ngettext/3`
+  instead of the abbreviation that was there to dodge plurals. The documents
+  view's "Search by name…" msgid had never been extracted, so it fell through
+  to English in every locale; it is now in the catalogues.
+
+- Four tests tagged `:requires_unreleased_core` no longer sit excluded from
+  every run. They gate on `PhoenixKit.Integrations.add_connection/3`'s
+  strict-UUID return shape, which was unpublished when the tag was added but
+  has shipped since core 2.0 — and this package has pinned `~> 2.0` since, so
+  every version the pin can resolve carries it. The exclusion had stopped
+  protecting anything and was hiding four passing tests.
+
 ## 0.5.2 - 2026-08-12
 
 ### Fixed
