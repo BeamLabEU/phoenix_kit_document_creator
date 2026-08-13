@@ -1088,8 +1088,8 @@ msgstr "Add section"
 
 #: lib/phoenix_kit_document_creator/web/components/image_picker.ex:214
 #, elixir-autogen, elixir-format
-msgid "Back"
-msgstr "Back"
+msgid "Previous"
+msgstr "Previous"
 
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:242
 #, elixir-autogen, elixir-format

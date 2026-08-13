@@ -211,7 +211,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
           class="btn btn-xs btn-ghost"
           disabled={@page == 0}
         >
-          &lsaquo; {gettext("Back")}
+          &lsaquo; {gettext("Previous")}
         </button>
         <span class="text-xs text-base-content/60">
           {@page + 1} / {max(1, div(@filtered_count - 1, @page_size) + 1)}

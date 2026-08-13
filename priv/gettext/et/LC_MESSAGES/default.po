@@ -1088,8 +1088,8 @@ msgstr "Lisa sektsioon"
 
 #: lib/phoenix_kit_document_creator/web/components/image_picker.ex:214
 #, elixir-autogen, elixir-format
-msgid "Back"
-msgstr "Tagasi"
+msgid "Previous"
+msgstr "Eelmine"
 
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:242
 #, elixir-autogen, elixir-format
@@ -1131,7 +1131,7 @@ msgstr "Uus eelseade"
 #: lib/phoenix_kit_document_creator/web/components/image_picker.ex:227
 #, elixir-autogen, elixir-format
 msgid "Next"
-msgstr "Edasi"
+msgstr "Järgmine"
 
 #: lib/phoenix_kit_document_creator/web/components/image_picker.ex:171
 #, elixir-autogen, elixir-format

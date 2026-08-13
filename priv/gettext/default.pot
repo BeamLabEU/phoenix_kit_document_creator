@@ -1098,7 +1098,7 @@ msgstr ""
 
 #: lib/phoenix_kit_document_creator/web/components/image_picker.ex:214
 #, elixir-autogen, elixir-format
-msgid "Back"
+msgid "Previous"
 msgstr ""
 
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:242
