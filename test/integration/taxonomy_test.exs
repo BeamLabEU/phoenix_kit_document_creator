@@ -37,6 +37,15 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
       tmpl
     end
 
+    # A template's memberships as a sorted `{category_uuid, type_uuid}` list —
+    # order-independent comparison for round-trip assertions.
+    defp memberships(template_uuid) do
+      template_uuid
+      |> Taxonomy.list_memberships_for_template()
+      |> Enum.map(&{&1.category_uuid, &1.type_uuid})
+      |> Enum.sort()
+    end
+
     # ===========================================================================
     # Category CRUD
     # ===========================================================================
@@ -410,6 +419,34 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
         assert Repo.get!(Template, sole.uuid).status == "trashed"
       end
 
+      test "recomputes the mirror off the trashed category and restores it on restore" do
+        cat_a = create_category!()
+        cat_b = create_category!()
+        multi = create_template!()
+
+        {:ok, _} =
+          Taxonomy.set_template_memberships(multi.uuid, [
+            %{category_uuid: cat_a.uuid},
+            %{category_uuid: cat_b.uuid}
+          ])
+
+        # Primary mirror is cat_a (created first → lowest position).
+        assert Repo.get!(Template, multi.uuid).category_uuid == cat_a.uuid
+
+        before = memberships(multi.uuid)
+
+        {:ok, trashed} = Taxonomy.trash_category(cat_a)
+        # Mirror moved to the surviving active category so the template does not
+        # vanish from legacy single-category readers.
+        assert Repo.get!(Template, multi.uuid).category_uuid == cat_b.uuid
+
+        {:ok, _} = Taxonomy.restore_category(trashed)
+        # Memberships are byte-for-byte preserved across the round trip …
+        assert memberships(multi.uuid) == before
+        # … and the mirror reclaims cat_a (lowest position, active again).
+        assert Repo.get!(Template, multi.uuid).category_uuid == cat_a.uuid
+      end
+
       test "does not cascade to documents" do
         cat = create_category!()
 
@@ -537,6 +574,8 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
 
         # Survives — still a member of the active cat_b.
         assert Repo.get!(Template, multi.uuid).status == "published"
+        # The deleted group is cleared from the mirror (no dangling type ref).
+        assert Repo.get!(Template, multi.uuid).type_uuid == nil
       end
     end
 

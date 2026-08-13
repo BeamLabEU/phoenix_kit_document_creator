@@ -252,6 +252,13 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> Category.changeset(%{status: "deleted"})
           |> repo().update!()
 
+        # Recompute the legacy mirror for every template that had a membership
+        # in this category, now that it is deleted: survivors move to their next
+        # active category, sole-category templates clear to nil. Keeps the
+        # mirror from pointing at a trashed category (which would hide a
+        # multi-category template from legacy single-category readers).
+        recompute_mirrors(membership_template_uuids(category_uuid: category.uuid))
+
         {updated, template_uuids, cascade_type_uuids}
       end)
 
@@ -318,9 +325,16 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> repo().update_all(set: [status: "published", updated_at: now])
         end
 
-        category
-        |> Category.changeset(%{status: "active"})
-        |> repo().update!()
+        restored =
+          category
+          |> Category.changeset(%{status: "active"})
+          |> repo().update!()
+
+        # Now that the category is active again, its members can reclaim it as
+        # their primary mirror where appropriate.
+        recompute_mirrors(membership_template_uuids(category_uuid: category.uuid))
+
+        restored
       end)
 
     with {:ok, updated} <- result do
@@ -575,6 +589,10 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> Type.changeset(%{status: "deleted"})
           |> repo().update!()
 
+        # The group is deleted; clear it from the mirror of any template whose
+        # mirror pointed at it (recompute nulls references to deleted types).
+        recompute_mirrors(membership_template_uuids(type_uuid: type.uuid))
+
         {updated, template_uuids}
       end)
 
@@ -614,9 +632,16 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> repo().update_all(set: [status: "published", updated_at: now])
         end
 
-        type
-        |> Type.changeset(%{status: "active"})
-        |> repo().update!()
+        restored =
+          type
+          |> Type.changeset(%{status: "active"})
+          |> repo().update!()
+
+        # The group is active again; let it reappear in the mirror where it is
+        # the primary category's group.
+        recompute_mirrors(membership_template_uuids(type_uuid: type.uuid))
+
+        restored
       end)
 
     with {:ok, updated} <- result do
@@ -868,6 +893,54 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
     )
   end
 
+  # Distinct template uuids that hold a membership matching the given filter
+  # (`category_uuid:` or `type_uuid:`). Used to find the templates whose mirror
+  # a taxonomy trash/restore may need to recompute.
+  defp membership_template_uuids(category_uuid: category_uuid) do
+    from(m in TemplateTaxonomy, where: m.category_uuid == ^category_uuid, select: m.template_uuid)
+    |> repo().all()
+    |> Enum.uniq()
+  end
+
+  defp membership_template_uuids(type_uuid: type_uuid) do
+    from(m in TemplateTaxonomy, where: m.type_uuid == ^type_uuid, select: m.template_uuid)
+    |> repo().all()
+    |> Enum.uniq()
+  end
+
+  # Recomputes the legacy mirror of each template from its memberships in
+  # ACTIVE categories only (references to a soft-deleted group are cleared).
+  # This keeps the mirror honest across category/type trash + restore: it never
+  # points at a deleted category, and a multi-category template moves to its
+  # next active category instead of vanishing from legacy single-category
+  # readers. A template with no active membership left gets a nil mirror.
+  defp recompute_mirrors([]), do: :ok
+
+  defp recompute_mirrors(template_uuids) do
+    Enum.each(template_uuids, fn template_uuid ->
+      active =
+        from(m in TemplateTaxonomy,
+          join: c in Category,
+          on: c.uuid == m.category_uuid,
+          left_join: t in Type,
+          on: t.uuid == m.type_uuid,
+          where: m.template_uuid == ^template_uuid and c.status != "deleted",
+          select: {m.category_uuid, m.type_uuid, t.status}
+        )
+        |> repo().all()
+        |> Enum.map(fn {category_uuid, type_uuid, type_status} ->
+          %{
+            category_uuid: category_uuid,
+            type_uuid: if(type_status == "deleted", do: nil, else: type_uuid)
+          }
+        end)
+
+      mirror_primary_membership(template_uuid, active)
+    end)
+
+    :ok
+  end
+
   # ---------------------------------------------------------------------------
   # Default group order (part А — the canonical ANDI group set)
   # ---------------------------------------------------------------------------
@@ -899,7 +972,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   """
   @spec ensure_default_group_order(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
   def ensure_default_group_order(category_uuid, opts \\ []) when is_binary(category_uuid) do
-    result = repo().transaction(fn -> seed_default_groups(category_uuid, opts) end)
+    result = repo().transaction(fn -> seed_default_groups(category_uuid) end)
 
     with {:ok, _} <- result do
       log_activity(%{
@@ -918,7 +991,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   # Transaction body for `ensure_default_group_order/2`: position the canonical
   # groups 0..8, then push any others after them.
-  defp seed_default_groups(category_uuid, opts) do
+  defp seed_default_groups(category_uuid) do
     now = DateTime.utc_now()
     existing = list_types_for_category(category_uuid)
     by_name = Map.new(existing, &{&1.name, &1})
@@ -926,7 +999,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
     @default_group_order
     |> Enum.with_index()
     |> Enum.each(fn {name, index} ->
-      upsert_canonical_group(category_uuid, by_name, name, index, now, opts)
+      upsert_canonical_group(category_uuid, by_name, name, index, now)
     end)
 
     reposition_extra_groups(existing, now)
@@ -946,10 +1019,18 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   # Creates a canonical group at `index`, or repositions an existing one with
   # the same name. Rolls the seed transaction back on an invalid create.
-  defp upsert_canonical_group(category_uuid, by_name, name, index, now, opts) do
+  #
+  # Inserts the Type directly (not via `create_type/2`) on purpose: this runs
+  # inside `ensure_default_group_order/2`'s transaction, and `create_type/2`
+  # would `broadcast/2` + `log_activity/1` from an uncommitted transaction. The
+  # single post-commit broadcast is emitted by `ensure_default_group_order/2`.
+  defp upsert_canonical_group(category_uuid, by_name, name, index, now) do
     case Map.get(by_name, name) do
       nil ->
-        case create_type(%{name: name, category_uuid: category_uuid, position: index}, opts) do
+        %Type{}
+        |> Type.changeset(%{name: name, category_uuid: category_uuid, position: index})
+        |> repo().insert()
+        |> case do
           {:ok, _} -> :ok
           {:error, changeset} -> repo().rollback(changeset)
         end

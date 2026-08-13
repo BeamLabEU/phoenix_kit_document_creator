@@ -140,6 +140,12 @@ Source of truth for template categorisation.
 
 Unique `(template_uuid, category_uuid)` — one group per category per template.
 
+> **Rollback warning.** This table is the source of truth for template
+> categorisation. Rolling the module chain back past V2 (`down(target: 1)`)
+> **drops it and loses all multi-category data** — only the single legacy
+> mirror binding per template survives. A later `up` re-backfills from that one
+> column, not from the (now-gone) memberships.
+
 ### `phoenix_kit_doc_documents`
 
 | Column | Type | Description |

@@ -95,13 +95,29 @@ defmodule PhoenixKitDocumentCreator.Migrations.Schema do
     )
   end
 
-  @doc "Rolls back to `target` (version-aware; 0 removes everything this chain added)."
+  @doc """
+  Rolls back to `target` (version-aware; 0 removes everything this chain added).
+
+  Ecto wraps each migration's `down/1` in a DDL transaction (this chain does
+  not set `@disable_ddl_transaction`), so the statements below are atomic: a
+  failure rolls the whole rollback back and leaves the `dcr_schema` marker
+  untouched. The `DROP TABLE` runs first so a failure never strands a
+  "marker present, table gone" state.
+
+  ⚠️ **Rolling back past V2 destroys all multi-category data.** `down(target: 1)`
+  drops `phoenix_kit_doc_template_taxonomy` — the source of truth for template
+  memberships. Only the V1 legacy mirror (`templates.category_uuid`/`type_uuid`,
+  a single binding per template) survives; every membership a template held
+  beyond its primary one is lost. A subsequent `up` re-backfills only from that
+  single mirror column.
+  """
   def down(opts \\ []) do
     prefix = validated_prefix(opts)
     p = prefix_str(prefix)
     target = Keyword.get(opts, :version, 0)
 
     if target < 2 do
+      # DROP first (see moduledoc): destroys all V2 membership rows.
       execute("DROP TABLE IF EXISTS #{p}phoenix_kit_doc_template_taxonomy")
       # Clear the deprecation notes added by V2's up/1.
       execute("COMMENT ON COLUMN #{p}phoenix_kit_doc_templates.category_uuid IS NULL")

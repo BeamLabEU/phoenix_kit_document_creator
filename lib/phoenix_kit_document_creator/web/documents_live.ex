@@ -477,39 +477,37 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
+  # The single-select category/type dropdowns are DOCUMENTS-only. Templates
+  # categorise through the multi-category checkbox popover, so a stray
+  # template-kind payload is ignored rather than written as a single binding
+  # (which would drop the template's other memberships).
   def handle_event(
         "set_taxonomy_category",
-        %{"google_doc_id" => gid, "kind" => kind} = params,
+        %{"google_doc_id" => gid, "kind" => "document"} = params,
         socket
       ) do
     category_uuid = blank_to_nil(params["value"])
     taxonomy = %{category_uuid: category_uuid, type_uuid: nil}
-
-    result =
-      case kind do
-        "template" -> Documents.update_template_taxonomy(gid, taxonomy)
-        "document" -> Documents.update_document_taxonomy(gid, taxonomy)
-      end
+    result = Documents.update_document_taxonomy(gid, taxonomy)
 
     {:noreply, apply_taxonomy_result(socket, result, :category)}
   end
 
+  def handle_event("set_taxonomy_category", %{"kind" => _}, socket), do: {:noreply, socket}
+
   def handle_event(
         "set_taxonomy_type",
-        %{"google_doc_id" => gid, "kind" => kind} = params,
+        %{"google_doc_id" => gid, "kind" => "document"} = params,
         socket
       ) do
     type_uuid = blank_to_nil(params["value"])
     taxonomy = %{type_uuid: type_uuid}
-
-    result =
-      case kind do
-        "template" -> Documents.update_template_taxonomy(gid, taxonomy)
-        "document" -> Documents.update_document_taxonomy(gid, taxonomy)
-      end
+    result = Documents.update_document_taxonomy(gid, taxonomy)
 
     {:noreply, apply_taxonomy_result(socket, result, :type)}
   end
+
+  def handle_event("set_taxonomy_type", %{"kind" => _}, socket), do: {:noreply, socket}
 
   # Templates use a multi-category checkbox popover (part Б). Toggling a
   # category adds/removes that (category, nil-group) membership; the group

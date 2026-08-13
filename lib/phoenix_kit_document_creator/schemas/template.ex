@@ -19,11 +19,22 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   and kept populated** as a mirror of the *primary* membership so the ANDI
   consumer keeps working until it migrates to the join table:
 
-    * `category_uuid` — mirror of the lowest-`Category.position` membership
-    * `type_uuid` — that membership's group
+    * `category_uuid` — mirror of the lowest-`Category.position` **active**
+      membership
+    * `type_uuid` — that membership's group (nulled when the group is
+      soft-deleted)
 
-  Both are stamped with a deprecation `COMMENT` in the database (V2). They
-  must not be dropped without a coordinated ANDI migration; a later chain
+  The mirror is recomputed whenever memberships are written
+  (`Taxonomy.set_template_memberships/3`) **and** on category/type soft-delete
+  and restore (`trash_category`/`restore_category`/`trash_type`/`restore_type`
+  recompute it from the surviving active memberships). It therefore never
+  points at a trashed category/group. One best-effort gap remains:
+  **permanent** deletion of a category/type relies on the FK (`ON DELETE SET
+  NULL`), so a multi-category template can be left with a nil mirror until its
+  memberships are next written — the join table stays authoritative.
+
+  Both columns are stamped with a deprecation `COMMENT` in the database (V2).
+  They must not be dropped without a coordinated ANDI migration; a later chain
   version will remove them once ANDI reads memberships directly.
   """
   use Ecto.Schema

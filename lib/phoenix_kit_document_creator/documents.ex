@@ -33,7 +33,6 @@ defmodule PhoenixKitDocumentCreator.Documents do
   alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Schemas.TemplatePreset
   alias PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy
-  alias PhoenixKitDocumentCreator.Taxonomy
 
   @module_key "document_creator"
   @pubsub_topic "document_creator:files"
@@ -1239,59 +1238,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
-  @doc """
-  Sets (or clears) the category and type of a template identified by
-  `google_doc_id`. `taxonomy` is a map with optional `:category_uuid`
-  and `:type_uuid` keys (`nil` clears).
+  # NOTE: There is deliberately no `update_template_taxonomy/3`. A template's
+  # categorisation is many-to-many (`phoenix_kit_doc_template_taxonomy`, V2) and
+  # is written exclusively through `Taxonomy.set_template_memberships/3` (the
+  # admin checkbox popover). A single-binding "set the template's category/type"
+  # helper would silently collapse a multi-category template to one membership,
+  # so it was removed rather than kept as a trap.
 
-  A template's categorisation is many-to-many (`phoenix_kit_doc_template_taxonomy`,
-  V2); the admin UI writes it through `Taxonomy.set_template_memberships/3`.
-  This single-binding helper is kept for callers that still work in the
-  legacy `{category, type}` shape — it delegates to the membership API
-  (collapsing the template to the one membership, or none when the category
-  is cleared) so the join table can never drift from the legacy mirror
-  columns.
-  """
-  @spec update_template_taxonomy(String.t(), map(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def update_template_taxonomy(google_doc_id, taxonomy, opts \\ []) do
-    case get_template_by_google_doc_id(google_doc_id) do
-      nil ->
-        {:error, :not_found}
-
-      template ->
-        # Merge the (possibly partial) taxonomy over the template's current
-        # binding, then express it as the full membership set.
-        category_uuid = taxonomy_field(taxonomy, :category_uuid, template.category_uuid)
-        type_uuid = taxonomy_field(taxonomy, :type_uuid, template.type_uuid)
-
-        memberships =
-          if is_nil(category_uuid),
-            do: [],
-            else: [%{category_uuid: category_uuid, type_uuid: type_uuid}]
-
-        case Taxonomy.set_template_memberships(template.uuid, memberships, opts) do
-          {:ok, _rows} ->
-            broadcast_files_changed()
-            {:ok, schema_to_file_map(repo().get!(Template, template.uuid))}
-
-          {:error, _} = err ->
-            err
-        end
-    end
-  end
-
-  # Reads a taxonomy override (atom or string key) falling back to the
-  # template's current value when the key is absent. An explicit nil clears.
-  defp taxonomy_field(taxonomy, key, current) do
-    cond do
-      Map.has_key?(taxonomy, key) -> Map.get(taxonomy, key)
-      Map.has_key?(taxonomy, Atom.to_string(key)) -> Map.get(taxonomy, Atom.to_string(key))
-      true -> current
-    end
-  end
-
-  @doc "Like `update_template_taxonomy/3` but for a Document."
+  @doc "Sets or clears the category/type of a Document (single binding)."
   @spec update_document_taxonomy(String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def update_document_taxonomy(google_doc_id, taxonomy, _opts \\ []) do

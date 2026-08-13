@@ -66,28 +66,29 @@ defmodule PhoenixKitDocumentCreator.TaxonomyMembershipTest do
     assert is_nil(reloaded.type_uuid)
   end
 
-  test "Documents.update_template_taxonomy keeps the join table in sync", ctx do
-    {:ok, tmpl} =
-      %Template{}
-      |> Template.changeset(%{name: "Legacy", google_doc_id: "gd-legacy-1"})
-      |> Repo.insert()
+  test "the legacy mirror always reflects a real membership (or nil when none)", ctx do
+    {:ok, tmpl} = %Template{} |> Template.changeset(%{name: "M"}) |> Repo.insert()
 
     {:ok, _} =
-      Documents.update_template_taxonomy(tmpl.google_doc_id, %{
-        category_uuid: ctx.klient.uuid,
-        type_uuid: ctx.g1.uuid
-      })
+      Taxonomy.set_template_memberships(tmpl.uuid, [
+        %{category_uuid: ctx.tootmine.uuid, type_uuid: ctx.g2.uuid},
+        %{category_uuid: ctx.klient.uuid, type_uuid: ctx.g1.uuid}
+      ])
 
-    assert [%{category_uuid: cat, type_uuid: type}] =
-             Taxonomy.list_memberships_for_template(tmpl.uuid)
+    members = Taxonomy.list_memberships_for_template(tmpl.uuid)
+    reloaded = Repo.get!(Template, tmpl.uuid)
 
-    assert cat == ctx.klient.uuid
-    assert type == ctx.g1.uuid
+    # Mirror category is one of the actual memberships — never a phantom.
+    assert reloaded.category_uuid in Enum.map(members, & &1.category_uuid)
+    # …specifically the lowest-position one (Klient created first → position 0).
+    assert reloaded.category_uuid == ctx.klient.uuid
+    assert reloaded.type_uuid == ctx.g1.uuid
 
-    # Clearing the category clears the membership too — no orphaned join row.
-    {:ok, _} =
-      Documents.update_template_taxonomy(tmpl.google_doc_id, %{category_uuid: nil, type_uuid: nil})
-
+    # No memberships ⇒ nil mirror and no orphaned join rows.
+    {:ok, _} = Taxonomy.set_template_memberships(tmpl.uuid, [])
+    cleared = Repo.get!(Template, tmpl.uuid)
+    assert is_nil(cleared.category_uuid)
+    assert is_nil(cleared.type_uuid)
     assert Taxonomy.list_memberships_for_template(tmpl.uuid) == []
   end
 
