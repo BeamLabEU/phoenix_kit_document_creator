@@ -524,15 +524,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       ) do
     checked? = Map.get(params, "value") == "on"
     current = current_membership_maps(template_uuid)
-
-    updated =
-      if checked? do
-        if Enum.any?(current, &(&1.category_uuid == category_uuid)),
-          do: current,
-          else: current ++ [%{category_uuid: category_uuid, type_uuid: nil}]
-      else
-        Enum.reject(current, &(&1.category_uuid == category_uuid))
-      end
+    updated = toggle_category_membership(current, category_uuid, checked?)
 
     {:noreply, apply_membership_write(socket, template_uuid, updated)}
   end
@@ -544,15 +536,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       ) do
     type_uuid = blank_to_nil(params["value"])
     current = current_membership_maps(template_uuid)
-
-    updated =
-      if Enum.any?(current, &(&1.category_uuid == category_uuid)) do
-        Enum.map(current, fn m ->
-          if m.category_uuid == category_uuid, do: %{m | type_uuid: type_uuid}, else: m
-        end)
-      else
-        current ++ [%{category_uuid: category_uuid, type_uuid: type_uuid}]
-      end
+    updated = set_group_for_category(current, category_uuid, type_uuid)
 
     {:noreply, apply_membership_write(socket, template_uuid, updated)}
   end
@@ -2542,6 +2526,33 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   defp apply_taxonomy_result(socket, {:error, _reason}, :type) do
     assign(socket, error: gettext("Could not update type"))
   end
+
+  # Adds (checked) or removes (unchecked) a category from the membership list.
+  # Adding preserves an existing membership's group; a new one starts groupless.
+  defp toggle_category_membership(current, category_uuid, true) do
+    if Enum.any?(current, &(&1.category_uuid == category_uuid)),
+      do: current,
+      else: current ++ [%{category_uuid: category_uuid, type_uuid: nil}]
+  end
+
+  defp toggle_category_membership(current, category_uuid, false) do
+    Enum.reject(current, &(&1.category_uuid == category_uuid))
+  end
+
+  # Sets the group of an existing category membership, or adds the (category,
+  # group) pair when the template isn't yet in that category.
+  defp set_group_for_category(current, category_uuid, type_uuid) do
+    if Enum.any?(current, &(&1.category_uuid == category_uuid)) do
+      Enum.map(current, &put_membership_group(&1, category_uuid, type_uuid))
+    else
+      current ++ [%{category_uuid: category_uuid, type_uuid: type_uuid}]
+    end
+  end
+
+  defp put_membership_group(%{category_uuid: category_uuid} = m, category_uuid, type_uuid),
+    do: %{m | type_uuid: type_uuid}
+
+  defp put_membership_group(m, _category_uuid, _type_uuid), do: m
 
   # Current memberships of a template as plain `%{category_uuid, type_uuid}`
   # maps — the shape `Taxonomy.set_template_memberships/3` expects.

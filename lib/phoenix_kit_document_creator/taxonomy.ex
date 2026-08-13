@@ -762,17 +762,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
         from(m in TemplateTaxonomy, where: m.template_uuid == ^template_uuid)
         |> repo().delete_all()
 
-        inserted =
-          Enum.map(normalized, fn attrs ->
-            %TemplateTaxonomy{}
-            |> TemplateTaxonomy.changeset(Map.put(attrs, :template_uuid, template_uuid))
-            |> repo().insert()
-            |> case do
-              {:ok, row} -> row
-              {:error, changeset} -> repo().rollback(changeset)
-            end
-          end)
-
+        inserted = Enum.map(normalized, &insert_membership!(template_uuid, &1))
         mirror_primary_membership(template_uuid, normalized)
         inserted
       end)
@@ -789,6 +779,18 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
       broadcast(:template, template_uuid)
       {:ok, rows}
+    end
+  end
+
+  # Inserts one membership row inside the replace-all transaction; rolls the
+  # whole swap back if the row is invalid (e.g. a bad category FK).
+  defp insert_membership!(template_uuid, attrs) do
+    %TemplateTaxonomy{}
+    |> TemplateTaxonomy.changeset(Map.put(attrs, :template_uuid, template_uuid))
+    |> repo().insert()
+    |> case do
+      {:ok, row} -> row
+      {:error, changeset} -> repo().rollback(changeset)
     end
   end
 
@@ -866,40 +868,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   """
   @spec ensure_default_group_order(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
   def ensure_default_group_order(category_uuid, opts \\ []) when is_binary(category_uuid) do
-    result =
-      repo().transaction(fn ->
-        now = DateTime.utc_now()
-        existing = list_types_for_category(category_uuid)
-        by_name = Map.new(existing, &{&1.name, &1})
-
-        @default_group_order
-        |> Enum.with_index()
-        |> Enum.each(fn {name, index} ->
-          case Map.get(by_name, name) do
-            nil ->
-              case create_type(
-                     %{name: name, category_uuid: category_uuid, position: index},
-                     opts
-                   ) do
-                {:ok, _} -> :ok
-                {:error, changeset} -> repo().rollback(changeset)
-              end
-
-            %Type{} = type ->
-              from(t in Type, where: t.uuid == ^type.uuid)
-              |> repo().update_all(set: [position: index, updated_at: now])
-          end
-        end)
-
-        # Keep non-canonical groups, but after the canonical 0..8 block.
-        existing
-        |> Enum.reject(&(&1.name in @default_group_order))
-        |> Enum.with_index(length(@default_group_order))
-        |> Enum.each(fn {type, index} ->
-          from(t in Type, where: t.uuid == ^type.uuid)
-          |> repo().update_all(set: [position: index, updated_at: now])
-        end)
-      end)
+    result = repo().transaction(fn -> seed_default_groups(category_uuid, opts) end)
 
     with {:ok, _} <- result do
       log_activity(%{
@@ -913,6 +882,50 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
       broadcast(:type, nil)
       :ok
+    end
+  end
+
+  # Transaction body for `ensure_default_group_order/2`: position the canonical
+  # groups 0..8, then push any others after them.
+  defp seed_default_groups(category_uuid, opts) do
+    now = DateTime.utc_now()
+    existing = list_types_for_category(category_uuid)
+    by_name = Map.new(existing, &{&1.name, &1})
+
+    @default_group_order
+    |> Enum.with_index()
+    |> Enum.each(fn {name, index} ->
+      upsert_canonical_group(category_uuid, by_name, name, index, now, opts)
+    end)
+
+    reposition_extra_groups(existing, now)
+  end
+
+  # Non-canonical active groups keep their rows but move after the canonical
+  # 0..8 block so the seeded order is collision-free.
+  defp reposition_extra_groups(existing, now) do
+    existing
+    |> Enum.reject(&(&1.name in @default_group_order))
+    |> Enum.with_index(length(@default_group_order))
+    |> Enum.each(fn {type, index} ->
+      from(t in Type, where: t.uuid == ^type.uuid)
+      |> repo().update_all(set: [position: index, updated_at: now])
+    end)
+  end
+
+  # Creates a canonical group at `index`, or repositions an existing one with
+  # the same name. Rolls the seed transaction back on an invalid create.
+  defp upsert_canonical_group(category_uuid, by_name, name, index, now, opts) do
+    case Map.get(by_name, name) do
+      nil ->
+        case create_type(%{name: name, category_uuid: category_uuid, position: index}, opts) do
+          {:ok, _} -> :ok
+          {:error, changeset} -> repo().rollback(changeset)
+        end
+
+      %Type{} = type ->
+        from(t in Type, where: t.uuid == ^type.uuid)
+        |> repo().update_all(set: [position: index, updated_at: now])
     end
   end
 
