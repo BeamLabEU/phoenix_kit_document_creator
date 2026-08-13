@@ -27,11 +27,17 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   The mirror is recomputed whenever memberships are written
   (`Taxonomy.set_template_memberships/3`) **and** on category/type soft-delete
   and restore (`trash_category`/`restore_category`/`trash_type`/`restore_type`
-  recompute it from the surviving active memberships). It therefore never
-  points at a trashed category/group. One best-effort gap remains:
-  **permanent** deletion of a category/type relies on the FK (`ON DELETE SET
-  NULL`), so a multi-category template can be left with a nil mirror until its
-  memberships are next written — the join table stays authoritative.
+  recompute it from the surviving active memberships). As long as it is kept in
+  sync this way — the normal write path, an invariant enforced by tests — it
+  does not point at a trashed category/group.
+
+  **Permanent** deletion is the one best-effort gap, driven by the join table's
+  own foreign keys rather than a recompute: deleting a category cascades the
+  membership row away (`ON DELETE CASCADE`), while deleting a type nulls that
+  row's `type_uuid` (`ON DELETE SET NULL`). Either way the mirror is only
+  brought back in line lazily, on the template's next membership write; until
+  then a multi-category template may keep a stale/nil mirror. The join table
+  stays authoritative.
 
   Both columns are stamped with a deprecation `COMMENT` in the database (V2).
   They must not be dropped without a coordinated ANDI migration; a later chain
