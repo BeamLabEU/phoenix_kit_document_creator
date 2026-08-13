@@ -836,6 +836,87 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   end
 
   # ---------------------------------------------------------------------------
+  # Default group order (part А — the canonical ANDI group set)
+  # ---------------------------------------------------------------------------
+
+  # The canonical order ANDI expects its template groups (Types) to appear in
+  # (Hinnapakkumine before Tellimus, etc.). Positions 0..8 follow this order.
+  @default_group_order ~w(
+    Hinnapakkumine Eeltellimus Moodistamine Tellimus Leping
+    Joonised Vastuvõtuakt Garantii Hooldusjuhend
+  )
+
+  @doc "Returns the canonical ANDI group names, in order."
+  @spec default_group_order() :: [String.t()]
+  def default_group_order, do: @default_group_order
+
+  @doc """
+  Seeds (idempotently) the canonical ANDI group set under `category_uuid`,
+  positioned `0..8` in `default_group_order/0` order.
+
+  - A missing canonical group is created at its canonical position.
+  - An existing active group with a canonical name is repositioned (never
+    duplicated).
+  - Any other active groups under the category are pushed after the canonical
+    block (positions continue from 9) so the canonical order is collision-free.
+
+  Runs in one transaction and broadcasts a single `:type` change. This is the
+  code seed for part А — call it per category (e.g. from Admin → Documents →
+  Categories) instead of dragging the 9 groups into order by hand.
+  """
+  @spec ensure_default_group_order(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
+  def ensure_default_group_order(category_uuid, opts \\ []) when is_binary(category_uuid) do
+    result =
+      repo().transaction(fn ->
+        now = DateTime.utc_now()
+        existing = list_types_for_category(category_uuid)
+        by_name = Map.new(existing, &{&1.name, &1})
+
+        @default_group_order
+        |> Enum.with_index()
+        |> Enum.each(fn {name, index} ->
+          case Map.get(by_name, name) do
+            nil ->
+              case create_type(
+                     %{name: name, category_uuid: category_uuid, position: index},
+                     opts
+                   ) do
+                {:ok, _} -> :ok
+                {:error, changeset} -> repo().rollback(changeset)
+              end
+
+            %Type{} = type ->
+              from(t in Type, where: t.uuid == ^type.uuid)
+              |> repo().update_all(set: [position: index, updated_at: now])
+          end
+        end)
+
+        # Keep non-canonical groups, but after the canonical 0..8 block.
+        existing
+        |> Enum.reject(&(&1.name in @default_group_order))
+        |> Enum.with_index(length(@default_group_order))
+        |> Enum.each(fn {type, index} ->
+          from(t in Type, where: t.uuid == ^type.uuid)
+          |> repo().update_all(set: [position: index, updated_at: now])
+        end)
+      end)
+
+    with {:ok, _} <- result do
+      log_activity(%{
+        action: "doc_taxonomy.category.default_groups_seeded",
+        mode: "manual",
+        actor_uuid: opts[:actor_uuid],
+        resource_type: "doc_category",
+        resource_uuid: category_uuid,
+        metadata: %{"count" => length(@default_group_order)}
+      })
+
+      broadcast(:type, nil)
+      :ok
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Picker helpers
   # ---------------------------------------------------------------------------
 
