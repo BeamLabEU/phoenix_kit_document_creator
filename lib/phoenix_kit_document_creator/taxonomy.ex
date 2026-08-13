@@ -710,6 +710,33 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   end
 
   @doc """
+  Batch variant of `list_memberships_for_template/1` for a grid render:
+  returns `%{template_uuid => [%{category_uuid: _, type_uuid: _}, ...]}` for
+  the given template uuids in a single query (avoids a per-row query).
+  """
+  @spec memberships_by_templates([Ecto.UUID.t()]) :: %{
+          optional(Ecto.UUID.t()) => [
+            %{category_uuid: Ecto.UUID.t(), type_uuid: Ecto.UUID.t() | nil}
+          ]
+        }
+  def memberships_by_templates([]), do: %{}
+
+  def memberships_by_templates(template_uuids) when is_list(template_uuids) do
+    from(m in TemplateTaxonomy,
+      where: m.template_uuid in ^template_uuids,
+      order_by: [asc: m.inserted_at, asc: m.uuid],
+      select: {m.template_uuid, m.category_uuid, m.type_uuid}
+    )
+    |> repo().all()
+    |> Enum.group_by(
+      fn {template_uuid, _, _} -> template_uuid end,
+      fn {_, category_uuid, type_uuid} ->
+        %{category_uuid: category_uuid, type_uuid: type_uuid}
+      end
+    )
+  end
+
+  @doc """
   Replaces a template's full set of category memberships in one transaction.
 
   `memberships` is a list of maps with a `:category_uuid` (required) and an
