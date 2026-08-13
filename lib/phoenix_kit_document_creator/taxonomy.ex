@@ -221,6 +221,9 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
         # Collect template uuids to be trashed — only those currently active,
         # to avoid recording templates the user already trashed manually.
+        # Exclude templates that still belong to ANOTHER active category via a
+        # membership (V2): a multi-category template must survive when just one
+        # of its categories is trashed.
         template_uuids =
           from(tmpl in Template,
             where:
@@ -230,6 +233,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
             select: tmpl.uuid
           )
           |> repo().all()
+          |> reject_templates_in_other_active_category(category.uuid)
 
         # Trash the types this cascade is responsible for.
         unless cascade_type_uuids == [] do
@@ -550,12 +554,16 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
       repo().transaction(fn ->
         now = DateTime.utc_now()
 
+        # As in trash_category, keep multi-category templates alive: a template
+        # that still belongs to another active category (via a V2 membership)
+        # must not be trashed just because this group's category is affected.
         template_uuids =
           from(tmpl in Template,
             where: tmpl.type_uuid == ^type.uuid and tmpl.status != "trashed",
             select: tmpl.uuid
           )
           |> repo().all()
+          |> reject_templates_in_other_active_category(type.category_uuid)
 
         unless template_uuids == [] do
           from(tmpl in Template, where: tmpl.uuid in ^template_uuids)
@@ -780,6 +788,29 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
       broadcast(:template, template_uuid)
       {:ok, rows}
     end
+  end
+
+  # Drops from `template_uuids` any template that still has a V2 membership in
+  # an active category OTHER than `except_category_uuid`. Used by the trash
+  # cascades so a multi-category template survives when one of its categories
+  # (or a group under it) is trashed.
+  defp reject_templates_in_other_active_category([], _except_category_uuid), do: []
+
+  defp reject_templates_in_other_active_category(template_uuids, except_category_uuid) do
+    survivors =
+      from(m in TemplateTaxonomy,
+        join: c in Category,
+        on: c.uuid == m.category_uuid,
+        where:
+          m.template_uuid in ^template_uuids and
+            m.category_uuid != ^except_category_uuid and
+            c.status != "deleted",
+        select: m.template_uuid
+      )
+      |> repo().all()
+      |> MapSet.new()
+
+    Enum.reject(template_uuids, &MapSet.member?(survivors, &1))
   end
 
   # Inserts one membership row inside the replace-all transaction; rolls the

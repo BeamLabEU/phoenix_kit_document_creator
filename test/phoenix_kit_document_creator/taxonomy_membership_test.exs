@@ -66,6 +66,31 @@ defmodule PhoenixKitDocumentCreator.TaxonomyMembershipTest do
     assert is_nil(reloaded.type_uuid)
   end
 
+  test "Documents.update_template_taxonomy keeps the join table in sync", ctx do
+    {:ok, tmpl} =
+      %Template{}
+      |> Template.changeset(%{name: "Legacy", google_doc_id: "gd-legacy-1"})
+      |> Repo.insert()
+
+    {:ok, _} =
+      Documents.update_template_taxonomy(tmpl.google_doc_id, %{
+        category_uuid: ctx.klient.uuid,
+        type_uuid: ctx.g1.uuid
+      })
+
+    assert [%{category_uuid: cat, type_uuid: type}] =
+             Taxonomy.list_memberships_for_template(tmpl.uuid)
+
+    assert cat == ctx.klient.uuid
+    assert type == ctx.g1.uuid
+
+    # Clearing the category clears the membership too — no orphaned join row.
+    {:ok, _} =
+      Documents.update_template_taxonomy(tmpl.google_doc_id, %{category_uuid: nil, type_uuid: nil})
+
+    assert Taxonomy.list_memberships_for_template(tmpl.uuid) == []
+  end
+
   test "list_templates_for_category returns the template under each of its categories, with that category's group",
        ctx do
     {:ok, _} =

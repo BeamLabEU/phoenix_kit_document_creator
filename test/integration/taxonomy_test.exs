@@ -387,6 +387,29 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
         assert Repo.get!(Template, tmpl_unrelated.uuid).status == "published"
       end
 
+      test "keeps a template that still belongs to another active category (V2 membership)" do
+        cat_a = create_category!()
+        cat_b = create_category!()
+
+        multi = create_template!()
+
+        {:ok, _} =
+          Taxonomy.set_template_memberships(multi.uuid, [
+            %{category_uuid: cat_a.uuid},
+            %{category_uuid: cat_b.uuid}
+          ])
+
+        sole = create_template!()
+        {:ok, _} = Taxonomy.set_template_memberships(sole.uuid, [%{category_uuid: cat_a.uuid}])
+
+        assert {:ok, _} = Taxonomy.trash_category(cat_a)
+
+        # Multi-category template survives — it is still in cat_b.
+        assert Repo.get!(Template, multi.uuid).status == "published"
+        # A template whose only category was cat_a is still trashed, as before.
+        assert Repo.get!(Template, sole.uuid).status == "trashed"
+      end
+
       test "does not cascade to documents" do
         cat = create_category!()
 
@@ -495,6 +518,25 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
 
         assert Repo.get!(Template, tmpl.uuid).status == "trashed"
         assert Repo.get!(Template, other_tmpl.uuid).status == "published"
+      end
+
+      test "keeps a template that still belongs to another active category (V2 membership)" do
+        cat_a = create_category!()
+        cat_b = create_category!()
+        type_a = create_type!(cat_a.uuid)
+
+        multi = create_template!()
+
+        {:ok, _} =
+          Taxonomy.set_template_memberships(multi.uuid, [
+            %{category_uuid: cat_a.uuid, type_uuid: type_a.uuid},
+            %{category_uuid: cat_b.uuid}
+          ])
+
+        assert {:ok, _} = Taxonomy.trash_type(type_a)
+
+        # Survives — still a member of the active cat_b.
+        assert Repo.get!(Template, multi.uuid).status == "published"
       end
     end
 
