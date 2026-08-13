@@ -477,38 +477,66 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
+  # The single-select category/type dropdowns are DOCUMENTS-only. Templates
+  # categorise through the multi-category checkbox popover, so a stray
+  # template-kind payload is ignored rather than written as a single binding
+  # (which would drop the template's other memberships).
   def handle_event(
         "set_taxonomy_category",
-        %{"google_doc_id" => gid, "kind" => kind} = params,
+        %{"google_doc_id" => gid, "kind" => "document"} = params,
         socket
       ) do
     category_uuid = blank_to_nil(params["value"])
     taxonomy = %{category_uuid: category_uuid, type_uuid: nil}
-
-    result =
-      case kind do
-        "template" -> Documents.update_template_taxonomy(gid, taxonomy)
-        "document" -> Documents.update_document_taxonomy(gid, taxonomy)
-      end
+    result = Documents.update_document_taxonomy(gid, taxonomy)
 
     {:noreply, apply_taxonomy_result(socket, result, :category)}
   end
 
+  def handle_event("set_taxonomy_category", %{"kind" => _}, socket), do: {:noreply, socket}
+
   def handle_event(
         "set_taxonomy_type",
-        %{"google_doc_id" => gid, "kind" => kind} = params,
+        %{"google_doc_id" => gid, "kind" => "document"} = params,
         socket
       ) do
     type_uuid = blank_to_nil(params["value"])
     taxonomy = %{type_uuid: type_uuid}
-
-    result =
-      case kind do
-        "template" -> Documents.update_template_taxonomy(gid, taxonomy)
-        "document" -> Documents.update_document_taxonomy(gid, taxonomy)
-      end
+    result = Documents.update_document_taxonomy(gid, taxonomy)
 
     {:noreply, apply_taxonomy_result(socket, result, :type)}
+  end
+
+  def handle_event("set_taxonomy_type", %{"kind" => _}, socket), do: {:noreply, socket}
+
+  # Templates use a multi-category checkbox popover (part Б). Toggling a
+  # category adds/removes that (category, nil-group) membership; the group
+  # select sets the type_uuid for an existing membership. Both write the
+  # template's FULL membership set via the replace-all API — the current set
+  # is read back from the DB, the one category is flipped, and the result is
+  # persisted. `assign_files/2` re-reads memberships on the next render.
+  def handle_event(
+        "toggle_template_category",
+        %{"template_uuid" => template_uuid, "category_uuid" => category_uuid} = params,
+        socket
+      ) do
+    checked? = Map.get(params, "value") == "on"
+    current = current_membership_maps(template_uuid)
+    updated = toggle_category_membership(current, category_uuid, checked?)
+
+    {:noreply, apply_membership_write(socket, template_uuid, updated)}
+  end
+
+  def handle_event(
+        "set_template_group",
+        %{"template_uuid" => template_uuid, "category_uuid" => category_uuid} = params,
+        socket
+      ) do
+    type_uuid = blank_to_nil(params["value"])
+    current = current_membership_maps(template_uuid)
+    updated = set_group_for_category(current, category_uuid, type_uuid)
+
+    {:noreply, apply_membership_write(socket, template_uuid, updated)}
   end
 
   def handle_event("new_blank_document", _params, socket) do
@@ -1462,6 +1490,20 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       |> Enum.flat_map(fn {_cat_uuid, opts} -> opts end)
       |> Map.new()
 
+    # Templates carry many-to-many category memberships (V2); documents keep
+    # their single category_uuid/type_uuid binding. Batch-load the memberships
+    # for the template files on show so the per-row checkbox picker reads from
+    # a map instead of querying per row.
+    memberships_by_template =
+      if assigns.live_action == :templates do
+        files
+        |> Enum.map(& &1["uuid"])
+        |> Enum.reject(&is_nil/1)
+        |> Taxonomy.memberships_by_templates()
+      else
+        %{}
+      end
+
     %{
       files: files,
       view_mode: assigns.view_mode,
@@ -1474,6 +1516,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       cat_options: cat_options,
       types_by_category: types_by_category,
       type_names: type_names,
+      memberships_by_template: memberships_by_template,
       # Resolved off the render path when the trashed lists change; read here.
       deleted_by_names: assigns.deleted_by_names,
       sort: assigns.sort
@@ -1652,6 +1695,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               cat_options={@cat_options}
               types_by_category={@types_by_category}
               type_names={@type_names}
+              memberships_by_template={@memberships_by_template}
               layout="card"
             />
           </div>
@@ -1772,6 +1816,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   cat_options={@cat_options}
                   types_by_category={@types_by_category}
                   type_names={@type_names}
+                  memberships_by_template={@memberships_by_template}
                   layout="inline"
                 />
               </div>
@@ -1955,6 +2000,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   attr(:cat_options, :list, required: true)
   attr(:types_by_category, :map, required: true)
   attr(:type_names, :map, required: true)
+  attr(:memberships_by_template, :map, default: %{})
 
   attr(:layout, :string,
     default: "inline",
@@ -1969,6 +2015,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     # points at a trashed (or otherwise missing) row resolves to a nil name
     # here — that's the "stale ref" signal used below to render a visible
     # placeholder instead of silently falling back to "No category"/"No type".
+    # Template memberships (many-to-many) for this file, keyed by category so
+    # the checkbox picker can look up "is this template in category X, and
+    # with which group?" in O(1). Documents have no memberships (empty map).
+    memberships = Map.get(assigns.memberships_by_template, assigns.file["uuid"], [])
+
     assigns =
       Map.merge(assigns, %{
         # Resolve the layout variant once; the template branches on `@card?`.
@@ -1978,7 +2029,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         # Types for the currently selected category (nil → empty list).
         type_options: Map.get(assigns.types_by_category, assigns.file["category_uuid"], []),
         cat_stale?: stale_taxonomy_ref?(assigns.file["category_uuid"], assigns.category_names),
-        type_stale?: stale_taxonomy_ref?(assigns.file["type_uuid"], assigns.type_names)
+        type_stale?: stale_taxonomy_ref?(assigns.file["type_uuid"], assigns.type_names),
+        memberships_map: Map.new(memberships, &{&1.category_uuid, &1}),
+        membership_count: length(memberships)
       })
 
     ~H"""
@@ -1999,7 +2052,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       "flex items-center gap-1 min-w-0",
       @card? && "flex-wrap basis-full w-full"
     ]}>
-      <%= if @status_mode == "trashed" do %>
+      <%= cond do %>
+        <% @status_mode == "trashed" -> %>
         <%!-- In trash view: read-only name badges. A stale ref (category/type
              itself trashed or gone) renders a placeholder badge instead of
              silently vanishing, so the file's former assignment stays visible. --%>
@@ -2031,18 +2085,34 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         >
           {gettext("deleted type")}
         </span>
-      <% else %>
+      <% @is_template -> %>
         <%!--
-          Active view: interactive selects sourced from precomputed options.
-          Each <select> is wrapped in its own <form> — phx-change is a form
-          binding, so a bare <select> outside a form does not serialize its
-          value (only the phx-value-* attrs would arrive).
+          Active view, templates: a template may belong to SEVERAL categories
+          at once (part Б), each with its own group. A per-row dropdown popover
+          lists every active category as a checkbox; checking one reveals that
+          category's group select. Writes go through the many-to-many
+          membership API, so the dense table row stays compact.
+        --%>
+        <.render_template_category_popover
+          file={@file}
+          card?={@card?}
+          cat_options={@cat_options}
+          types_by_category={@types_by_category}
+          memberships_map={@memberships_map}
+          membership_count={@membership_count}
+        />
+      <% true -> %>
+        <%!--
+          Active view, documents: single category/type binding via two
+          interactive selects. Each <select> is wrapped in its own <form> —
+          phx-change is a form binding, so a bare <select> outside a form does
+          not serialize its value (only the phx-value-* attrs would arrive).
         --%>
         <form
           class={@card? && "min-w-0 flex-1 basis-28"}
           phx-change="set_taxonomy_category"
           phx-value-google_doc_id={@file["id"]}
-          phx-value-kind={if @is_template, do: "template", else: "document"}
+          phx-value-kind="document"
         >
           <select
             name="value"
@@ -2072,7 +2142,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           class={@card? && "min-w-0 flex-1 basis-28"}
           phx-change="set_taxonomy_type"
           phx-value-google_doc_id={@file["id"]}
-          phx-value-kind={if @is_template, do: "template", else: "document"}
+          phx-value-kind="document"
         >
           <select
             name="value"
@@ -2104,6 +2174,84 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # category/type that's been trashed (or otherwise no longer exists).
   defp stale_taxonomy_ref?(nil, _names), do: false
   defp stale_taxonomy_ref?(uuid, names), do: not Map.has_key?(names, uuid)
+
+  attr(:file, :map, required: true)
+  attr(:card?, :boolean, required: true)
+  attr(:cat_options, :list, required: true)
+  attr(:types_by_category, :map, required: true)
+  attr(:memberships_map, :map, required: true)
+  attr(:membership_count, :integer, required: true)
+
+  # Per-row category picker for TEMPLATES: a dropdown popover listing every
+  # active category as a checkbox (multi-select — a template may belong to
+  # several categories at once). Checking a category reveals its group select
+  # (the category's Types, in configured order). Each control lives in its own
+  # `<form phx-change>` so LiveView serializes the value.
+  defp render_template_category_popover(assigns) do
+    ~H"""
+    <div class={["dropdown dropdown-end", @card? && "min-w-0"]}>
+      <label
+        tabindex="0"
+        class="btn btn-ghost btn-xs gap-1 normal-case"
+        title={gettext("Categories & groups")}
+      >
+        <span class="hero-tag w-3 h-3" />
+        <%= if @membership_count == 0 do %>
+          <span class="opacity-60">{gettext("Categories")}</span>
+        <% else %>
+          <span class="badge badge-primary badge-xs">{@membership_count}</span>
+        <% end %>
+      </label>
+      <ul
+        tabindex="0"
+        class="dropdown-content z-[1] menu menu-sm p-2 shadow bg-base-100 rounded-box border border-base-200 w-64 flex-nowrap max-h-80 overflow-y-auto"
+      >
+        <%= if @cat_options == [] do %>
+          <li class="text-xs text-base-content/50 px-2 py-1">{gettext("No categories yet")}</li>
+        <% else %>
+          <%= for {cat_uuid, cat_name} <- @cat_options do %>
+            <% member = Map.get(@memberships_map, cat_uuid) %>
+            <li class="block hover:bg-transparent">
+              <div class="flex flex-col gap-1 p-1 hover:bg-transparent active:!bg-transparent">
+                <form
+                  phx-change="toggle_template_category"
+                  phx-value-template_uuid={@file["uuid"]}
+                  phx-value-category_uuid={cat_uuid}
+                >
+                  <label class="label cursor-pointer justify-start gap-2 py-0">
+                    <input
+                      type="checkbox"
+                      name="value"
+                      class="checkbox checkbox-xs"
+                      checked={not is_nil(member)}
+                    />
+                    <span class="label-text text-xs">{cat_name}</span>
+                  </label>
+                </form>
+                <form
+                  :if={not is_nil(member)}
+                  phx-change="set_template_group"
+                  phx-value-template_uuid={@file["uuid"]}
+                  phx-value-category_uuid={cat_uuid}
+                  class="pl-6"
+                >
+                  <select name="value" class="select select-bordered select-xs w-full" title={gettext("Group")}>
+                    <option value="">{gettext("No group")}</option>
+                    <%= for {type_uuid, type_name} <- Map.get(@types_by_category, cat_uuid, []) do %>
+                      <option value={type_uuid} selected={member.type_uuid == type_uuid}>
+                        {type_name}
+                      </option>
+                    <% end %>
+                  </select>
+                </form>
+              </div>
+            </li>
+          <% end %>
+        <% end %>
+      </ul>
+    </div>
+    """
+  end
 
   attr(:thumbnail, :any, default: nil, doc: "Thumbnail URL, or nil while loading.")
 
@@ -2375,6 +2523,52 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   defp apply_taxonomy_result(socket, {:error, _reason}, :type) do
     assign(socket, error: gettext("Could not update type"))
+  end
+
+  # Adds (checked) or removes (unchecked) a category from the membership list.
+  # Adding preserves an existing membership's group; a new one starts groupless.
+  defp toggle_category_membership(current, category_uuid, true) do
+    if Enum.any?(current, &(&1.category_uuid == category_uuid)),
+      do: current,
+      else: current ++ [%{category_uuid: category_uuid, type_uuid: nil}]
+  end
+
+  defp toggle_category_membership(current, category_uuid, false) do
+    Enum.reject(current, &(&1.category_uuid == category_uuid))
+  end
+
+  # Sets the group of an existing category membership, or adds the (category,
+  # group) pair when the template isn't yet in that category.
+  defp set_group_for_category(current, category_uuid, type_uuid) do
+    if Enum.any?(current, &(&1.category_uuid == category_uuid)) do
+      Enum.map(current, &put_membership_group(&1, category_uuid, type_uuid))
+    else
+      current ++ [%{category_uuid: category_uuid, type_uuid: type_uuid}]
+    end
+  end
+
+  defp put_membership_group(%{category_uuid: category_uuid} = m, category_uuid, type_uuid),
+    do: %{m | type_uuid: type_uuid}
+
+  defp put_membership_group(m, _category_uuid, _type_uuid), do: m
+
+  # Current memberships of a template as plain `%{category_uuid, type_uuid}`
+  # maps — the shape `Taxonomy.set_template_memberships/3` expects.
+  defp current_membership_maps(template_uuid) do
+    template_uuid
+    |> Taxonomy.list_memberships_for_template()
+    |> Enum.map(&%{category_uuid: &1.category_uuid, type_uuid: &1.type_uuid})
+  end
+
+  # Persists the full membership set. On success the socket is returned as-is;
+  # `assign_files/2` (which receives `assigns` wholesale and is therefore not
+  # change-tracked) re-reads memberships from the DB on the next render, so the
+  # popover reflects the write without a manual assign patch.
+  defp apply_membership_write(socket, template_uuid, memberships) do
+    case Taxonomy.set_template_memberships(template_uuid, memberships, actor_opts(socket)) do
+      {:ok, _rows} -> socket
+      {:error, _reason} -> assign(socket, error: gettext("Could not update template categories"))
+    end
   end
 
   defp patch_file_in_assigns(socket, %{"id" => file_id} = file_map) do

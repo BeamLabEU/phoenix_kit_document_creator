@@ -2,7 +2,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
   use PhoenixKitDocumentCreator.LiveCase
 
   alias PhoenixKitDocumentCreator.Documents
+  alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Taxonomy
+  alias PhoenixKitDocumentCreator.Test.Repo
 
   describe "mount — Google not connected (test env default)" do
     # In the LV test endpoint there are no Google credentials wired up,
@@ -1434,7 +1436,100 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
     end
   end
 
+  describe "template category picker — multi-category checkbox popover (part Б)" do
+    # Templates (unlike documents) carry many-to-many category memberships;
+    # the per-row picker is a checkbox popover. These need a real template DB
+    # row (memberships FK to it) plus a faked file list, like the tests above.
+
+    test "popover lists every active category as a checkbox for a template", %{conn: conn} do
+      {:ok, _klient} = Taxonomy.create_category(%{name: "Klient document"})
+      {:ok, _tootmine} = Taxonomy.create_category(%{name: "Tootmine"})
+      tmpl = insert_template("Tpl A")
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
+
+      html = force_connected_render(view, templates: [template_file(tmpl)])
+
+      assert html =~ "Klient document"
+      assert html =~ "Tootmine"
+      assert html =~ ~s(phx-change="toggle_template_category")
+    end
+
+    test "checking a category creates a membership and mirrors the legacy FK", %{conn: conn} do
+      {:ok, klient} = Taxonomy.create_category(%{name: "Klient document"})
+      tmpl = insert_template("Tpl B")
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
+      force_connected_render(view, templates: [template_file(tmpl)])
+
+      # Drive the handler directly: the responsive table renders the picker
+      # form twice (card + table markup), so an element selector is ambiguous —
+      # render_hook pushes the phx-change payload the checkbox would send.
+      render_hook(view, "toggle_template_category", %{
+        "template_uuid" => tmpl.uuid,
+        "category_uuid" => klient.uuid,
+        "value" => "on"
+      })
+
+      assert [%{category_uuid: cat}] = Taxonomy.list_memberships_for_template(tmpl.uuid)
+      assert cat == klient.uuid
+      assert Repo.get!(Template, tmpl.uuid).category_uuid == klient.uuid
+    end
+
+    test "setting a group updates the membership's type_uuid", %{conn: conn} do
+      {:ok, klient} = Taxonomy.create_category(%{name: "Klient document"})
+      {:ok, group} = Taxonomy.create_type(%{name: "Tellimus", category_uuid: klient.uuid})
+      tmpl = insert_template("Tpl C")
+      {:ok, _} = Taxonomy.set_template_memberships(tmpl.uuid, [%{category_uuid: klient.uuid}])
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
+      force_connected_render(view, templates: [template_file(tmpl)])
+
+      render_hook(view, "set_template_group", %{
+        "template_uuid" => tmpl.uuid,
+        "category_uuid" => klient.uuid,
+        "value" => group.uuid
+      })
+
+      assert [%{type_uuid: type_uuid}] = Taxonomy.list_memberships_for_template(tmpl.uuid)
+      assert type_uuid == group.uuid
+    end
+  end
+
   # ── Shared helpers for the assign-injection tests above ──────────────
+
+  # Inserts a minimal published template row (memberships FK to it).
+  defp insert_template(name) do
+    {:ok, tmpl} =
+      %Template{}
+      |> Template.changeset(%{
+        name: name,
+        google_doc_id: "gd-#{System.unique_integer([:positive])}"
+      })
+      |> Repo.insert()
+
+    tmpl
+  end
+
+  # File map for a template row, shaped like `schema_to_file_map/1` output but
+  # carrying the `"uuid"` the membership popover keys on.
+  defp template_file(tmpl) do
+    %{
+      "id" => tmpl.google_doc_id,
+      "uuid" => tmpl.uuid,
+      "name" => tmpl.name,
+      "status" => "published",
+      "inserted_at" => nil,
+      "modifiedTime" => nil,
+      "data" => %{},
+      "path" => nil,
+      "category_uuid" => tmpl.category_uuid,
+      "type_uuid" => tmpl.type_uuid
+    }
+  end
 
   # Bare file map shaped like `Documents.schema_to_file_map/1`'s output —
   # only the keys the render path actually reads.

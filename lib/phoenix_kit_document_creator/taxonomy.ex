@@ -30,6 +30,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   alias PhoenixKitDocumentCreator.Schemas.Category
   alias PhoenixKitDocumentCreator.Schemas.Template
+  alias PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy
   alias PhoenixKitDocumentCreator.Schemas.Type
 
   @module_key "document_creator"
@@ -220,6 +221,9 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
         # Collect template uuids to be trashed — only those currently active,
         # to avoid recording templates the user already trashed manually.
+        # Exclude templates that still belong to ANOTHER active category via a
+        # membership (V2): a multi-category template must survive when just one
+        # of its categories is trashed.
         template_uuids =
           from(tmpl in Template,
             where:
@@ -229,6 +233,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
             select: tmpl.uuid
           )
           |> repo().all()
+          |> reject_templates_in_other_active_category(category.uuid)
 
         # Trash the types this cascade is responsible for.
         unless cascade_type_uuids == [] do
@@ -246,6 +251,13 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           category
           |> Category.changeset(%{status: "deleted"})
           |> repo().update!()
+
+        # Recompute the legacy mirror for every template that had a membership
+        # in this category, now that it is deleted: survivors move to their next
+        # active category, sole-category templates clear to nil. Keeps the
+        # mirror from pointing at a trashed category (which would hide a
+        # multi-category template from legacy single-category readers).
+        recompute_mirrors(membership_template_uuids(category_uuid: category.uuid))
 
         {updated, template_uuids, cascade_type_uuids}
       end)
@@ -313,9 +325,16 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> repo().update_all(set: [status: "published", updated_at: now])
         end
 
-        category
-        |> Category.changeset(%{status: "active"})
-        |> repo().update!()
+        restored =
+          category
+          |> Category.changeset(%{status: "active"})
+          |> repo().update!()
+
+        # Now that the category is active again, its members can reclaim it as
+        # their primary mirror where appropriate.
+        recompute_mirrors(membership_template_uuids(category_uuid: category.uuid))
+
+        restored
       end)
 
     with {:ok, updated} <- result do
@@ -549,12 +568,16 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
       repo().transaction(fn ->
         now = DateTime.utc_now()
 
+        # As in trash_category, keep multi-category templates alive: a template
+        # that still belongs to another active category (via a V2 membership)
+        # must not be trashed just because this group's category is affected.
         template_uuids =
           from(tmpl in Template,
             where: tmpl.type_uuid == ^type.uuid and tmpl.status != "trashed",
             select: tmpl.uuid
           )
           |> repo().all()
+          |> reject_templates_in_other_active_category(type.category_uuid)
 
         unless template_uuids == [] do
           from(tmpl in Template, where: tmpl.uuid in ^template_uuids)
@@ -565,6 +588,10 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           type
           |> Type.changeset(%{status: "deleted"})
           |> repo().update!()
+
+        # The group is deleted; clear it from the mirror of any template whose
+        # mirror pointed at it (recompute nulls references to deleted types).
+        recompute_mirrors(membership_template_uuids(type_uuid: type.uuid))
 
         {updated, template_uuids}
       end)
@@ -605,9 +632,16 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
           |> repo().update_all(set: [status: "published", updated_at: now])
         end
 
-        type
-        |> Type.changeset(%{status: "active"})
-        |> repo().update!()
+        restored =
+          type
+          |> Type.changeset(%{status: "active"})
+          |> repo().update!()
+
+        # The group is active again; let it reappear in the mirror where it is
+        # the primary category's group.
+        recompute_mirrors(membership_template_uuids(type_uuid: type.uuid))
+
+        restored
       end)
 
     with {:ok, updated} <- result do
@@ -688,6 +722,322 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Template membership (many-to-many: template ↔ category, with group)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Lists a template's category memberships (one row per category, each with
+  an optional group `type_uuid`), oldest first.
+  """
+  @spec list_memberships_for_template(Ecto.UUID.t()) :: [TemplateTaxonomy.t()]
+  def list_memberships_for_template(template_uuid) do
+    from(m in TemplateTaxonomy,
+      where: m.template_uuid == ^template_uuid,
+      order_by: [asc: m.inserted_at, asc: m.uuid]
+    )
+    |> repo().all()
+  end
+
+  @doc """
+  Batch variant of `list_memberships_for_template/1` for a grid render:
+  returns `%{template_uuid => [%{category_uuid: _, type_uuid: _}, ...]}` for
+  the given template uuids in a single query (avoids a per-row query).
+  """
+  @spec memberships_by_templates([Ecto.UUID.t()]) :: %{
+          optional(Ecto.UUID.t()) => [
+            %{category_uuid: Ecto.UUID.t(), type_uuid: Ecto.UUID.t() | nil}
+          ]
+        }
+  def memberships_by_templates([]), do: %{}
+
+  def memberships_by_templates(template_uuids) when is_list(template_uuids) do
+    from(m in TemplateTaxonomy,
+      where: m.template_uuid in ^template_uuids,
+      order_by: [asc: m.inserted_at, asc: m.uuid],
+      select: {m.template_uuid, m.category_uuid, m.type_uuid}
+    )
+    |> repo().all()
+    |> Enum.group_by(
+      fn {template_uuid, _, _} -> template_uuid end,
+      fn {_, category_uuid, type_uuid} ->
+        %{category_uuid: category_uuid, type_uuid: type_uuid}
+      end
+    )
+  end
+
+  @doc """
+  Replaces a template's full set of category memberships in one transaction.
+
+  `memberships` is a list of maps with a `:category_uuid` (required) and an
+  optional `:type_uuid` group (atom or string keys accepted). The write is
+  replace-all: existing rows for the template are deleted first, then the
+  given set is inserted. An empty list clears all memberships.
+
+  After the swap, the **primary** membership — the one whose category has
+  the lowest `Category.position` — is mirrored into the legacy
+  `templates.category_uuid`/`type_uuid` columns so backward-compatible
+  single-binding readers keep working (an empty set clears the mirror).
+
+  Broadcasts `{:doc_taxonomy_changed, :template, template_uuid}`.
+  """
+  @spec set_template_memberships(Ecto.UUID.t(), [map()], keyword()) ::
+          {:ok, [TemplateTaxonomy.t()]} | {:error, term()}
+  def set_template_memberships(template_uuid, memberships, opts \\ [])
+      when is_binary(template_uuid) and is_list(memberships) do
+    normalized = Enum.map(memberships, &normalize_membership/1)
+
+    result =
+      repo().transaction(fn ->
+        from(m in TemplateTaxonomy, where: m.template_uuid == ^template_uuid)
+        |> repo().delete_all()
+
+        inserted = Enum.map(normalized, &insert_membership!(template_uuid, &1))
+        mirror_primary_membership(template_uuid, normalized)
+        inserted
+      end)
+
+    with {:ok, rows} <- result do
+      log_activity(%{
+        action: "doc_taxonomy.template.memberships_set",
+        mode: "manual",
+        actor_uuid: opts[:actor_uuid],
+        resource_type: "template",
+        resource_uuid: template_uuid,
+        metadata: %{"count" => length(rows)}
+      })
+
+      broadcast(:template, template_uuid)
+      {:ok, rows}
+    end
+  end
+
+  # Drops from `template_uuids` any template that still has a V2 membership in
+  # an active category OTHER than `except_category_uuid`. Used by the trash
+  # cascades so a multi-category template survives when one of its categories
+  # (or a group under it) is trashed.
+  defp reject_templates_in_other_active_category([], _except_category_uuid), do: []
+
+  defp reject_templates_in_other_active_category(template_uuids, except_category_uuid) do
+    survivors =
+      from(m in TemplateTaxonomy,
+        join: c in Category,
+        on: c.uuid == m.category_uuid,
+        where:
+          m.template_uuid in ^template_uuids and
+            m.category_uuid != ^except_category_uuid and
+            c.status != "deleted",
+        select: m.template_uuid
+      )
+      |> repo().all()
+      |> MapSet.new()
+
+    Enum.reject(template_uuids, &MapSet.member?(survivors, &1))
+  end
+
+  # Inserts one membership row inside the replace-all transaction; rolls the
+  # whole swap back if the row is invalid (e.g. a bad category FK).
+  defp insert_membership!(template_uuid, attrs) do
+    %TemplateTaxonomy{}
+    |> TemplateTaxonomy.changeset(Map.put(attrs, :template_uuid, template_uuid))
+    |> repo().insert()
+    |> case do
+      {:ok, row} -> row
+      {:error, changeset} -> repo().rollback(changeset)
+    end
+  end
+
+  # Accepts atom- or string-keyed membership maps and returns an atom-keyed
+  # map suitable for `TemplateTaxonomy.changeset/2` (which rejects mixed keys).
+  defp normalize_membership(%{} = m) do
+    %{
+      category_uuid: Map.get(m, :category_uuid) || Map.get(m, "category_uuid"),
+      type_uuid: Map.get(m, :type_uuid) || Map.get(m, "type_uuid")
+    }
+  end
+
+  # Mirrors the primary membership into the legacy template columns. Empty
+  # membership set clears both columns.
+  defp mirror_primary_membership(template_uuid, []) do
+    from(t in Template, where: t.uuid == ^template_uuid)
+    |> repo().update_all(
+      set: [category_uuid: nil, type_uuid: nil, updated_at: DateTime.utc_now()]
+    )
+  end
+
+  defp mirror_primary_membership(template_uuid, memberships) do
+    cat_uuids = Enum.map(memberships, & &1.category_uuid)
+
+    positions =
+      from(c in Category, where: c.uuid in ^cat_uuids, select: {c.uuid, c.position})
+      |> repo().all()
+      |> Map.new()
+
+    # Lowest category position wins; ties break on category_uuid for a stable
+    # choice (a category missing a position row sorts last).
+    primary =
+      Enum.min_by(memberships, fn m ->
+        {Map.get(positions, m.category_uuid, 2_147_483_647), m.category_uuid}
+      end)
+
+    from(t in Template, where: t.uuid == ^template_uuid)
+    |> repo().update_all(
+      set: [
+        category_uuid: primary.category_uuid,
+        type_uuid: primary.type_uuid,
+        updated_at: DateTime.utc_now()
+      ]
+    )
+  end
+
+  # Distinct template uuids that hold a membership matching the given filter
+  # (`category_uuid:` or `type_uuid:`). Used to find the templates whose mirror
+  # a taxonomy trash/restore may need to recompute.
+  defp membership_template_uuids(category_uuid: category_uuid) do
+    from(m in TemplateTaxonomy, where: m.category_uuid == ^category_uuid, select: m.template_uuid)
+    |> repo().all()
+    |> Enum.uniq()
+  end
+
+  defp membership_template_uuids(type_uuid: type_uuid) do
+    from(m in TemplateTaxonomy, where: m.type_uuid == ^type_uuid, select: m.template_uuid)
+    |> repo().all()
+    |> Enum.uniq()
+  end
+
+  # Recomputes the legacy mirror of each template from its memberships in
+  # ACTIVE categories only (references to a soft-deleted group are cleared).
+  # This keeps the mirror honest across category/type trash + restore: it never
+  # points at a deleted category, and a multi-category template moves to its
+  # next active category instead of vanishing from legacy single-category
+  # readers. A template with no active membership left gets a nil mirror.
+  defp recompute_mirrors([]), do: :ok
+
+  defp recompute_mirrors(template_uuids) do
+    Enum.each(template_uuids, fn template_uuid ->
+      active =
+        from(m in TemplateTaxonomy,
+          join: c in Category,
+          on: c.uuid == m.category_uuid,
+          left_join: t in Type,
+          on: t.uuid == m.type_uuid,
+          where: m.template_uuid == ^template_uuid and c.status != "deleted",
+          select: {m.category_uuid, m.type_uuid, t.status}
+        )
+        |> repo().all()
+        |> Enum.map(fn {category_uuid, type_uuid, type_status} ->
+          %{
+            category_uuid: category_uuid,
+            type_uuid: if(type_status == "deleted", do: nil, else: type_uuid)
+          }
+        end)
+
+      mirror_primary_membership(template_uuid, active)
+    end)
+
+    :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Default group order (part А — the canonical ANDI group set)
+  # ---------------------------------------------------------------------------
+
+  # The canonical order ANDI expects its template groups (Types) to appear in
+  # (Hinnapakkumine before Tellimus, etc.). Positions 0..8 follow this order.
+  @default_group_order ~w(
+    Hinnapakkumine Eeltellimus Moodistamine Tellimus Leping
+    Joonised Vastuvõtuakt Garantii Hooldusjuhend
+  )
+
+  @doc "Returns the canonical ANDI group names, in order."
+  @spec default_group_order() :: [String.t()]
+  def default_group_order, do: @default_group_order
+
+  @doc """
+  Seeds (idempotently) the canonical ANDI group set under `category_uuid`,
+  positioned `0..8` in `default_group_order/0` order.
+
+  - A missing canonical group is created at its canonical position.
+  - An existing active group with a canonical name is repositioned (never
+    duplicated).
+  - Any other active groups under the category are pushed after the canonical
+    block (positions continue from 9) so the canonical order is collision-free.
+
+  Runs in one transaction and broadcasts a single `:type` change. This is the
+  code seed for part А — call it per category (e.g. from Admin → Documents →
+  Categories) instead of dragging the 9 groups into order by hand.
+  """
+  @spec ensure_default_group_order(Ecto.UUID.t(), keyword()) :: :ok | {:error, term()}
+  def ensure_default_group_order(category_uuid, opts \\ []) when is_binary(category_uuid) do
+    result = repo().transaction(fn -> seed_default_groups(category_uuid) end)
+
+    with {:ok, _} <- result do
+      log_activity(%{
+        action: "doc_taxonomy.category.default_groups_seeded",
+        mode: "manual",
+        actor_uuid: opts[:actor_uuid],
+        resource_type: "doc_category",
+        resource_uuid: category_uuid,
+        metadata: %{"count" => length(@default_group_order)}
+      })
+
+      broadcast(:type, nil)
+      :ok
+    end
+  end
+
+  # Transaction body for `ensure_default_group_order/2`: position the canonical
+  # groups 0..8, then push any others after them.
+  defp seed_default_groups(category_uuid) do
+    now = DateTime.utc_now()
+    existing = list_types_for_category(category_uuid)
+    by_name = Map.new(existing, &{&1.name, &1})
+
+    @default_group_order
+    |> Enum.with_index()
+    |> Enum.each(fn {name, index} ->
+      upsert_canonical_group(category_uuid, by_name, name, index, now)
+    end)
+
+    reposition_extra_groups(existing, now)
+  end
+
+  # Non-canonical active groups keep their rows but move after the canonical
+  # 0..8 block so the seeded order is collision-free.
+  defp reposition_extra_groups(existing, now) do
+    existing
+    |> Enum.reject(&(&1.name in @default_group_order))
+    |> Enum.with_index(length(@default_group_order))
+    |> Enum.each(fn {type, index} ->
+      from(t in Type, where: t.uuid == ^type.uuid)
+      |> repo().update_all(set: [position: index, updated_at: now])
+    end)
+  end
+
+  # Creates a canonical group at `index`, or repositions an existing one with
+  # the same name. Rolls the seed transaction back on an invalid create.
+  #
+  # Inserts the Type directly (not via `create_type/2`) on purpose: this runs
+  # inside `ensure_default_group_order/2`'s transaction, and `create_type/2`
+  # would `broadcast/2` + `log_activity/1` from an uncommitted transaction. The
+  # single post-commit broadcast is emitted by `ensure_default_group_order/2`.
+  defp upsert_canonical_group(category_uuid, by_name, name, index, now) do
+    case Map.get(by_name, name) do
+      nil ->
+        %Type{}
+        |> Type.changeset(%{name: name, category_uuid: category_uuid, position: index})
+        |> repo().insert()
+        |> case do
+          {:ok, _} -> :ok
+          {:error, changeset} -> repo().rollback(changeset)
+        end
+
+      %Type{} = type ->
+        from(t in Type, where: t.uuid == ^type.uuid)
+        |> repo().update_all(set: [position: index, updated_at: now])
     end
   end
 

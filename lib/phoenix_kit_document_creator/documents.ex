@@ -32,6 +32,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   alias PhoenixKitDocumentCreator.Schemas.DocumentSection
   alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Schemas.TemplatePreset
+  alias PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy
 
   @module_key "document_creator"
   @pubsub_topic "document_creator:files"
@@ -308,17 +309,29 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   @doc """
-  Lists published `Template` structs for a category, ordered by name.
+  Lists published `Template` structs that belong to a category, ordered by
+  name.
+
+  Sourced through the many-to-many `phoenix_kit_doc_template_taxonomy` join
+  (V2), so a template that belongs to several categories is returned under
+  **each** of them. Each returned struct's `type_uuid` is overridden with
+  the group of *this* category's membership, so downstream grouping-by-type
+  stays correct per category.
 
   Returns full schema structs (not file maps) so callers get `variables`,
   `status`, and atom-key access. Used by the preset section editor.
   """
   @spec list_templates_for_category(binary()) :: [Template.t()]
   def list_templates_for_category(category_uuid) do
-    Template
-    |> where([t], t.category_uuid == ^category_uuid and t.status == "published")
-    |> order_by([t], asc: t.name)
+    from(t in Template,
+      join: m in TemplateTaxonomy,
+      on: m.template_uuid == t.uuid,
+      where: m.category_uuid == ^category_uuid and t.status == "published",
+      order_by: [asc: t.name],
+      select: {t, m.type_uuid}
+    )
     |> repo().all()
+    |> Enum.map(fn {template, type_uuid} -> %{template | type_uuid: type_uuid} end)
   end
 
   defp schema_to_file_map(record) do
@@ -1225,40 +1238,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
     end
   end
 
-  @doc """
-  Sets (or clears) the category and type of a template identified by
-  `google_doc_id`. `taxonomy` is a map with optional `:category_uuid`
-  and `:type_uuid` keys (`nil` clears). Logs a
-  `template.taxonomy_updated` activity row.
-  """
-  @spec update_template_taxonomy(String.t(), map(), keyword()) ::
-          {:ok, map()} | {:error, term()}
-  def update_template_taxonomy(google_doc_id, taxonomy, _opts \\ []) do
-    case get_template_by_google_doc_id(google_doc_id) do
-      nil ->
-        {:error, :not_found}
+  # NOTE: There is deliberately no `update_template_taxonomy/3`. A template's
+  # categorisation is many-to-many (`phoenix_kit_doc_template_taxonomy`, V2) and
+  # is written exclusively through `Taxonomy.set_template_memberships/3` (the
+  # admin checkbox popover). A single-binding "set the template's category/type"
+  # helper would silently collapse a multi-category template to one membership,
+  # so it was removed rather than kept as a trap.
 
-      template ->
-        attrs =
-          %{}
-          |> put_if_present(taxonomy, :category_uuid)
-          |> put_if_present(taxonomy, :type_uuid)
-
-        template
-        |> Template.changeset(attrs)
-        |> repo().update()
-        |> case do
-          {:ok, updated} ->
-            broadcast_files_changed()
-            {:ok, schema_to_file_map(updated)}
-
-          {:error, _} = err ->
-            err
-        end
-    end
-  end
-
-  @doc "Like `update_template_taxonomy/3` but for a Document."
+  @doc "Sets or clears the category/type of a Document (single binding)."
   @spec update_document_taxonomy(String.t(), map(), keyword()) ::
           {:ok, map()} | {:error, term()}
   def update_document_taxonomy(google_doc_id, taxonomy, _opts \\ []) do

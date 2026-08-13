@@ -9,6 +9,39 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   Note: Several fields (`content_html`, `content_css`, `content_native`, header/footer
   associations) are retained for database compatibility but are no longer used in the
   Google Docs workflow. A future migration should remove these columns.
+
+  ## Deprecated taxonomy columns (do not drop)
+
+  As of migration chain **V2**, a template's category/group membership is a
+  **many-to-many** relation stored in `phoenix_kit_doc_template_taxonomy`
+  (see `PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy`). The two
+  single-binding columns below are **deprecated** but deliberately **kept
+  and kept populated** as a mirror of the *primary* membership so the ANDI
+  consumer keeps working until it migrates to the join table:
+
+    * `category_uuid` — mirror of the lowest-`Category.position` **active**
+      membership
+    * `type_uuid` — that membership's group (nulled when the group is
+      soft-deleted)
+
+  The mirror is recomputed whenever memberships are written
+  (`Taxonomy.set_template_memberships/3`) **and** on category/type soft-delete
+  and restore (`trash_category`/`restore_category`/`trash_type`/`restore_type`
+  recompute it from the surviving active memberships). As long as it is kept in
+  sync this way — the normal write path, an invariant enforced by tests — it
+  does not point at a trashed category/group.
+
+  **Permanent** deletion is the one best-effort gap, driven by the join table's
+  own foreign keys rather than a recompute: deleting a category cascades the
+  membership row away (`ON DELETE CASCADE`), while deleting a type nulls that
+  row's `type_uuid` (`ON DELETE SET NULL`). Either way the mirror is only
+  brought back in line lazily, on the template's next membership write; until
+  then a multi-category template may keep a stale/nil mirror. The join table
+  stays authoritative.
+
+  Both columns are stamped with a deprecation `COMMENT` in the database (V2).
+  They must not be dropped without a coordinated ANDI migration; a later chain
+  version will remove them once ANDI reads memberships directly.
   """
   use Ecto.Schema
   use PhoenixKit.SchemaPrefix

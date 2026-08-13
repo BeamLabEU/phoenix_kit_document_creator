@@ -112,7 +112,39 @@ tables, V94 for the `google_doc_id` / `status` / `path` / `folder_id` columns):
 | `variables` | jsonb | Array of variable definitions detected in the template |
 | `config` | jsonb | Configuration (e.g., paper_size) |
 | `thumbnail` | text | Base64 data URI for preview |
+| `category_uuid` | UUID (FK) | **Deprecated** — mirror of the primary membership (see below) |
+| `type_uuid` | UUID (FK) | **Deprecated** — the primary membership's group (see below) |
 | `content_html` / `content_css` / `content_native` | mixed | Legacy columns — no longer populated |
+
+> **Deprecated taxonomy columns — do not drop.** As of migration chain **V2**,
+> a template's category/group membership is many-to-many, stored in
+> `phoenix_kit_doc_template_taxonomy`. The `category_uuid` and `type_uuid`
+> columns above are kept and kept populated as a backward-compatibility mirror
+> of the *primary* membership (lowest `Category.position`) so the ANDI consumer
+> keeps working until it migrates to the join table. Both are stamped with a
+> deprecation `COMMENT` in the database. **Do not drop them without a
+> coordinated ANDI migration** — a later chain version removes them once ANDI
+> reads memberships directly.
+
+### `phoenix_kit_doc_template_taxonomy` (V2)
+
+Many-to-many join between a template and its `(category, group)` memberships.
+Source of truth for template categorisation.
+
+| Column | Type | Description |
+|---|---|---|
+| `uuid` | UUID (PK) | Auto-generated |
+| `template_uuid` | UUID (FK) | → `phoenix_kit_doc_templates` (ON DELETE CASCADE) |
+| `category_uuid` | UUID (FK) | → `phoenix_kit_doc_categories` (ON DELETE CASCADE) |
+| `type_uuid` | UUID (FK, nullable) | Optional group → `phoenix_kit_doc_types` (ON DELETE SET NULL) |
+
+Unique `(template_uuid, category_uuid)` — one group per category per template.
+
+> **Rollback warning.** This table is the source of truth for template
+> categorisation. Rolling the module chain back past V2 (`down(target: 1)`)
+> **drops it and loses all multi-category data** — only the single legacy
+> mirror binding per template survives. A later `up` re-backfills from that one
+> column, not from the (now-gone) memberships.
 
 ### `phoenix_kit_doc_documents`
 
