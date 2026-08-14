@@ -100,25 +100,25 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
     <form phx-submit="modal_create_from_template" phx-change="update_variable_config" class="mt-4 space-y-3">
       <input type="hidden" name="template_id" value={@selected_template["id"]} />
 
-      <div class="form-control">
-        <label class="label py-1"><span class="label-text text-sm font-medium">{gettext("Document Name")}</span></label>
+      <div class="fieldset">
+        <label class="label py-1"><span class="fieldset-legend text-sm font-medium">{gettext("Document Name")}</span></label>
         <input
           type="text"
           name="doc_name"
-          class="input input-bordered input-sm w-full"
+          class="input input-sm w-full"
           value={@selected_template["name"]}
         />
       </div>
 
-      <div :for={var <- @variables} class="form-control">
+      <div :for={var <- @variables} class="fieldset">
         <label class="label py-1">
-          <span class="label-text text-sm">{var[:label] || var["label"] || var[:name] || var["name"]}</span>
+          <span class="fieldset-legend text-sm">{var[:label] || var["label"] || var[:name] || var["name"]}</span>
         </label>
         <%= case var[:type] || var["type"] do %>
           <% :multiline -> %>
             <textarea
               name={"var[#{var[:name] || var["name"]}]"}
-              class="textarea textarea-bordered textarea-sm w-full"
+              class="textarea textarea-sm w-full"
               rows="3"
               placeholder={var[:name] || var["name"]}
             />
@@ -132,7 +132,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
             <input
               type="text"
               name={"var[#{var[:name] || var["name"]}]"}
-              class="input input-bordered input-sm w-full"
+              class="input input-sm w-full"
               placeholder={var[:name] || var["name"]}
             />
         <% end %>

@@ -131,9 +131,9 @@ defmodule PhoenixKitDocumentCreator.Web.ProjectDocumentsLive do
         phx-submit="attach"
         class="flex items-end gap-2"
       >
-        <label class="form-control flex-1 max-w-md">
-          <span class="label-text text-xs opacity-70 mb-1">Attach an existing document</span>
-          <select name="document_uuid" class="select select-bordered select-sm">
+        <label class="fieldset flex-1 max-w-md">
+          <span class="fieldset-legend text-xs opacity-70 mb-1">Attach an existing document</span>
+          <select name="document_uuid" class="select select-sm">
             <option :for={doc <- @unlinked} value={doc["uuid"]}>{doc["name"]}</option>
           </select>
         </label>

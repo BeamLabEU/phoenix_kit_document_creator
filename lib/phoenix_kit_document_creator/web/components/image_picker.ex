@@ -161,7 +161,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
           name="filter[q]"
           value={@filter}
           placeholder={gettext("Search by name…")}
-          class="input input-sm input-bordered w-full"
+          class="input input-sm w-full"
         />
       </.form>
 

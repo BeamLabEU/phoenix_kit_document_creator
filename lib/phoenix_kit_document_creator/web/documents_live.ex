@@ -1197,7 +1197,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               if(@show_filters, do: "flex", else: "hidden sm:flex")
             ]}
           >
-            <label class="input input-sm input-bordered w-full sm:w-72 md:w-80 shrink-0">
+            <label class="input input-sm w-full sm:w-72 md:w-80 shrink-0">
               <span class="hero-magnifying-glass w-4 h-4 opacity-60" />
               <input
                 type="search"
@@ -2117,7 +2117,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           <select
             name="value"
             class={[
-              "select select-bordered select-xs",
+              "select select-xs",
               @card? && "w-full"
             ]}
             title={gettext("Category")}
@@ -2147,7 +2147,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           <select
             name="value"
             class={[
-              "select select-bordered select-xs",
+              "select select-xs",
               @card? && "w-full"
             ]}
             title={gettext("Type")}
@@ -2225,7 +2225,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                       class="checkbox checkbox-xs"
                       checked={not is_nil(member)}
                     />
-                    <span class="label-text text-xs">{cat_name}</span>
+                    <span class="fieldset-legend text-xs">{cat_name}</span>
                   </label>
                 </form>
                 <form
@@ -2235,7 +2235,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   phx-value-category_uuid={cat_uuid}
                   class="pl-6"
                 >
-                  <select name="value" class="select select-bordered select-xs w-full" title={gettext("Group")}>
+                  <select name="value" class="select select-xs w-full" title={gettext("Group")}>
                     <option value="">{gettext("No group")}</option>
                     <%= for {type_uuid, type_name} <- Map.get(@types_by_category, cat_uuid, []) do %>
                       <option value={type_uuid} selected={member.type_uuid == type_uuid}>
