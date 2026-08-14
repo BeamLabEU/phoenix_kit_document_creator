@@ -71,10 +71,24 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     ]
   end
 
+  # Swaps a Hex pin for a local checkout when PHOENIX_KIT_PATH is set, so this
+  # module's suite can run against uncommitted core without publishing it.
+  # Unset means the published pin, so `mix hex.publish` and CI are unaffected.
+  defp pk_dep(app, requirement, opts \\ []) do
+    env_var = String.upcase(Atom.to_string(app)) <> "_PATH"
+
+    case System.get_env(env_var) do
+      nil when opts == [] -> {app, requirement}
+      nil -> {app, requirement, opts}
+      path -> {app, [path: path, override: true] ++ opts}
+    end
+  end
+
   defp deps do
     [
-      # PhoenixKit provides the Module behaviour and Settings API.
-      {:phoenix_kit, "~> 2.0"},
+      # PhoenixKit provides the Module behaviour and Settings API — and, since
+      # the `put_slug/3` adoption, the slug changeset glue as well.
+      pk_dep(:phoenix_kit, "~> 2.0"),
 
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.2"},

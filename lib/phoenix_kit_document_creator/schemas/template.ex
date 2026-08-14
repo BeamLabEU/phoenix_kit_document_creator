@@ -133,32 +133,26 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_length(:name, min: 1, max: 255)
-    |> validate_length(:slug, max: 255)
     |> validate_length(:language, max: 10)
     |> validate_inclusion(:status, @statuses)
-    |> maybe_generate_slug()
+    # Core's changeset glue, replacing a local `maybe_generate_slug/1` that
+    # keyed on `get_change(:name)` — so RENAMING a template regenerated its
+    # slug and moved the URL, and nothing ever probed for collisions, so two
+    # templates named alike simply shared one. `put_slug/3` keeps an existing
+    # slug on rename, honours an explicit one, regenerates on an explicit
+    # blank, and suffixes -2, -3 … until free (excluding this row itself).
+    #
+    # `max_length: 255` is load-bearing: `slug` is varchar(255) and `:name`
+    # is allowed 255 characters, so an unbounded `-2` suffix would overflow
+    # the column — Postgres raises rather than truncating. The
+    # `validate_length(:slug)` cap moved below generation so it also sees a
+    # generated slug, which at its old position it never did.
+    |> Slug.put_slug(:name, max_length: 255)
+    |> validate_length(:slug, max: 255)
     |> unique_constraint(:slug)
     |> foreign_key_constraint(:category_uuid)
     |> foreign_key_constraint(:type_uuid)
   end
-
-  defp maybe_generate_slug(changeset) do
-    case get_change(changeset, :slug) do
-      nil ->
-        case get_change(changeset, :name) do
-          nil -> changeset
-          name -> put_change(changeset, :slug, slugify(name))
-        end
-
-      _ ->
-        changeset
-    end
-  end
-
-  # Core's rule, not a local copy. The pipeline this replaced deleted every
-  # non-ASCII character, so a Cyrillic or Greek name produced an EMPTY slug and
-  # German lost its umlauts. Slug.slugify/2 romanizes instead.
-  defp slugify(name), do: Slug.slugify(name, transliterate: true)
 
   @doc "Changeset for upserting from Google Drive sync data."
   def sync_changeset(template, attrs) do
