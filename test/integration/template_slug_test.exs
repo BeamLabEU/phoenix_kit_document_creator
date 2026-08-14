@@ -20,11 +20,6 @@ defmodule PhoenixKitDocumentCreator.Integration.TemplateSlugTest do
   alias PhoenixKit.Utils.Slug
   alias PhoenixKitDocumentCreator.Schemas.Template
 
-  # `put_slug/3` ships in core after 2.3.0; against a Hex-resolved core these
-  # would raise UndefinedFunctionError, so they opt in the same way the other
-  # ahead-of-release tests here do. Run with PHOENIX_KIT_PATH=../phoenix_kit.
-  @moduletag :requires_unreleased_core
-
   defp changeset(attrs, template \\ %Template{}), do: Template.changeset(template, attrs)
   defp insert!(attrs), do: attrs |> changeset() |> Repo.insert!()
 

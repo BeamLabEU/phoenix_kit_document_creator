@@ -5,11 +5,6 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplateTest do
   # unit-level shape; only the case template changed.
   use PhoenixKitDocumentCreator.DataCase, async: true
 
-  # `put_slug/3` ships in core after 2.3.0; against a Hex-resolved core every
-  # name-casting changeset raises UndefinedFunctionError. Run with
-  # PHOENIX_KIT_PATH=../phoenix_kit until that core is published.
-  @moduletag :requires_unreleased_core
-
   alias PhoenixKitDocumentCreator.Schemas.Template
 
   @valid_attrs %{name: "Service Agreement"}

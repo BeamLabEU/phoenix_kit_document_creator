@@ -1,3 +1,44 @@
+## 0.7.0 - 2026-08-14
+
+### Changed
+
+- **⚠️ Requires `phoenix_kit ~> 2.4`.** `Template.changeset/2` now calls
+  `PhoenixKit.Utils.Slug.put_slug/3`, which core did not ship until 2.4.0. The
+  pin was raised from `~> 2.0` because that range admits cores where the
+  function does not exist — and the failure would land in the **consumer's**
+  app as an `UndefinedFunctionError` on every save touching `:name`, never in
+  this repo's own run, since the workspace always resolves the newest core.
+  Still two-segment, so every later 2.x satisfies it.
+
+  `core_pin_conformance_test.exs` moved with it, and now guards both
+  directions: too narrow (a three-segment pin collapsing to one minor) and too
+  wide (a core lacking the function this module calls).
+
+### Fixed
+
+- **Renaming a template moved its URL.** The local `maybe_generate_slug/1`
+  keyed on `get_change(:slug)` being nil, which is true both when the caller
+  left the slug alone and when the record hasn't got one — so any save carrying
+  no slug of its own re-derived it from the name, and nothing recorded the old
+  one. Core's `put_slug/3` distinguishes the two: an explicit slug wins, an
+  explicitly blanked one regenerates, and no slug at all defers to the stored
+  record (#39).
+
+- **Two templates with the same name silently shared a slug.** Nothing ever
+  probed for collisions, which broke get-by-slug lookups. Slugs are now
+  suffixed `-2`, `-3` … until free, excluding the row itself on update.
+
+- **A generated slug could overflow `varchar(255)`.** `validate_length(:slug)`
+  sat *before* generation, so it only ever saw explicitly-cast slugs; it now
+  runs after, and `put_slug/3` is given `max_length: 255` so the suffix is
+  trimmed into the cap rather than overflowing it (Postgres raises rather than
+  truncating).
+
+- **Two `:requires_unreleased_core` moduletags excluded nothing.** This repo's
+  `test_helper.exs` stopped excluding that tag at core 2.0, so the slug tests
+  were running against a Hex-resolved core all along rather than being masked
+  as the PR assumed. Removed now that the pin guarantees the function is there.
+
 ## 0.6.0 - 2026-08-13
 
 ### Added

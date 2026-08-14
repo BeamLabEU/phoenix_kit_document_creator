@@ -1,7 +1,7 @@
 defmodule PhoenixKitDocumentCreator.MixProject do
   use Mix.Project
 
-  @version "0.6.0"
+  @version "0.7.0"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_document_creator"
 
   def project do
@@ -88,7 +88,13 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     [
       # PhoenixKit provides the Module behaviour and Settings API — and, since
       # the `put_slug/3` adoption, the slug changeset glue as well.
-      pk_dep(:phoenix_kit, "~> 2.0"),
+      # 2.4.0+ is REQUIRED, not preferred: `Template.changeset/2` calls
+      # `PhoenixKit.Utils.Slug.put_slug/3`, which does not exist before core
+      # 2.4.0. Under `~> 2.0` a host could resolve core 2.0.x and every save
+      # touching `:name` would raise UndefinedFunctionError — in the consumer's
+      # app, never in this repo's own run, because the workspace always resolves
+      # the newest core. Two-segment, so every later 2.x still satisfies it.
+      pk_dep(:phoenix_kit, "~> 2.4"),
 
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.2"},
