@@ -9,6 +9,39 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
   Note: Several fields (`content_html`, `content_css`, `content_native`, header/footer
   associations) are retained for database compatibility but are no longer used in the
   Google Docs workflow. A future migration should remove these columns.
+
+  ## Deprecated taxonomy columns (do not drop)
+
+  As of migration chain **V2**, a template's category/group membership is a
+  **many-to-many** relation stored in `phoenix_kit_doc_template_taxonomy`
+  (see `PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy`). The two
+  single-binding columns below are **deprecated** but deliberately **kept
+  and kept populated** as a mirror of the *primary* membership so the ANDI
+  consumer keeps working until it migrates to the join table:
+
+    * `category_uuid` — mirror of the lowest-`Category.position` **active**
+      membership
+    * `type_uuid` — that membership's group (nulled when the group is
+      soft-deleted)
+
+  The mirror is recomputed whenever memberships are written
+  (`Taxonomy.set_template_memberships/3`) **and** on category/type soft-delete
+  and restore (`trash_category`/`restore_category`/`trash_type`/`restore_type`
+  recompute it from the surviving active memberships). As long as it is kept in
+  sync this way — the normal write path, an invariant enforced by tests — it
+  does not point at a trashed category/group.
+
+  **Permanent** deletion is the one best-effort gap, driven by the join table's
+  own foreign keys rather than a recompute: deleting a category cascades the
+  membership row away (`ON DELETE CASCADE`), while deleting a type nulls that
+  row's `type_uuid` (`ON DELETE SET NULL`). Either way the mirror is only
+  brought back in line lazily, on the template's next membership write; until
+  then a multi-category template may keep a stale/nil mirror. The join table
+  stays authoritative.
+
+  Both columns are stamped with a deprecation `COMMENT` in the database (V2).
+  They must not be dropped without a coordinated ANDI migration; a later chain
+  version will remove them once ANDI reads memberships directly.
   """
   use Ecto.Schema
   use PhoenixKit.SchemaPrefix
@@ -100,32 +133,26 @@ defmodule PhoenixKitDocumentCreator.Schemas.Template do
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
     |> validate_length(:name, min: 1, max: 255)
-    |> validate_length(:slug, max: 255)
     |> validate_length(:language, max: 10)
     |> validate_inclusion(:status, @statuses)
-    |> maybe_generate_slug()
+    # Core's changeset glue, replacing a local `maybe_generate_slug/1` that
+    # keyed on `get_change(:name)` — so RENAMING a template regenerated its
+    # slug and moved the URL, and nothing ever probed for collisions, so two
+    # templates named alike simply shared one. `put_slug/3` keeps an existing
+    # slug on rename, honours an explicit one, regenerates on an explicit
+    # blank, and suffixes -2, -3 … until free (excluding this row itself).
+    #
+    # `max_length: 255` is load-bearing: `slug` is varchar(255) and `:name`
+    # is allowed 255 characters, so an unbounded `-2` suffix would overflow
+    # the column — Postgres raises rather than truncating. The
+    # `validate_length(:slug)` cap moved below generation so it also sees a
+    # generated slug, which at its old position it never did.
+    |> Slug.put_slug(:name, max_length: 255)
+    |> validate_length(:slug, max: 255)
     |> unique_constraint(:slug)
     |> foreign_key_constraint(:category_uuid)
     |> foreign_key_constraint(:type_uuid)
   end
-
-  defp maybe_generate_slug(changeset) do
-    case get_change(changeset, :slug) do
-      nil ->
-        case get_change(changeset, :name) do
-          nil -> changeset
-          name -> put_change(changeset, :slug, slugify(name))
-        end
-
-      _ ->
-        changeset
-    end
-  end
-
-  # Core's rule, not a local copy. The pipeline this replaced deleted every
-  # non-ASCII character, so a Cyrillic or Greek name produced an EMPTY slug and
-  # German lost its umlauts. Slug.slugify/2 romanizes instead.
-  defp slugify(name), do: Slug.slugify(name, transliterate: true)
 
   @doc "Changeset for upserting from Google Drive sync data."
   def sync_changeset(template, attrs) do

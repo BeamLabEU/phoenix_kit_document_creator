@@ -245,9 +245,9 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
           class="select-sm"
         />
 
-        <div class="form-control">
+        <div class="fieldset">
           <div class="flex items-center justify-between">
-            <span class="label-text font-medium">{gettext("Sections")}</span>
+            <span class="fieldset-legend font-medium">{gettext("Sections")}</span>
             <button type="button" phx-click="add_section" class="btn btn-xs btn-ghost">
               <span class="hero-plus w-3 h-3" /> {gettext("Add section")}
             </button>
@@ -274,7 +274,7 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
                   </span>
                   <select
                     name={"section[#{index}][template_uuid]"}
-                    class="select select-bordered select-sm flex-1"
+                    class="select select-sm flex-1"
                   >
                     <option value="">{gettext("— pick a template —")}</option>
                     <%= for tmpl <- @templates do %>
@@ -321,7 +321,7 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
                         type="text"
                         name={"section[#{index}][variable_values][#{vname}]"}
                         value={Map.get(section["variable_values"] || %{}, vname, "")}
-                        class="input input-bordered input-xs"
+                        class="input input-xs"
                       />
                     </label>
                   <% end %>

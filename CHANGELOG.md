@@ -1,3 +1,102 @@
+## 0.7.0 - 2026-08-14
+
+### Changed
+
+- **⚠️ Requires `phoenix_kit ~> 2.4`.** `Template.changeset/2` now calls
+  `PhoenixKit.Utils.Slug.put_slug/3`, which core did not ship until 2.4.0. The
+  pin was raised from `~> 2.0` because that range admits cores where the
+  function does not exist — and the failure would land in the **consumer's**
+  app as an `UndefinedFunctionError` on every save touching `:name`, never in
+  this repo's own run, since the workspace always resolves the newest core.
+  Still two-segment, so every later 2.x satisfies it.
+
+  `core_pin_conformance_test.exs` moved with it, and now guards both
+  directions: too narrow (a three-segment pin collapsing to one minor) and too
+  wide (a core lacking the function this module calls).
+
+### Fixed
+
+- **Renaming a template moved its URL.** The local `maybe_generate_slug/1`
+  keyed on `get_change(:slug)` being nil, which is true both when the caller
+  left the slug alone and when the record hasn't got one — so any save carrying
+  no slug of its own re-derived it from the name, and nothing recorded the old
+  one. Core's `put_slug/3` distinguishes the two: an explicit slug wins, an
+  explicitly blanked one regenerates, and no slug at all defers to the stored
+  record (#39).
+
+- **Two templates with the same name silently shared a slug.** Nothing ever
+  probed for collisions, which broke get-by-slug lookups. Slugs are now
+  suffixed `-2`, `-3` … until free, excluding the row itself on update.
+
+- **A generated slug could overflow `varchar(255)`.** `validate_length(:slug)`
+  sat *before* generation, so it only ever saw explicitly-cast slugs; it now
+  runs after, and `put_slug/3` is given `max_length: 255` so the suffix is
+  trimmed into the cap rather than overflowing it (Postgres raises rather than
+  truncating).
+
+- **Two `:requires_unreleased_core` moduletags excluded nothing.** This repo's
+  `test_helper.exs` stopped excluding that tag at core 2.0, so the slug tests
+  were running against a Hex-resolved core all along rather than being masked
+  as the PR assumed. Removed now that the pin guarantees the function is there.
+
+## 0.6.0 - 2026-08-13
+
+### Added
+
+- **A template can belong to several categories at once** (#38). Membership
+  moves from the single `category_uuid`/`type_uuid` pair on
+  `phoenix_kit_doc_templates` to a many-to-many join table,
+  `phoenix_kit_doc_template_taxonomy` — one row per `(template, category)`
+  with its own optional group, unique on `(template_uuid, category_uuid)`.
+  The admin UI gains a per-row checkbox popover for templates; documents keep
+  their single-select dropdowns. `Taxonomy.set_template_memberships/3` is a
+  transactional replace-all, and `Documents.list_templates_for_category/1` now
+  sources through the join, so a multi-category template appears under each
+  category annotated with that category's group.
+
+- **Migration chain V2** creates the join table, backfills one row per template
+  that currently has a category, and stamps a deprecation `COMMENT` on the
+  legacy columns. ⚠️ **`down(target: 1)` destroys all multi-category data** —
+  it drops the join table, and only the single-binding legacy mirror survives.
+
+- **A "Standard groups" seed** (`Taxonomy.ensure_default_group_order/2`, plus a
+  button in the categories admin) puts the nine canonical ANDI groups in order.
+  Idempotent.
+
+### Changed
+
+- **The legacy `templates.category_uuid`/`type_uuid` columns are kept and kept
+  populated** as a backward-compatibility mirror of the *primary* membership
+  (the one whose category has the lowest `Category.position`), so the ANDI
+  consumer keeps working unchanged until it migrates to the join table. **Do
+  not drop them without a coordinated ANDI migration.** The mirror is
+  recomputed from surviving active memberships on category/group
+  trash and restore, so it never points at a trashed category and a
+  multi-category template does not vanish from single-category readers.
+
+- `trash_category/1` and `trash_type/1` no longer trash a template that still
+  belongs to another active category.
+
+- Dependency updates: `phoenix_kit` 2.3.0.
+
+### Fixed
+
+- **The image picker was hardcoded in Russian** (#37). Every visible string in
+  `Web.Components.ImagePicker` was a Russian literal — "Убрать", "Сбросить",
+  "Поиск по имени", "Файлы не найдены", "Назад", "Вперёд" — so an Estonian or
+  English user got Russian in the middle of an otherwise translated page. All
+  seven now go through Gettext, and the file counter became a real `ngettext/3`
+  instead of the abbreviation that was there to dodge plurals. The documents
+  view's "Search by name…" msgid had never been extracted, so it fell through
+  to English in every locale; it is now in the catalogues.
+
+- Four tests tagged `:requires_unreleased_core` no longer sit excluded from
+  every run. They gate on `PhoenixKit.Integrations.add_connection/3`'s
+  strict-UUID return shape, which was unpublished when the tag was added but
+  has shipped since core 2.0 — and this package has pinned `~> 2.0` since, so
+  every version the pin can resolve carries it. The exclusion had stopped
+  protecting anything and was hiding four passing tests.
+
 ## 0.5.2 - 2026-08-12
 
 ### Fixed

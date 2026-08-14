@@ -1,7 +1,7 @@
 defmodule PhoenixKitDocumentCreator.MixProject do
   use Mix.Project
 
-  @version "0.5.2"
+  @version "0.7.0"
   @source_url "https://github.com/BeamLabEU/phoenix_kit_document_creator"
 
   def project do
@@ -71,10 +71,30 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     ]
   end
 
+  # Swaps a Hex pin for a local checkout when PHOENIX_KIT_PATH is set, so this
+  # module's suite can run against uncommitted core without publishing it.
+  # Unset means the published pin, so `mix hex.publish` and CI are unaffected.
+  defp pk_dep(app, requirement, opts \\ []) do
+    env_var = String.upcase(Atom.to_string(app)) <> "_PATH"
+
+    case System.get_env(env_var) do
+      nil when opts == [] -> {app, requirement}
+      nil -> {app, requirement, opts}
+      path -> {app, [path: path, override: true] ++ opts}
+    end
+  end
+
   defp deps do
     [
-      # PhoenixKit provides the Module behaviour and Settings API.
-      {:phoenix_kit, "~> 2.0"},
+      # PhoenixKit provides the Module behaviour and Settings API — and, since
+      # the `put_slug/3` adoption, the slug changeset glue as well.
+      # 2.4.0+ is REQUIRED, not preferred: `Template.changeset/2` calls
+      # `PhoenixKit.Utils.Slug.put_slug/3`, which does not exist before core
+      # 2.4.0. Under `~> 2.0` a host could resolve core 2.0.x and every save
+      # touching `:name` would raise UndefinedFunctionError — in the consumer's
+      # app, never in this repo's own run, because the workspace always resolves
+      # the newest core. Two-segment, so every later 2.x still satisfies it.
+      pk_dep(:phoenix_kit, "~> 2.4"),
 
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.2"},

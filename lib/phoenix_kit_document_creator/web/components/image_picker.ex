@@ -24,6 +24,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
   The host LiveView must implement `handle_info({:image_picker_changed, _, _}, socket)`.
   """
   use Phoenix.LiveComponent
+  use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
   @page_size 50
 
@@ -131,7 +132,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
               phx-value-uuid={uuid}
               phx-target={@myself}
               class="hover:opacity-70 flex-shrink-0 ml-0.5"
-              title="Убрать"
+              title={gettext("Remove")}
             >
               &times;
             </button>
@@ -143,7 +144,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
             phx-target={@myself}
             class="badge badge-ghost text-xs"
           >
-            Сбросить
+            {gettext("Reset")}
           </button>
         </div>
       <% end %>
@@ -159,14 +160,16 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
         <input
           name="filter[q]"
           value={@filter}
-          placeholder="Поиск по имени"
-          class="input input-sm input-bordered w-full"
+          placeholder={gettext("Search by name…")}
+          class="input input-sm w-full"
         />
       </.form>
 
       <%!-- Image grid --%>
       <%= if @visible == [] do %>
-        <div class="text-sm text-base-content/50 text-center py-4">Файлы не найдены</div>
+        <div class="text-sm text-base-content/50 text-center py-4">
+          {gettext("No files found")}
+        </div>
       <% else %>
         <div class="grid grid-cols-3 sm:grid-cols-4 gap-2">
           <button
@@ -208,11 +211,11 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
           class="btn btn-xs btn-ghost"
           disabled={@page == 0}
         >
-          &lsaquo; Назад
+          &lsaquo; {gettext("Previous")}
         </button>
         <span class="text-xs text-base-content/60">
           {@page + 1} / {max(1, div(@filtered_count - 1, @page_size) + 1)}
-          &nbsp;({@filtered_count} файл.)
+          &nbsp;({ngettext("%{count} file", "%{count} files", @filtered_count)})
         </span>
         <button
           type="button"
@@ -221,7 +224,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.ImagePicker do
           class="btn btn-xs btn-ghost"
           disabled={@page + 1 >= max(1, div(@filtered_count - 1, @page_size) + 1)}
         >
-          Вперёд &rsaquo;
+          {gettext("Next")} &rsaquo;
         </button>
       </div>
     </div>

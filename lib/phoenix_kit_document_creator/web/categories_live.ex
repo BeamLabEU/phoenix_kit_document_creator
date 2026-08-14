@@ -231,6 +231,23 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     {:noreply, reload_types(socket)}
   end
 
+  # Code seed for part А: create/reposition the 9 canonical ANDI groups under
+  # the selected category, in order. Idempotent (see
+  # `Taxonomy.ensure_default_group_order/2`).
+  def handle_event("seed_default_groups", %{"uuid" => uuid}, socket) do
+    socket =
+      case Taxonomy.ensure_default_group_order(uuid, Helpers.actor_opts(socket)) do
+        :ok ->
+          put_flash(socket, :info, gettext("Standard groups added in order."))
+
+        {:error, reason} ->
+          Logger.error("seed_default_groups failed: #{inspect(reason)}")
+          put_flash(socket, :error, gettext("Could not add the standard groups."))
+      end
+
+    {:noreply, reload_types(socket)}
+  end
+
   # ── Preset events ─────────────────────────────────────────────────────────
 
   def handle_event("delete_preset", %{"uuid" => uuid}, socket) do
@@ -344,12 +361,30 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                 {if @selected, do: @selected.name, else: gettext("Types")}
               </h2>
               <%= if @selected && @categories_status_mode == "active" do %>
-                <a
-                  href={Routes.path("/admin/document-creator/categories/#{@selected.uuid}/types/new")}
-                  class="btn btn-primary btn-xs"
-                >
-                  <span class="hero-plus w-3 h-3" /> {gettext("New Type")}
-                </a>
+                <div class="flex items-center gap-1">
+                  <button
+                    type="button"
+                    phx-click="seed_default_groups"
+                    phx-value-uuid={@selected.uuid}
+                    data-confirm={
+                      gettext(
+                        "Create the standard ANDI groups (Hinnapakkumine … Hooldusjuhend) in this category, in order? Existing groups with these names are only repositioned."
+                      )
+                    }
+                    class="btn btn-ghost btn-xs"
+                    title={gettext("Seed the standard ANDI group order")}
+                  >
+                    <span class="hero-sparkles w-3 h-3" /> {gettext("Standard groups")}
+                  </button>
+                  <a
+                    href={
+                      Routes.path("/admin/document-creator/categories/#{@selected.uuid}/types/new")
+                    }
+                    class="btn btn-primary btn-xs"
+                  >
+                    <span class="hero-plus w-3 h-3" /> {gettext("New Type")}
+                  </a>
+                </div>
               <% end %>
             </div>
 

@@ -382,8 +382,8 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
           </p>
 
           <form phx-submit="save_folders" class="space-y-4 mt-4">
-            <div class="form-control">
-              <label class="label"><span class="label-text">{gettext("Root folder")}</span></label>
+            <div class="fieldset">
+              <label class="label"><span class="fieldset-legend">{gettext("Root folder")}</span></label>
               <div class="flex items-center gap-0">
                 <button
                   type="button"
@@ -400,7 +400,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="text"
                   name="root_name"
                   value={@root_name}
-                  class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm"
+                  class="input rounded-l-none flex-1 min-w-0 font-mono text-sm"
                   style="min-width: 120px;"
                   placeholder={PhoenixKit.Settings.get_project_title()}
                 />
@@ -413,8 +413,8 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
             <div class="divider my-1" />
 
-            <div class="form-control">
-              <label class="label"><span class="label-text">{gettext("Templates")}</span></label>
+            <div class="fieldset">
+              <label class="label"><span class="fieldset-legend">{gettext("Templates")}</span></label>
               <div class="flex items-center gap-0">
                 <button
                   type="button"
@@ -431,15 +431,15 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="text"
                   name="templates_name"
                   value={@templates_name}
-                  class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
+                  class="input rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
                   placeholder={gettext("templates")}
                 />
                 <input type="hidden" name="templates_path" value={@templates_path} />
               </div>
             </div>
 
-            <div class="form-control">
-              <label class="label"><span class="label-text">{gettext("Documents")}</span></label>
+            <div class="fieldset">
+              <label class="label"><span class="fieldset-legend">{gettext("Documents")}</span></label>
               <div class="flex items-center gap-0">
                 <button
                   type="button"
@@ -456,15 +456,15 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="text"
                   name="documents_name"
                   value={@documents_name}
-                  class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
+                  class="input rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
                   placeholder={gettext("documents")}
                 />
                 <input type="hidden" name="documents_path" value={@documents_path} />
               </div>
             </div>
 
-            <div class="form-control">
-              <label class="label"><span class="label-text">{gettext("Deleted")}</span></label>
+            <div class="fieldset">
+              <label class="label"><span class="fieldset-legend">{gettext("Deleted")}</span></label>
               <div class="flex items-center gap-0">
                 <button
                   type="button"
@@ -481,7 +481,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
                   type="text"
                   name="deleted_name"
                   value={@deleted_name}
-                  class="input input-bordered rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
+                  class="input rounded-l-none flex-1 min-w-0 font-mono text-sm" style="min-width: 120px;"
                   placeholder={gettext("deleted")}
                 />
                 <input type="hidden" name="deleted_path" value={@deleted_path} />

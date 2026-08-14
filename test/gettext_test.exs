@@ -162,4 +162,79 @@ defmodule PhoenixKitDocumentCreator.GettextTest do
                "labels won't translate at render time"
     end
   end
+
+  # Image picker catalogue (lib/.../web/components/image_picker.ex).
+  #
+  # `Gettext.dngettext/6` (and `dgettext/4`) read the *process* locale —
+  # they take no locale argument — so each lookup below runs inside
+  # `Gettext.with_locale/3`, which sets the locale for the duration of the
+  # given function and restores it afterwards. Iterating a list of locale
+  # strings without that wrapper would silently assert against whatever
+  # locale the process already had set.
+
+  test "image picker plural counter resolves correctly in ru for 1, 2, 5, 11, 21" do
+    Gettext.with_locale(PhoenixKitDocumentCreator.Gettext, "ru", fn ->
+      for {count, expected} <- [
+            {1, "1 файл"},
+            {2, "2 файла"},
+            {5, "5 файлов"},
+            {11, "11 файлов"},
+            {21, "21 файл"}
+          ] do
+        assert Gettext.dngettext(
+                 PhoenixKitDocumentCreator.Gettext,
+                 "default",
+                 "%{count} file",
+                 "%{count} files",
+                 count,
+                 %{count: count}
+               ) == expected
+      end
+    end)
+  end
+
+  test "image picker plural counter resolves correctly in et for 1 and 2" do
+    Gettext.with_locale(PhoenixKitDocumentCreator.Gettext, "et", fn ->
+      for {count, expected} <- [{1, "1 fail"}, {2, "2 faili"}] do
+        assert Gettext.dngettext(
+                 PhoenixKitDocumentCreator.Gettext,
+                 "default",
+                 "%{count} file",
+                 "%{count} files",
+                 count,
+                 %{count: count}
+               ) == expected
+      end
+    end)
+  end
+
+  test "image picker singular msgids resolve in et" do
+    Gettext.with_locale(PhoenixKitDocumentCreator.Gettext, "et", fn ->
+      for {msgid, expected} <- [
+            {"Previous", "Eelmine"},
+            {"Next", "Järgmine"},
+            {"Remove", "Eemalda"},
+            {"Reset", "Lähtesta"},
+            {"No files found", "Faile ei leitud"},
+            {"Search by name…", "Otsi nime järgi…"}
+          ] do
+        assert Gettext.dgettext(PhoenixKitDocumentCreator.Gettext, "default", msgid) == expected
+      end
+    end)
+  end
+
+  test "image picker singular msgids resolve in ru" do
+    Gettext.with_locale(PhoenixKitDocumentCreator.Gettext, "ru", fn ->
+      for {msgid, expected} <- [
+            {"Previous", "Назад"},
+            {"Next", "Вперёд"},
+            {"Remove", "Убрать"},
+            {"Reset", "Сбросить"},
+            {"No files found", "Файлы не найдены"},
+            {"Search by name…", "Поиск по имени…"}
+          ] do
+        assert Gettext.dgettext(PhoenixKitDocumentCreator.Gettext, "default", msgid) == expected
+      end
+    end)
+  end
 end

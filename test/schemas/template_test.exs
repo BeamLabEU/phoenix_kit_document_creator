@@ -1,5 +1,9 @@
 defmodule PhoenixKitDocumentCreator.Schemas.TemplateTest do
-  use ExUnit.Case, async: true
+  # DataCase rather than a bare ExUnit.Case: `changeset/2` now generates slugs
+  # through core's `Slug.put_slug/3`, which probes the repo for collisions —
+  # so any test casting a `:name` needs a sandbox owner. The file keeps its
+  # unit-level shape; only the case template changed.
+  use PhoenixKitDocumentCreator.DataCase, async: true
 
   alias PhoenixKitDocumentCreator.Schemas.Template
 
@@ -97,51 +101,31 @@ defmodule PhoenixKitDocumentCreator.Schemas.TemplateTest do
     end
   end
 
-  describe "slug auto-generation" do
-    test "generates slug from name when slug is not provided" do
-      cs = changeset(%{name: "My Great Template"})
-      assert Ecto.Changeset.get_change(cs, :slug) == "my-great-template"
-    end
+  describe "slug paths that never touch the database" do
+    # Generation now goes through core's `Slug.put_slug/3`, which probes the
+    # repo for collisions; the generating cases live in
+    # test/integration/template_slug_test.exs. What stays here is exactly the
+    # paths that return before the probe.
 
     test "preserves explicit slug when provided" do
       cs = changeset(%{name: "My Template", slug: "custom-slug"})
       assert Ecto.Changeset.get_change(cs, :slug) == "custom-slug"
     end
 
-    test "slugifies by lowercasing and replacing spaces with hyphens" do
-      cs = changeset(%{name: "Hello World"})
-      assert Ecto.Changeset.get_change(cs, :slug) == "hello-world"
-    end
-
-    test "strips special characters from slug" do
-      cs = changeset(%{name: "Invoice (Q1) #2024!"})
-      slug = Ecto.Changeset.get_change(cs, :slug)
-      refute String.contains?(slug, "(")
-      refute String.contains?(slug, ")")
-      refute String.contains?(slug, "#")
-      refute String.contains?(slug, "!")
-    end
-
-    test "collapses multiple hyphens into one" do
-      cs = changeset(%{name: "foo  --  bar"})
-      slug = Ecto.Changeset.get_change(cs, :slug)
-      refute String.contains?(slug, "--")
-    end
-
-    test "trims leading and trailing hyphens" do
-      cs = changeset(%{name: " - test - "})
-      slug = Ecto.Changeset.get_change(cs, :slug)
-      refute String.starts_with?(slug, "-")
-      refute String.ends_with?(slug, "-")
-    end
-
-    test "does not generate slug when name is unchanged (update without name change)" do
-      # Simulating an update where name is not changed
+    test "does not generate a slug when the record already has one" do
       existing = %Template{name: "Existing", slug: "existing"}
       cs = Template.changeset(existing, %{description: "Updated description"})
       assert cs.valid?
-      # slug should not be regenerated
       assert Ecto.Changeset.get_change(cs, :slug) == nil
+    end
+
+    test "renaming does not move an existing slug" do
+      # The bug the adoption fixed: the old generator keyed on the NAME
+      # changing, so every rename regenerated the slug and moved the URL.
+      existing = %Template{name: "Original Name", slug: "original-name"}
+      cs = Template.changeset(existing, %{name: "Renamed"})
+      assert Ecto.Changeset.get_change(cs, :slug) == nil
+      assert Ecto.Changeset.get_field(cs, :slug) == "original-name"
     end
 
     test "slug max length is 255" do

@@ -1086,6 +1086,11 @@ msgstr[1] "%{count} sektsiooni"
 msgid "Add section"
 msgstr "Lisa sektsioon"
 
+#: lib/phoenix_kit_document_creator/web/components/image_picker.ex:214
+#, elixir-autogen, elixir-format
+msgid "Previous"
+msgstr "Eelmine"
+
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:242
 #, elixir-autogen, elixir-format
 msgid "Could not delete preset."
@@ -1123,6 +1128,16 @@ msgstr "Uus eelseade"
 msgid "New preset"
 msgstr "Uus eelseade"
 
+#: lib/phoenix_kit_document_creator/web/components/image_picker.ex:227
+#, elixir-autogen, elixir-format
+msgid "Next"
+msgstr "Järgmine"
+
+#: lib/phoenix_kit_document_creator/web/components/image_picker.ex:171
+#, elixir-autogen, elixir-format
+msgid "No files found"
+msgstr "Faile ei leitud"
+
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:428
 #, elixir-autogen, elixir-format
 msgid "No presets for this category yet."
@@ -1147,6 +1162,22 @@ msgstr "Eelseade salvestatud."
 #, elixir-autogen, elixir-format
 msgid "Presets"
 msgstr "Eelseaded"
+
+#: lib/phoenix_kit_document_creator/web/components/image_picker.ex:135
+#, elixir-autogen, elixir-format
+msgid "Remove"
+msgstr "Eemalda"
+
+#: lib/phoenix_kit_document_creator/web/components/image_picker.ex:147
+#, elixir-autogen, elixir-format
+msgid "Reset"
+msgstr "Lähtesta"
+
+#: lib/phoenix_kit_document_creator/web/components/image_picker.ex:163
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1180
+#, elixir-autogen, elixir-format
+msgid "Search by name…"
+msgstr "Otsi nime järgi…"
 
 #: lib/phoenix_kit_document_creator/web/preset_form_live.ex:237
 #, elixir-autogen, elixir-format
@@ -1183,3 +1214,10 @@ msgstr "Tüübita"
 #, elixir-autogen, elixir-format
 msgid "— pick a template —"
 msgstr "— vali mall —"
+
+#: lib/phoenix_kit_document_creator/web/components/image_picker.ex:218
+#, elixir-autogen, elixir-format
+msgid "%{count} file"
+msgid_plural "%{count} files"
+msgstr[0] "%{count} fail"
+msgstr[1] "%{count} faili"

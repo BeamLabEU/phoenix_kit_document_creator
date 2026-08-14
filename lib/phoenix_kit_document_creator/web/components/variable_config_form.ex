@@ -22,14 +22,14 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
 
     ~H"""
     <div class="space-y-2">
-      <div class="form-control">
+      <div class="fieldset">
         <label class="label py-1">
-          <span class="label-text text-sm">{gettext("Default width (px)")}</span>
+          <span class="fieldset-legend text-sm">{gettext("Default width (px)")}</span>
         </label>
         <input
           type="number"
           name={"variables[#{@variable.name}][config][default_width_px]"}
-          class="input input-bordered input-sm w-full"
+          class="input input-sm w-full"
           value={config_value(@variable.config, :default_width_px)}
           min="1"
           phx-debounce="500"
@@ -55,26 +55,26 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
 
     ~H"""
     <div class="space-y-2">
-      <div class="form-control">
+      <div class="fieldset">
         <label class="label py-1">
-          <span class="label-text text-sm">{gettext("Default width (px)")}</span>
+          <span class="fieldset-legend text-sm">{gettext("Default width (px)")}</span>
         </label>
         <input
           type="number"
           name={"variables[#{@variable.name}][config][default_width_px]"}
-          class="input input-bordered input-sm w-full"
+          class="input input-sm w-full"
           value={config_value(@variable.config, :default_width_px)}
           min="1"
           phx-debounce="500"
         />
       </div>
-      <div class="form-control">
+      <div class="fieldset">
         <label class="label py-1">
-          <span class="label-text text-sm">{gettext("Separator")}</span>
+          <span class="fieldset-legend text-sm">{gettext("Separator")}</span>
         </label>
         <select
           name={"variables[#{@variable.name}][config][separator]"}
-          class="select select-bordered select-sm w-full"
+          class="select select-sm w-full"
           phx-debounce="500"
         >
           <option value="newline" selected={@current_separator == "newline"}>{gettext("New line")}</option>
@@ -82,13 +82,13 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
           <option value="none" selected={@current_separator == "none"}>{gettext("None")}</option>
         </select>
       </div>
-      <div class="form-control">
+      <div class="fieldset">
         <label class="label py-1">
-          <span class="label-text text-sm">{gettext("Columns")}</span>
+          <span class="fieldset-legend text-sm">{gettext("Columns")}</span>
         </label>
         <select
           name={"variables[#{@variable.name}][config][columns]"}
-          class="select select-bordered select-sm w-full"
+          class="select select-sm w-full"
           phx-debounce="500"
         >
           <option value="1" selected={@current_columns == "1"}>1</option>
@@ -97,14 +97,14 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
           <option value="4" selected={@current_columns == "4"}>4</option>
         </select>
       </div>
-      <div class="form-control">
+      <div class="fieldset">
         <label class="label py-1">
-          <span class="label-text text-sm">{gettext("Max images (blank = unlimited)")}</span>
+          <span class="fieldset-legend text-sm">{gettext("Max images (blank = unlimited)")}</span>
         </label>
         <input
           type="number"
           name={"variables[#{@variable.name}][config][max_count]"}
-          class="input input-bordered input-sm w-full"
+          class="input input-sm w-full"
           value={config_value(@variable.config, :max_count)}
           min="1"
           phx-debounce="500"
@@ -126,7 +126,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
 
   defp annotated_toggle(assigns) do
     ~H"""
-    <div class="form-control">
+    <div class="fieldset">
       <label class="label cursor-pointer py-1 justify-start gap-3">
         <input
           type="hidden"
@@ -140,7 +140,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
           value="true"
           checked={@current_annotated}
         />
-        <span class="label-text text-sm">{gettext("Include annotations")}</span>
+        <span class="fieldset-legend text-sm">{gettext("Include annotations")}</span>
       </label>
     </div>
     """
