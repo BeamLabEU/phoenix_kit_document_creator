@@ -11,9 +11,8 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
   use Phoenix.LiveView
   use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
-  import PhoenixKitWeb.Components.Core.Input, only: [input: 1]
   import PhoenixKitWeb.Components.Core.Select, only: [select: 1]
-  import PhoenixKitWeb.Components.Core.Textarea, only: [textarea: 1]
+  import PhoenixKitWeb.Components.MultilangForm
 
   require Logger
 
@@ -22,16 +21,21 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
   alias PhoenixKitDocumentCreator.Taxonomy
   alias PhoenixKitDocumentCreator.Web.Helpers
 
+  @translatable_fields ["name", "description"]
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
-     assign(socket,
+     socket
+     |> assign(
        page_title: gettext("Type"),
        type: nil,
+       changeset: nil,
        form: nil,
        mode: :new,
        categories: []
-     )}
+     )
+     |> mount_multilang()}
   end
 
   @impl true
@@ -43,12 +47,14 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
       case params do
         %{"uuid" => uuid} ->
           type = Taxonomy.get_type!(uuid)
+          changeset = Type.changeset(type, %{})
 
           socket
           |> assign(
             mode: :edit,
             type: type,
-            form: to_form(Type.changeset(type, %{}), as: :type),
+            changeset: changeset,
+            form: to_form(changeset, as: :type),
             page_title: gettext("Edit Type"),
             url_path: url_path,
             categories: categories
@@ -56,12 +62,14 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
 
         %{"category_uuid" => category_uuid} ->
           type = %Type{category_uuid: category_uuid}
+          changeset = Type.changeset(type, %{})
 
           socket
           |> assign(
             mode: :new,
             type: type,
-            form: to_form(Type.changeset(type, %{}), as: :type),
+            changeset: changeset,
+            form: to_form(changeset, as: :type),
             page_title: gettext("New Type"),
             url_path: url_path,
             categories: categories
@@ -69,32 +77,40 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
 
         _ ->
           type = %Type{}
+          changeset = Type.changeset(type, %{})
 
           socket
           |> assign(
             mode: :new,
             type: type,
-            form: to_form(Type.changeset(type, %{}), as: :type),
+            changeset: changeset,
+            form: to_form(changeset, as: :type),
             page_title: gettext("New Type"),
             url_path: url_path,
             categories: categories
           )
       end
 
-    {:noreply, socket}
+    {:noreply, refresh_multilang(socket)}
   end
 
   @impl true
   def handle_event("validate", %{"type" => params}, socket) do
+    params =
+      merge_translatable_params(params, socket, @translatable_fields, changeset: socket.assigns.changeset)
+
     changeset =
       socket.assigns.type
       |> Type.changeset(params)
       |> Map.put(:action, :validate)
 
-    {:noreply, assign(socket, form: to_form(changeset, as: :type))}
+    {:noreply, assign(socket, changeset: changeset, form: to_form(changeset, as: :type))}
   end
 
   def handle_event("save", %{"type" => params}, socket) do
+    params =
+      merge_translatable_params(params, socket, @translatable_fields, changeset: socket.assigns.changeset)
+
     result =
       case socket.assigns.mode do
         :new ->
@@ -112,7 +128,7 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
          |> push_navigate(to: Routes.path("/admin/document-creator/categories"))}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, form: to_form(changeset, as: :type))}
+        {:noreply, assign(socket, changeset: changeset, form: to_form(changeset, as: :type))}
     end
   end
 
@@ -145,33 +161,60 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
         </h1>
       </div>
 
+      <.multilang_tabs
+        :if={@multilang_enabled}
+        multilang_enabled={@multilang_enabled}
+        language_tabs={@language_tabs}
+        current_lang={@current_lang}
+      />
+
       <div class="card bg-base-100 shadow-sm border border-base-200">
         <div class="card-body">
-          <.form for={@form} phx-change="validate" phx-submit="save">
-            <.input
-              field={@form[:name]}
-              type="text"
-              label={gettext("Name")}
-              class="input-sm"
-              wrapper_class="mb-4"
-              phx-debounce="300"
-            />
-
-            <div class="mb-4">
-              <.textarea
-                field={@form[:description]}
-                label={gettext("Description")}
-                class="textarea-sm"
-                rows="3"
-                phx-debounce="300"
+          <.form for={@form} id="type-form" phx-change="validate" phx-submit="save">
+            <.multilang_fields_wrapper
+              multilang_enabled={@multilang_enabled}
+              current_lang={@current_lang}
+            >
+              <.translatable_field
+                field_name="name"
+                form_prefix="type"
+                changeset={@changeset}
+                schema_field={:name}
+                multilang_enabled={@multilang_enabled}
+                current_lang={@current_lang}
+                primary_language={@primary_language}
+                lang_data={get_lang_data(@changeset, @current_lang, @multilang_enabled)}
+                label={gettext("Name")}
+                class="input-sm"
+                required
               />
-            </div>
+
+              <.translatable_field
+                field_name="description"
+                form_prefix="type"
+                changeset={@changeset}
+                schema_field={:description}
+                multilang_enabled={@multilang_enabled}
+                current_lang={@current_lang}
+                primary_language={@primary_language}
+                lang_data={get_lang_data(@changeset, @current_lang, @multilang_enabled)}
+                label={gettext("Description")}
+                type="textarea"
+                rows={3}
+              />
+            </.multilang_fields_wrapper>
 
             <div class="mb-6">
               <.select
                 field={@form[:category_uuid]}
                 label={gettext("Category")}
-                options={Enum.map(@categories, &{&1.name, &1.uuid})}
+                options={
+                  Enum.map(
+                    @categories,
+                    &{Taxonomy.localized_name(&1, Gettext.get_locale(PhoenixKitDocumentCreator.Gettext)),
+                     &1.uuid}
+                  )
+                }
                 prompt={gettext("Select a category")}
                 class="select-sm"
               />

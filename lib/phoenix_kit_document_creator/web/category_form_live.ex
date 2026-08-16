@@ -10,8 +10,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
   use Phoenix.LiveView
   use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
-  import PhoenixKitWeb.Components.Core.Input, only: [input: 1]
-  import PhoenixKitWeb.Components.Core.Textarea, only: [textarea: 1]
+  import PhoenixKitWeb.Components.MultilangForm
 
   require Logger
 
@@ -20,15 +19,20 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
   alias PhoenixKitDocumentCreator.Taxonomy
   alias PhoenixKitDocumentCreator.Web.Helpers
 
+  @translatable_fields ["name", "description"]
+
   @impl true
   def mount(_params, _session, socket) do
     {:ok,
-     assign(socket,
+     socket
+     |> assign(
        page_title: gettext("Category"),
        category: nil,
+       changeset: nil,
        form: nil,
        mode: :new
-     )}
+     )
+     |> mount_multilang()}
   end
 
   @impl true
@@ -39,41 +43,52 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
       case params do
         %{"uuid" => uuid} ->
           category = Taxonomy.get_category!(uuid)
+          changeset = Category.changeset(category, %{})
 
           socket
           |> assign(
             mode: :edit,
             category: category,
-            form: to_form(Category.changeset(category, %{}), as: :category),
+            changeset: changeset,
+            form: to_form(changeset, as: :category),
             page_title: gettext("Edit Category"),
             url_path: url_path
           )
 
         _ ->
+          changeset = Category.changeset(%Category{}, %{})
+
           socket
           |> assign(
             mode: :new,
             category: %Category{},
-            form: to_form(Category.changeset(%Category{}, %{}), as: :category),
+            changeset: changeset,
+            form: to_form(changeset, as: :category),
             page_title: gettext("New Category"),
             url_path: url_path
           )
       end
 
-    {:noreply, socket}
+    {:noreply, refresh_multilang(socket)}
   end
 
   @impl true
   def handle_event("validate", %{"category" => params}, socket) do
+    params =
+      merge_translatable_params(params, socket, @translatable_fields, changeset: socket.assigns.changeset)
+
     changeset =
       socket.assigns.category
       |> Category.changeset(params)
       |> Map.put(:action, :validate)
 
-    {:noreply, assign(socket, form: to_form(changeset, as: :category))}
+    {:noreply, assign(socket, changeset: changeset, form: to_form(changeset, as: :category))}
   end
 
   def handle_event("save", %{"category" => params}, socket) do
+    params =
+      merge_translatable_params(params, socket, @translatable_fields, changeset: socket.assigns.changeset)
+
     result =
       case socket.assigns.mode do
         :new ->
@@ -91,7 +106,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
          |> push_navigate(to: Routes.path("/admin/document-creator/categories"))}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, form: to_form(changeset, as: :category))}
+        {:noreply, assign(socket, changeset: changeset, form: to_form(changeset, as: :category))}
     end
   end
 
@@ -124,27 +139,48 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
         </h1>
       </div>
 
+      <.multilang_tabs
+        :if={@multilang_enabled}
+        multilang_enabled={@multilang_enabled}
+        language_tabs={@language_tabs}
+        current_lang={@current_lang}
+      />
+
       <div class="card bg-base-100 shadow-sm border border-base-200">
         <div class="card-body">
-          <.form for={@form} phx-change="validate" phx-submit="save">
-            <.input
-              field={@form[:name]}
-              type="text"
-              label={gettext("Name")}
-              class="input-sm"
-              wrapper_class="mb-4"
-              phx-debounce="300"
-            />
-
-            <div class="mb-6">
-              <.textarea
-                field={@form[:description]}
-                label={gettext("Description")}
-                class="textarea-sm"
-                rows="3"
-                phx-debounce="300"
+          <.form for={@form} id="category-form" phx-change="validate" phx-submit="save">
+            <.multilang_fields_wrapper
+              multilang_enabled={@multilang_enabled}
+              current_lang={@current_lang}
+            >
+              <.translatable_field
+                field_name="name"
+                form_prefix="category"
+                changeset={@changeset}
+                schema_field={:name}
+                multilang_enabled={@multilang_enabled}
+                current_lang={@current_lang}
+                primary_language={@primary_language}
+                lang_data={get_lang_data(@changeset, @current_lang, @multilang_enabled)}
+                label={gettext("Name")}
+                class="input-sm"
+                required
               />
-            </div>
+
+              <.translatable_field
+                field_name="description"
+                form_prefix="category"
+                changeset={@changeset}
+                schema_field={:description}
+                multilang_enabled={@multilang_enabled}
+                current_lang={@current_lang}
+                primary_language={@primary_language}
+                lang_data={get_lang_data(@changeset, @current_lang, @multilang_enabled)}
+                label={gettext("Description")}
+                type="textarea"
+                rows={3}
+              />
+            </.multilang_fields_wrapper>
 
             <div class="flex gap-2 justify-end">
               <a href={Routes.path("/admin/document-creator/categories")} class="btn btn-ghost btn-sm">
