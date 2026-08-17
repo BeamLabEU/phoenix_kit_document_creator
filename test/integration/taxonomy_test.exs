@@ -669,6 +669,104 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
       end
     end
 
+    describe "localized_name/2" do
+      test "returns the raw name when no translation data exists" do
+        cat = create_category!(%{name: "Klient"})
+        assert Taxonomy.localized_name(cat, "ru") == "Klient"
+        assert Taxonomy.localized_name(cat, nil) == "Klient"
+      end
+
+      test "returns the primary-language override when locale matches primary" do
+        cat = create_category!(%{name: "Klient"})
+
+        {:ok, cat} =
+          Taxonomy.update_category(cat, %{
+            data: %{"_primary_language" => "et", "et" => %{"_name" => "Klient"}}
+          })
+
+        assert Taxonomy.localized_name(cat, "et") == "Klient"
+      end
+
+      test "returns a secondary-language override when present" do
+        cat = create_category!(%{name: "Klient"})
+
+        {:ok, cat} =
+          Taxonomy.update_category(cat, %{
+            data: %{
+              "_primary_language" => "et",
+              "et" => %{"_name" => "Klient"},
+              "ru" => %{"_name" => "Клиент"}
+            }
+          })
+
+        assert Taxonomy.localized_name(cat, "ru") == "Клиент"
+        assert Taxonomy.localized_name(cat, "et") == "Klient"
+      end
+
+      test "falls back to the primary override when a secondary language has none" do
+        cat = create_category!(%{name: "Klient"})
+
+        {:ok, cat} =
+          Taxonomy.update_category(cat, %{
+            data: %{"_primary_language" => "et", "et" => %{"_name" => "Klient"}}
+          })
+
+        assert Taxonomy.localized_name(cat, "en") == "Klient"
+      end
+
+      test "works the same way for Type records" do
+        cat = create_category!()
+        type = create_type!(cat.uuid, %{name: "Hooldusjuhend"})
+
+        {:ok, type} =
+          Taxonomy.update_type(type, %{
+            data: %{
+              "_primary_language" => "et",
+              "et" => %{"_name" => "Hooldusjuhend"},
+              "ru" => %{"_name" => "Руководство"}
+            }
+          })
+
+        assert Taxonomy.localized_name(type, "ru") == "Руководство"
+        assert Taxonomy.localized_name(type, "et") == "Hooldusjuhend"
+      end
+    end
+
+    describe "category_options/1 and type_options/2 with locale" do
+      test "category_options/1 returns translated labels when data has an override" do
+        cat = create_category!(%{name: "Klient"})
+
+        {:ok, _cat} =
+          Taxonomy.update_category(cat, %{
+            data: %{
+              "_primary_language" => "et",
+              "et" => %{"_name" => "Klient"},
+              "ru" => %{"_name" => "Клиент"}
+            }
+          })
+
+        opts = Taxonomy.category_options("ru")
+        assert Enum.any?(opts, fn {name, uuid} -> name == "Клиент" and uuid == cat.uuid end)
+      end
+
+      test "type_options/2 returns translated labels when data has an override" do
+        cat = create_category!()
+        type = create_type!(cat.uuid, %{name: "Hooldusjuhend"})
+
+        {:ok, _type} =
+          Taxonomy.update_type(type, %{
+            data: %{
+              "_primary_language" => "et",
+              "et" => %{"_name" => "Hooldusjuhend"},
+              "ru" => %{"_name" => "Руководство"}
+            }
+          })
+
+        opts = Taxonomy.type_options(cat.uuid, "ru")
+        assert Enum.any?(opts, fn {name, uuid} -> name == "Руководство" and uuid == type.uuid end)
+      end
+    end
+
     defp errors_on(changeset) do
       Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
         Regex.replace(~r"%{(\w+)}", msg, fn _, key ->

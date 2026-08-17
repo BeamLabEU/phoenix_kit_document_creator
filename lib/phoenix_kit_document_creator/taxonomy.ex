@@ -28,6 +28,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
 
   use Gettext, backend: PhoenixKitDocumentCreator.Gettext
 
+  alias PhoenixKit.Utils.Multilang
   alias PhoenixKitDocumentCreator.Schemas.Category
   alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Schemas.TemplateTaxonomy
@@ -1088,12 +1089,15 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   Suitable for `options_for_select/2`. The empty option lets users clear the
   FK (which is nullable).
 
+  `locale` selects the translated label via `localized_name/2`; omit (or
+  pass `nil`) to fall back to the denormalized `name` column.
+
   Drop-in replacement for the hard-coded `category_options/0` in
   `documents_live.ex`.
   """
-  @spec category_options() :: [{String.t(), Ecto.UUID.t() | nil}]
-  def category_options do
-    entries = list_categories() |> Enum.map(fn c -> {c.name, c.uuid} end)
+  @spec category_options(String.t() | nil) :: [{String.t(), Ecto.UUID.t() | nil}]
+  def category_options(locale \\ nil) do
+    entries = list_categories() |> Enum.map(fn c -> {localized_name(c, locale), c.uuid} end)
     [{gettext("No category"), nil} | entries]
   end
 
@@ -1102,16 +1106,43 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   by position, preceded by a `{"No type", nil}` empty option.
 
   Pass `nil` as `category_uuid` (or when no category is selected) to get
-  only the empty option.
+  only the empty option. `locale` selects the translated label via
+  `localized_name/2`.
 
   Suitable for `options_for_select/2`.
   """
-  @spec type_options(Ecto.UUID.t() | nil) :: [{String.t(), Ecto.UUID.t() | nil}]
-  def type_options(nil), do: [{gettext("No type"), nil}]
+  @spec type_options(Ecto.UUID.t() | nil, String.t() | nil) :: [{String.t(), Ecto.UUID.t() | nil}]
+  def type_options(category_uuid, locale \\ nil)
+  def type_options(nil, _locale), do: [{gettext("No type"), nil}]
 
-  def type_options(category_uuid) when is_binary(category_uuid) do
-    entries = list_types_for_category(category_uuid) |> Enum.map(fn t -> {t.name, t.uuid} end)
+  def type_options(category_uuid, locale) when is_binary(category_uuid) do
+    entries =
+      list_types_for_category(category_uuid)
+      |> Enum.map(fn t -> {localized_name(t, locale), t.uuid} end)
+
     [{gettext("No type"), nil} | entries]
+  end
+
+  @doc """
+  Returns the display name of a `Category` or `Type` record translated into
+  `locale`, reading overrides from the multilang `data` JSONB via
+  `PhoenixKit.Utils.Multilang.get_language_data/2`.
+
+  Mirrors `PhoenixKitCatalogue.Catalogue.get_translation/2` — falls back to
+  the primary-language value, then to the denormalized `name` column.
+  Returns `record.name` unchanged when `locale` is `nil` or no translation
+  data exists yet.
+  """
+  @spec localized_name(Category.t() | Type.t() | map(), String.t() | nil) :: String.t()
+  def localized_name(record, locale) do
+    data = Map.get(record, :data) || %{}
+    name = Map.get(record, :name)
+    lang_data = Multilang.get_language_data(data, locale || "")
+
+    case Map.get(lang_data, "_name") || Map.get(lang_data, "name") do
+      translated when is_binary(translated) and translated != "" -> translated
+      _ -> name
+    end
   end
 
   # ---------------------------------------------------------------------------

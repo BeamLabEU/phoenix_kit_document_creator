@@ -40,7 +40,9 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
     socket =
       socket
-      |> assign(url_path: url_path)
+      # Read after `mount/3` (not in it) so it runs after the parent app's
+      # telemetry hook has synced the process-global Gettext locale.
+      |> assign(url_path: url_path, locale: Gettext.get_locale(PhoenixKitDocumentCreator.Gettext))
       |> reload_categories()
 
     {:noreply, socket}
@@ -344,7 +346,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                     phx-value-uuid={cat.uuid}
                     class="flex-1 text-left text-sm font-medium"
                   >
-                    {cat.name}
+                    {Taxonomy.localized_name(cat, @locale)}
                   </button>
                   <.category_row_menu category={cat} trash_view={@categories_status_mode == "trashed"} />
                 </li>
@@ -358,7 +360,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
           <div class="card-body p-4">
             <div class="flex items-center justify-between mb-3">
               <h2 class="card-title text-base">
-                {if @selected, do: @selected.name, else: gettext("Types")}
+                {if @selected, do: Taxonomy.localized_name(@selected, @locale), else: gettext("Types")}
               </h2>
               <%= if @selected && @categories_status_mode == "active" do %>
                 <div class="flex items-center gap-1">
@@ -425,7 +427,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                     >
                       <span class="hero-bars-3 w-4 h-4" />
                     </span>
-                    <span class="flex-1 text-sm font-medium">{type.name}</span>
+                    <span class="flex-1 text-sm font-medium">{Taxonomy.localized_name(type, @locale)}</span>
                     <.type_row_menu type={type} trash_view={@types_status_mode == "trashed"} />
                   </li>
                 <% end %>
@@ -457,7 +459,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                 {gettext("No presets for this category yet.")}
               </p>
             <% else %>
-              <%= for {type_label, rows} <- group_presets_by_type(@presets, @types) do %>
+              <%= for {type_label, rows} <- group_presets_by_type(@presets, @types, @locale) do %>
                 <h3 class="text-sm font-semibold text-base-content/70 mt-3 mb-1">{type_label}</h3>
                 <ul class="flex flex-col gap-1">
                   <%= for %{preset: preset, stale: stale} <- rows do %>
@@ -732,8 +734,8 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
   # Groups preset rows by their `scope_type` (a Type uuid). Untyped presets
   # come last under a localized "Untyped" heading.
-  defp group_presets_by_type(presets, types) do
-    type_name = Map.new(types, fn t -> {t.uuid, t.name} end)
+  defp group_presets_by_type(presets, types, locale) do
+    type_name = Map.new(types, fn t -> {t.uuid, Taxonomy.localized_name(t, locale)} end)
 
     presets
     |> Enum.group_by(fn %{preset: p} -> p.scope_type end)

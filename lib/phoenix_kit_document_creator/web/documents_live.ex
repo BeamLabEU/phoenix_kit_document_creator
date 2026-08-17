@@ -1111,6 +1111,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           end) %>
         <%!-- Status tabs + view toggle on one row --%>
         <% show_status_tabs = length(visible_status_tabs) > 1 %>
+        <% filter_locale = Gettext.get_locale(PhoenixKitDocumentCreator.Gettext) %>
         <% filter_cats = Taxonomy.list_categories() %>
         <% filter_types =
           case @filters["category"] do
@@ -1125,13 +1126,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               |> Enum.flat_map(fn cat ->
                 cat.uuid
                 |> Taxonomy.list_types_for_category()
-                |> Enum.map(&{&1.uuid, "#{cat.name} / #{&1.name}"})
+                |> Enum.map(
+                  &{&1.uuid,
+                   "#{Taxonomy.localized_name(cat, filter_locale)} / #{Taxonomy.localized_name(&1, filter_locale)}"}
+                )
               end)
 
             cat_uuid ->
               cat_uuid
               |> Taxonomy.list_types_for_category()
-              |> Enum.map(&{&1.uuid, &1.name})
+              |> Enum.map(&{&1.uuid, Taxonomy.localized_name(&1, filter_locale)})
           end %>
         <%!-- Toolbar. Stacks on mobile: status tabs + view toggle share a compact
              top line, filters (search full-width, selects wrapping) sit below.
@@ -1212,7 +1216,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               <option value="">{gettext("All Categories")}</option>
               <%= for cat <- filter_cats do %>
                 <option value={cat.uuid} selected={@filters["category"] == cat.uuid}>
-                  {cat.name}
+                  {Taxonomy.localized_name(cat, filter_locale)}
                 </option>
               <% end %>
             </select>
@@ -1463,14 +1467,18 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # ── File grid ──────────────────────────────────────────────────
 
   defp assign_files(assigns, files) do
+    # Locale is read here (not in `mount/3`) so it runs after the parent
+    # app's telemetry hook has synced the process-global Gettext locale —
+    # see the comment on `page_title` in `mount/3`.
+    locale = Gettext.get_locale(PhoenixKitDocumentCreator.Gettext)
     cats = Taxonomy.list_categories()
-    cat_names = Map.new(cats, &{&1.uuid, &1.name})
+    cat_names = Map.new(cats, &{&1.uuid, Taxonomy.localized_name(&1, locale)})
 
     # category_options/0 includes the leading {nil, "No category"} entry;
     # drop the nil entry here so the template only loops over real options.
     cat_options =
       cats
-      |> Enum.map(&{&1.uuid, &1.name})
+      |> Enum.map(&{&1.uuid, Taxonomy.localized_name(&1, locale)})
 
     # types_by_category: %{category_uuid => [{type_uuid, type_name}, ...]}
     # Built once per grid render; each picker row reads from this map instead
@@ -1480,7 +1488,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         options =
           cat.uuid
           |> Taxonomy.list_types_for_category()
-          |> Enum.map(&{&1.uuid, &1.name})
+          |> Enum.map(&{&1.uuid, Taxonomy.localized_name(&1, locale)})
 
         {cat.uuid, options}
       end)
