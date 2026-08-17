@@ -59,7 +59,10 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
       sections: editor_sections(preset.sections),
       form: to_form(TemplatePreset.changeset(preset, %{}), as: :preset),
       page_title: if(mode == :new, do: gettext("New Preset"), else: gettext("Edit Preset")),
-      url_path: url_path
+      url_path: url_path,
+      # Read after `mount/3` (not in it) so it runs after the parent app's
+      # telemetry hook has synced the process-global Gettext locale.
+      locale: Gettext.get_locale(PhoenixKitDocumentCreator.Gettext)
     )
   end
 
@@ -217,7 +220,8 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
         {if @mode == :new, do: gettext("New Preset"), else: gettext("Edit Preset")}
       </h1>
       <p class="text-sm text-base-content/60">
-        {gettext("Category")}: <span class="font-medium">{@category.name}</span>
+        {gettext("Category")}:
+        <span class="font-medium">{Taxonomy.localized_name(@category, @locale)}</span>
       </p>
 
       <.form for={@form} phx-change="validate" phx-submit="save" class="flex flex-col gap-4">
@@ -240,7 +244,7 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLive do
         <.select
           field={@form[:scope_type]}
           label={gettext("Document type")}
-          options={Enum.map(@types, &{&1.name, &1.uuid})}
+          options={Enum.map(@types, &{Taxonomy.localized_name(&1, @locale), &1.uuid})}
           prompt={gettext("Untyped")}
           class="select-sm"
         />

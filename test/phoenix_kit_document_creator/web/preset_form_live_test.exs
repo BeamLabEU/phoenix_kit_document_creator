@@ -28,6 +28,27 @@ defmodule PhoenixKitDocumentCreator.Web.PresetFormLiveTest do
       assert preset.name == "Standard"
       assert preset.scope_id == cat.uuid
     end
+
+    # `live/2` runs the LiveView in its own process, so it never sees a
+    # non-default Gettext locale in a test (see the identical caveat on
+    # `CategoriesLiveTest`'s "locale-aware category/type names" describe
+    # block) — this only exercises the untranslated-fallback path, but it
+    # locks in that the category heading and the "Document type" select both
+    # route through `Taxonomy.localized_name/2` instead of the raw `:name`
+    # field, same as every other taxonomy display site.
+    test "renders category and type labels via localized_name/2", %{
+      conn: conn,
+      cat: cat,
+      type: type
+    } do
+      conn = put_test_scope(conn, fake_scope())
+
+      {:ok, view, html} =
+        live(conn, "/en/admin/document-creator/categories/#{cat.uuid}/presets/new")
+
+      assert html =~ cat.name
+      assert render(view) =~ type.name
+    end
   end
 
   describe "edit" do

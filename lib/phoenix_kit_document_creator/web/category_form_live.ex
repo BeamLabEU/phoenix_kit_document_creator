@@ -75,7 +75,9 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
   @impl true
   def handle_event("validate", %{"category" => params}, socket) do
     params =
-      merge_translatable_params(params, socket, @translatable_fields, changeset: socket.assigns.changeset)
+      merge_translatable_params(params, socket, @translatable_fields,
+        changeset: socket.assigns.changeset
+      )
 
     changeset =
       socket.assigns.category
@@ -87,7 +89,9 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
 
   def handle_event("save", %{"category" => params}, socket) do
     params =
-      merge_translatable_params(params, socket, @translatable_fields, changeset: socket.assigns.changeset)
+      merge_translatable_params(params, socket, @translatable_fields,
+        changeset: socket.assigns.changeset
+      )
 
     result =
       case socket.assigns.mode do
