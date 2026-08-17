@@ -1,3 +1,26 @@
+## 0.8.0 - 2026-08-17
+
+### Added
+
+- **Category and Type names are now translatable per-language** (#41).
+  `Taxonomy.localized_name/2` resolves a display name for `Category`/`Type`
+  through the (previously unused) `data` JSONB column, mirroring
+  `PhoenixKitCatalogue.Catalogue`'s translation mechanism on top of
+  `PhoenixKit.Utils.Multilang.get_language_data/2` — no migration needed.
+  Applied at every category/type display site: the admin taxonomy list, the
+  document grid's category/type filters and pickers, the type-select in the
+  category picker, and the preset form's category heading and "Document
+  type" select. `CategoryFormLive` and `TypeFormLive` gain language tabs
+  (via `PhoenixKitWeb.Components.MultilangForm`) so translations are
+  actually enterable. `category_options/1` and `type_options/2` take an
+  optional `locale` to return translated `options_for_select/2` labels.
+
+### Changed
+
+- Upgraded locked dependencies: `phoenix_kit` 2.4.0 → 2.8.1 (still within the
+  `~> 2.4` pin — `MultilangForm`/`Multilang` predate that floor), plus
+  `beamlab_countries`, `ecto`, `etcher`, and `quic` patch/minor bumps.
+
 ## 0.7.0 - 2026-08-14
 
 ### Changed
