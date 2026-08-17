@@ -2702,9 +2702,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   after text edits. All operations within a phase are batched in a single
   batchUpdate in reverse-index order so no substitution shifts the indices of
   another. Section ranges are also recalculated (`shift_ranges/2`) by the net
-  UTF-16 delta of every text replacement, so the image phase matches markers
-  against boundaries that reflect the edited document rather than the
+  UTF-16 delta of every *body* text replacement, so the image phase matches
+  markers against boundaries that reflect the edited document rather than the
   original one.
+
+  Headers and footers get their own pass. A composed document only ever
+  inherits the headers/footers of its first section (`copy_document/2` copies
+  them; `append_template/3` appends body content only), so a `{{key}}` found
+  there is resolved against whichever section has the lowest `position` —
+  never by range containment, since header/footer content has no body index
+  at all. Each header/footer segment has its own Docs index space (a Docs
+  `segmentId`), independent of the body's, so those replacements are excluded
+  from `shift_ranges/2` and sent as their own `segmentId`-scoped requests.
   """
   @spec substitute_all_sections(String.t(), [map()], %{
           non_neg_integer() => {integer(), integer()}
@@ -2713,8 +2722,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def substitute_all_sections(doc_id, sections, ranges) do
     # Phase 1: text substitution — one fetch, one batchUpdate in reverse-index order.
     with {:ok, %{body: doc}} <- get_document(doc_id),
-         {:ok, replacements} <- collect_text_replacements(doc, sections, ranges),
-         {:ok, _} <- apply_text_replacements(doc_id, replacements),
+         {:ok, body_replacements, header_footer_replacements} <-
+           collect_text_replacements(doc, sections, ranges),
+         {:ok, _} <-
+           apply_text_replacements(doc_id, body_replacements, header_footer_replacements),
          # Phase 2: image substitution — re-fetch so indices are current after text edits.
          {:ok, %{body: doc2}} <- get_document(doc_id) do
       # Text substitution changed the document's length, so every index after an
@@ -2722,7 +2733,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       # index against each section's range — passing the pre-substitution ranges
       # silently drops markers that drifted outside their (stale) section, which
       # is exactly what happens to the last sections of a multi-section compose.
-      substitute_all_images(doc_id, doc2, sections, shift_ranges(ranges, replacements))
+      # Header/footer replacements live in their own index space and never
+      # shift body section boundaries.
+      substitute_all_images(doc_id, doc2, sections, shift_ranges(ranges, body_replacements))
     end
   end
 
@@ -2744,47 +2757,87 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp sanitize_insert_text(text), do: Regex.replace(@docs_stripped_chars, text, "")
 
-  # Placeholder matches paired with their replacement values, as
+  # Body placeholder matches paired with their replacement values, as
   # `{key, start_index, end_index, value}`, sorted descending by start index so
-  # applying them in order never shifts a not-yet-applied match.
+  # applying them in order never shifts a not-yet-applied match. Header/footer
+  # matches carry an extra `segment_id` (the Docs `segmentId` their index space
+  # belongs to) and are returned separately, since they must never feed
+  # `shift_ranges/2` — body deltas don't apply to their independent index space.
   defp collect_text_replacements(doc, sections, ranges) do
     all_keys = sections |> Enum.flat_map(&Map.keys(&1.variable_values)) |> Enum.uniq()
 
-    replacements =
+    # A composed document only ever inherits the first section's headers/footers
+    # (see substitute_all_sections/3's doc), so that's the only section whose
+    # variable_values can resolve a header/footer placeholder.
+    header_footer_section = Enum.min_by(sections, & &1.position)
+
+    body_replacements =
       doc
       |> body_text_runs()
       |> Enum.flat_map(&find_text_var_ranges(&1, all_keys))
       |> Enum.flat_map(fn %{key: key, start_index: s, end_index: e} = match ->
         case section_for_match(sections, ranges, match) do
-          nil ->
-            []
-
-          section ->
-            value = section.variable_values[key] |> to_string() |> sanitize_insert_text()
-            [{key, s, e, value}]
+          nil -> []
+          section -> [{key, s, e, resolved_value(section, key)}]
         end
       end)
       |> Enum.sort_by(fn {_, s, _, _} -> s end, :desc)
 
-    {:ok, replacements}
+    header_footer_replacements =
+      doc
+      |> header_footer_text_runs()
+      |> Enum.flat_map(fn {segment_id, run} ->
+        run
+        |> find_text_var_ranges(all_keys)
+        |> Enum.flat_map(&header_footer_replacement(&1, header_footer_section, segment_id))
+      end)
+      |> Enum.sort_by(fn {_, s, _, _, _} -> s end, :desc)
+
+    {:ok, body_replacements, header_footer_replacements}
   end
 
-  defp apply_text_replacements(doc_id, replacements) do
-    requests =
-      Enum.flat_map(replacements, fn {_, s, e, value} ->
-        delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
+  defp header_footer_replacement(%{key: key, start_index: s, end_index: e}, section, segment_id) do
+    if Map.has_key?(section.variable_values, key) do
+      [{key, s, e, resolved_value(section, key), segment_id}]
+    else
+      []
+    end
+  end
 
-        # Google rejects insertText with empty text, and batchUpdate is atomic —
-        # one empty value would void every substitution in the batch. A blank
-        # variable clears its placeholder, mirroring the image path's behavior.
-        case value do
-          "" -> [delete]
-          _ -> [delete, %{insertText: %{location: %{index: s}, text: value}}]
-        end
-      end)
+  defp resolved_value(section, key),
+    do: section.variable_values[key] |> to_string() |> sanitize_insert_text()
+
+  defp apply_text_replacements(doc_id, body_replacements, header_footer_replacements) do
+    requests =
+      Enum.flat_map(body_replacements, fn {_, s, e, value} ->
+        text_replacement_requests(s, e, value, nil)
+      end) ++
+        Enum.flat_map(header_footer_replacements, fn {_, s, e, value, segment_id} ->
+          text_replacement_requests(s, e, value, segment_id)
+        end)
 
     maybe_batch(&batch_update/2, doc_id, requests)
   end
+
+  # `segment_id` is the Docs `segmentId` a header/footer's content lives under;
+  # `nil` for the body, which omits the field entirely rather than sending it
+  # as `nil` — matching what a body-only substitution has always sent.
+  defp text_replacement_requests(s, e, value, segment_id) do
+    range = maybe_put_segment(%{startIndex: s, endIndex: e}, segment_id)
+    location = maybe_put_segment(%{index: s}, segment_id)
+    delete = %{deleteContentRange: %{range: range}}
+
+    # Google rejects insertText with empty text, and batchUpdate is atomic —
+    # one empty value would void every substitution in the batch. A blank
+    # variable clears its placeholder, mirroring the image path's behavior.
+    case value do
+      "" -> [delete]
+      _ -> [delete, %{insertText: %{location: location, text: value}}]
+    end
+  end
+
+  defp maybe_put_segment(map, nil), do: map
+  defp maybe_put_segment(map, segment_id), do: Map.put(map, :segmentId, segment_id)
 
   @doc false
   # Moves each section boundary by the net length change of every replacement
@@ -2993,6 +3046,25 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     (get_in(doc, ["body", "content"]) || [])
     |> Enum.flat_map(&walk_block/1)
     |> Enum.filter(&match?(%{"textRun" => _, "startIndex" => _}, &1))
+  end
+
+  # Walk every header and footer segment, returning each textRun element
+  # paired with the Docs `segmentId` (the map key under "headers"/"footers")
+  # its indices belong to — a header/footer's own index space, independent of
+  # the body's and of every other segment's.
+  defp header_footer_text_runs(doc) do
+    segment_text_runs(Map.get(doc, "headers", %{})) ++
+      segment_text_runs(Map.get(doc, "footers", %{}))
+  end
+
+  defp segment_text_runs(segments) do
+    Enum.flat_map(segments, fn {segment_id, segment} ->
+      segment
+      |> Map.get("content", [])
+      |> Enum.flat_map(&walk_block/1)
+      |> Enum.filter(&match?(%{"textRun" => _, "startIndex" => _}, &1))
+      |> Enum.map(&{segment_id, &1})
+    end)
   end
 
   @text_var_regex ~r/\{\{\s*([\p{L}\p{N}_]+)\s*\}\}/u

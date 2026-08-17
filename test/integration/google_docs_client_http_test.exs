@@ -523,6 +523,241 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
     end
   end
 
+  describe "substitute_all_sections/3 — header and footer text substitution" do
+    # A composed document only ever inherits the FIRST section's headers/footers
+    # (copy_document/2 copies them; append_template/3 appends body content only),
+    # so a header/footer placeholder must resolve against the lowest-position
+    # section regardless of which section's body range the reader's eye is near.
+    test "substitutes a placeholder in a header, scoped to its segmentId" do
+      doc = %{
+        "body" => %{"content" => []},
+        "headers" => %{
+          "kix.h1" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{"startIndex" => 1, "textRun" => %{"content" => "Order {{ order_no }}\n"}}
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      StubIntegrations.stub_request(
+        :get,
+        "/v1/documents/doc-header",
+        {:ok, %{status: 200, body: doc}}
+      )
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [%{position: 0, variable_values: %{"order_no" => "42"}, image_params: %{}}]
+      ranges = %{0 => {1, 1}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("doc-header", sections, ranges)
+
+      batch_bodies =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            do: opts[:json].requests
+
+      assert [
+               [
+                 %{
+                   deleteContentRange: %{
+                     range: %{startIndex: 7, endIndex: 21, segmentId: "kix.h1"}
+                   }
+                 },
+                 %{insertText: %{location: %{index: 7, segmentId: "kix.h1"}, text: "42"}}
+               ]
+             ] = batch_bodies
+    end
+
+    test "footer placeholder resolves against the first section, not a later one that also defines the key" do
+      doc = %{
+        "body" => %{"content" => []},
+        "footers" => %{
+          "kix.f1" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{"startIndex" => 1, "textRun" => %{"content" => "{{ company }}\n"}}
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      StubIntegrations.stub_request(
+        :get,
+        "/v1/documents/doc-footer",
+        {:ok, %{status: 200, body: doc}}
+      )
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [
+        %{position: 0, variable_values: %{"company" => "First Co"}, image_params: %{}},
+        %{position: 1, variable_values: %{"company" => "Second Co"}, image_params: %{}}
+      ]
+
+      ranges = %{0 => {1, 1}, 1 => {1, 1}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("doc-footer", sections, ranges)
+
+      insert_texts =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            request <- opts[:json].requests,
+            %{insertText: %{text: text}} <- [request],
+            do: text
+
+      assert insert_texts == ["First Co"]
+    end
+
+    test "a header replacement's delta doesn't leak into body section boundaries" do
+      # Section 0 holds both a body placeholder ("{{ customer }}", shrinks by
+      # 10) and, via the header, a much-longer placeholder that shrinks by 30.
+      # Section 1's image marker is positioned exactly where it should land
+      # after ONLY the body delta is applied (25 - 10 = 15). If the header's
+      # delta leaked into shift_ranges/2, the marker would be searched for at
+      # the wrong index and silently dropped — the same failure class as the
+      # body-only "section ranges after text substitution" test above, now
+      # guarding against a header/footer-shaped version of it.
+      before_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "Tellija: {{ customer }}\n"}}
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 25, "textRun" => %{"content" => "{{ images: photos }}\n"}}
+                ]
+              }
+            }
+          ]
+        },
+        "headers" => %{
+          "kix.h1" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{
+                      "startIndex" => 1,
+                      "textRun" => %{"content" => "{{ a_much_longer_placeholder }}\n"}
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      after_doc = %{
+        "body" => %{
+          "content" => [
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "textRun" => %{"content" => "Tellija: Acme\n"}}
+                ]
+              }
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 15, "textRun" => %{"content" => "{{ images: photos }}\n"}}
+                ]
+              }
+            }
+          ]
+        },
+        "headers" => %{
+          "kix.h1" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{"startIndex" => 1, "textRun" => %{"content" => "x\n"}}
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      calls = start_supervised!({Agent, fn -> 0 end})
+
+      StubIntegrations.stub_request(:get, "/v1/documents/doc-header-shift", fn ->
+        n = Agent.get_and_update(calls, fn n -> {n, n + 1} end)
+        {:ok, %{status: 200, body: if(n == 0, do: before_doc, else: after_doc)}}
+      end)
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [
+        %{
+          position: 0,
+          variable_values: %{"customer" => "Acme", "a_much_longer_placeholder" => "x"},
+          image_params: %{}
+        },
+        %{
+          position: 1,
+          variable_values: %{},
+          image_params: %{
+            "photos" => %{
+              "kind" => "image_list",
+              "columns" => 1,
+              "width_px" => 300,
+              "media" => [%{"uri" => "https://example.test/a.png"}]
+            }
+          }
+        }
+      ]
+
+      ranges = %{0 => {1, 25}, 1 => {25, 46}}
+
+      assert :ok =
+               GoogleDocsClient.substitute_all_sections("doc-header-shift", sections, ranges)
+
+      image_requests =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            request <- opts[:json].requests,
+            Map.has_key?(request, :insertInlineImage),
+            do: request
+
+      assert [%{insertInlineImage: %{uri: "https://example.test/a.png"}}] = image_requests
+    end
+  end
+
   describe "shift_ranges/2" do
     test "moves boundaries by the net length change of earlier replacements" do
       # "{{ a }}" (7 units) → "LONGER" (6): −1, starting at index 3.
