@@ -96,6 +96,12 @@ defmodule PhoenixKitDocumentCreator.MixProject do
       # the newest core. Two-segment, so every later 2.x still satisfies it.
       pk_dep(:phoenix_kit, "~> 2.4"),
 
+      # mdex_native (pulled in transitively through phoenix_kit's mdex dep)
+      # builds from source when MDEX_NATIVE_BUILD=1 is set in the
+      # environment; that path requires rustler itself, not just
+      # rustler_precompiled. Same declaration as phoenix_kit's own mix.exs.
+      {:rustler, ">= 0.0.0", optional: true},
+
       # LiveView is needed for the admin pages.
       {:phoenix_live_view, "~> 1.2"},
 
