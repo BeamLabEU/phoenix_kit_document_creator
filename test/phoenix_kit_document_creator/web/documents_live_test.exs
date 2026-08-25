@@ -625,7 +625,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert Process.alive?(view.pid)
     end
 
-    # ── template edit modal — language (A044) ───────────────────────────
+    # ── template edit modal — language ──────────────────────────────────
     # `set_template_language` (the old language popover's event) is gone —
     # editing a template's language now goes through the modal's
     # "template_modal_set_language" + "template_modal_save". These pin the
@@ -1439,7 +1439,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
     end
   end
 
-  describe "template edit modal — categories & groups (A044)" do
+  describe "template edit modal — categories & groups" do
     # Templates (unlike documents) carry many-to-many category memberships.
     # They used to be edited through a per-row checkbox popover; the owner
     # reviewed the modal on the live site and asked to remove that popover
@@ -1554,7 +1554,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert type_uuid == group.uuid
     end
 
-    test "a repeat Save after the modal already closed is a no-op, not a crash (pi review #1)",
+    test "a repeat Save after the modal already closed is a no-op, not a crash",
          %{conn: conn} do
       tmpl = insert_template("Tpl DoubleClick")
 
@@ -1579,7 +1579,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert Process.alive?(view.pid)
     end
 
-    test "an unchanged Save does not rewrite the memberships (pi review #3)", %{conn: conn} do
+    test "an unchanged Save does not rewrite the memberships", %{conn: conn} do
       {:ok, klient} = Taxonomy.create_category(%{name: "Klient document"})
       tmpl = insert_template("Tpl Unchanged")
 

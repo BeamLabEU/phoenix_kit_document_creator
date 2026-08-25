@@ -81,7 +81,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        unfiled_modal_open: false,
        unfiled_file: nil,
        unfiled_working: false,
-       # Template edit modal (A044): categories, groups and language edited
+       # Template edit modal: categories, groups and language edited
        # together in one dialog, saved with a single button. Draft state —
        # nothing hits the DB until "template_modal_save"; "template_modal_
        # close" (Cancel, backdrop, Escape) discards it untouched. Step 2
@@ -93,12 +93,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        template_modal_categories: [],
        # Snapshot of `template_modal_categories` as loaded when the modal
        # opened — lets Save skip the membership write entirely when the
-       # category/group draft comes back unchanged (pi review, A044,
-       # confirmed: this guard existed for language but not categories).
+       # category/group draft comes back unchanged (code review: this guard
+       # existed for language but not categories).
        template_modal_original_categories: [],
        template_modal_language: nil,
        # Categories + their groups for the modal, fetched once on open —
-       # NOT recomputed on every render (pi review, A044, confirmed: calling
+       # NOT recomputed on every render (code review: calling
        # `template_modal_taxonomy/0` from inside the HEEx block re-ran it,
        # and its N+1 category/type query, on every phx-change inside the
        # open modal, not just on open).
@@ -471,7 +471,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   # The single-select category/type dropdowns are DOCUMENTS-only. Templates
-  # categorise through the edit modal's multi-category picker (A044), so a
+  # categorise through the edit modal's multi-category picker, so a
   # stray template-kind payload is ignored rather than written as a single
   # binding (which would drop the template's other memberships).
   def handle_event(
@@ -739,7 +739,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
-  # ── Template edit modal (A044) ────────────────────────────────────
+  # ── Template edit modal ───────────────────────────────────────────
   # Categories (multi), groups and language for one template, edited
   # together and saved with a single button — replaces the round-trip-
   # per-checkbox flow of the dropdown popover, which lost DOM focus (and
@@ -824,13 +824,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     {:noreply, assign(socket, template_modal_language: language)}
   end
 
-  # Double-submit guard (pi review, A044, confirmed): a second "template_
-  # modal_save" — e.g. a fast double-click, since the button has no disable-
-  # while-pending guard on its own — would otherwise land after the first
-  # click already reset `template_modal_file` to nil, and
-  # `Taxonomy.set_template_memberships(nil, ...)` has no clause for a nil
-  # template_uuid, so it raises and crashes the LiveView process. A repeat
-  # event now finds `template_modal_file: nil` and is a no-op.
+  # Double-submit guard (code review): a second "template_modal_save" — e.g.
+  # a fast double-click, since the button has no disable-while-pending guard
+  # on its own — would otherwise land after the first click already reset
+  # `template_modal_file` to nil, and `Taxonomy.set_template_memberships(nil,
+  # ...)` has no clause for a nil template_uuid, so it raises and crashes the
+  # LiveView process. A repeat event now finds `template_modal_file: nil`
+  # and is a no-op.
   def handle_event(
         "template_modal_save",
         _params,
@@ -842,11 +842,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   def handle_event("template_modal_save", _params, socket) do
     file = socket.assigns.template_modal_file
 
-    # Write result gates the close (pi review, A044, confirmed): on `{:error,
-    # _}` the modal used to close and the draft was discarded regardless —
-    # the user lost their edits with only a page-level error banner and no
-    # way to see what they'd been changing. Now a failed write keeps the
-    # modal open with the draft intact so Save can just be retried.
+    # Write result gates the close (code review): on `{:error, _}` the modal
+    # used to close and the draft was discarded regardless — the user lost
+    # their edits with only a page-level error banner and no way to see what
+    # they'd been changing. Now a failed write keeps the modal open with the
+    # draft intact so Save can just be retried.
     with {:ok, socket} <-
            maybe_apply_membership_write(
              socket,
@@ -1525,7 +1525,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     </PhoenixKitWeb.Components.Core.Modal.modal>
 
     <%!--
-      Template edit modal (A044): categories (multi), per-category group and
+      Template edit modal: categories (multi), per-category group and
       language for one template, together in one dialog with a single Save.
       A `<dialog>` driven by the `show` assign (PkDialog hook) rather than
       browser focus, so a phx-change patch while it's open does not close
@@ -1666,10 +1666,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # `types_by_category` (computed only for the currently rendered grid page
   # and not carried in assigns) — same shape as `assign_files/2` produces.
   # Called once from "open_template_modal" and cached into `template_modal_
-  # cat_options`/`template_modal_types_by_category` (pi review, A044,
-  # confirmed: calling this from inside the modal's HEEx re-ran its N+1
-  # category/type query on every phx-change while the modal was open, not
-  # only when it opened).
+  # cat_options`/`template_modal_types_by_category` (code review: calling
+  # this from inside the modal's HEEx re-ran its N+1 category/type query on
+  # every phx-change while the modal was open, not only when it opened).
   defp template_modal_taxonomy do
     locale = Gettext.get_locale(PhoenixKitDocumentCreator.Gettext)
     cats = Taxonomy.list_categories()
@@ -2163,9 +2162,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     # points at a trashed (or otherwise missing) row resolves to a nil name
     # here — that's the "stale ref" signal used below to render a visible
     # placeholder instead of silently falling back to "No category"/"No type".
-    # Template memberships (many-to-many) for this file — A044 step 2 folds
-    # them into a compact read-only summary (below) instead of a per-category
-    # checkbox list. Documents have no memberships (empty list).
+    # Template memberships (many-to-many) for this file — folded into a
+    # compact read-only summary (below) instead of a per-category checkbox
+    # list. Documents have no memberships (empty list).
     memberships = Map.get(assigns.memberships_by_template, assigns.file["uuid"], [])
     {summary_text, summary_title} = category_summary(memberships, assigns.category_names)
 
@@ -2236,7 +2235,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         </span>
       <% @is_template -> %>
         <%!--
-          Active view, templates (A044 step 2): the owner reviewed the modal
+          Active view, templates: the owner reviewed the modal
           on the live site and asked to remove the old per-checkbox dropdown
           and the language popover — editing now happens only through the
           modal (render/1, "template-edit-modal"). What's shown here is a
@@ -2351,9 +2350,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   defp stale_taxonomy_ref?(nil, _names), do: false
   defp stale_taxonomy_ref?(uuid, names), do: not Map.has_key?(names, uuid)
 
-  # Compact read-only summary of a template's category memberships (A044
-  # step 2), for display in the row/card before the Edit button — owner:
-  # "не хотелось бы занимать много места". Returns `{short_text, full_title}`:
+  # Compact read-only summary of a template's category memberships, for
+  # display in the row/card before the Edit button — owner: "не хотелось бы
+  # занимать много места". Returns `{short_text, full_title}`:
   # the short form is what's shown (an em dash when there are none, so it
   # reads as "loaded, empty" rather than "not loaded yet"; the one name when
   # there's exactly one; the first name plus a "+N" count for the rest
@@ -2726,7 +2725,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # the next render, so the row/card summary reflects the write without a
   # manual assign patch. On `{:error, _}` the caller ("template_modal_save")
   # uses the `{:error, _}` tag to keep the modal open and the draft intact
-  # instead of discarding the user's edits on a failed write (pi review, A044).
+  # instead of discarding the user's edits on a failed write (code review).
   defp apply_membership_write(socket, template_uuid, memberships) do
     case Taxonomy.set_template_memberships(template_uuid, memberships, actor_opts(socket)) do
       {:ok, _rows} ->
@@ -2739,9 +2738,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   # Skips the write entirely when the modal's draft categories/groups come
   # back exactly as they were loaded on open — the same guard `maybe_apply_
-  # template_language_write/3` already had for language (pi review, A044,
-  # confirmed asymmetry: this one was missing, so an unchanged Save still
-  # did a full replace-all write and broadcast). Compared as sets, not lists
+  # template_language_write/3` already had for language (code review found
+  # this asymmetry: this one was missing, so an unchanged Save still did a
+  # full replace-all write and broadcast). Compared as sets, not lists
   # — the draft can reorder entries relative to the DB read (new memberships
   # are appended), and order must not read as a change.
   defp maybe_apply_membership_write(socket, template_uuid, original, draft) do
