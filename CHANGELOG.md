@@ -1,3 +1,22 @@
+## 0.9.0 - 2026-08-25
+
+### Changed
+
+- **Template categories/groups/language now edit through a single modal**
+  (#43). The old per-row dropdown popover (multi-category checkboxes + group
+  select) and the separate language popover are gone — an "Edit" button opens
+  a modal where categories, groups, and language are all edited as draft
+  state and written once on Save, rather than round-tripping to the DB on
+  every checkbox/select change. The dropdown popover also lost focus (and
+  closed) on every `phx-change` patch, which made multi-category edits
+  impractical; the modal is a `<dialog>` and isn't affected. The row/card now
+  shows a compact read-only summary of the current language + categories.
+- Date/time display (`format_time`/`format_datetime`) now renders the month
+  name through `PhoenixKit.Utils.Date.short_month/1` (locale-translated)
+  instead of `Calendar.strftime`'s English-only `%b`.
+- Upgraded locked dependencies: `phoenix_kit` 2.13.5 → 2.13.9, `phoenix_pubsub`
+  2.2.0 → 2.3.0, `swoosh` 1.27.1 → 1.28.0, plus `tz` added transitively.
+
 ## 0.8.0 - 2026-08-17
 
 ### Added
