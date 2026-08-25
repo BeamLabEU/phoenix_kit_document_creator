@@ -313,6 +313,17 @@ msgstr "Group"
 msgid "No group"
 msgstr "No group"
 
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2290
+#, elixir-autogen
+msgid "Not categorized"
+msgstr "Not categorized"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2161
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2295
+#, elixir-autogen
+msgid "deleted category"
+msgstr "deleted category"
+
 ## Loading / progress states
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:887
 #, elixir-autogen

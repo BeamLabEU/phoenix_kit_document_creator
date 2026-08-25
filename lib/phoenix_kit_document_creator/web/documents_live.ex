@@ -84,9 +84,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        # Template edit modal (A044): categories, groups and language edited
        # together in one dialog, saved with a single button. Draft state —
        # nothing hits the DB until "template_modal_save"; "template_modal_
-       # close" (Cancel, backdrop, Escape) discards it untouched. The old
-       # per-row dropdown popover (render_template_category_popover/1) is
-       # left in place, unmodified, as a second way to do the same edit.
+       # close" (Cancel, backdrop, Escape) discards it untouched. Step 2
+       # (owner-approved on the live site): the old per-row dropdown popover
+       # and the language picker are removed — this is now the only way to
+       # edit a template's categories/groups/language.
        template_modal_open: false,
        template_modal_file: nil,
        template_modal_categories: [],
@@ -457,19 +458,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
-  def handle_event("set_template_language", %{"id" => file_id} = params, socket) do
-    language = blank_to_nil(Map.get(params, "language", ""))
-
-    case verify_known_file(socket, file_id) do
-      :ok -> {:noreply, apply_template_language_write(socket, file_id, language)}
-      _ -> {:noreply, socket}
-    end
-  end
-
   # The single-select category/type dropdowns are DOCUMENTS-only. Templates
-  # categorise through the multi-category checkbox popover, so a stray
-  # template-kind payload is ignored rather than written as a single binding
-  # (which would drop the template's other memberships).
+  # categorise through the edit modal's multi-category picker (A044), so a
+  # stray template-kind payload is ignored rather than written as a single
+  # binding (which would drop the template's other memberships).
   def handle_event(
         "set_taxonomy_category",
         %{"google_doc_id" => gid, "kind" => "document"} = params,
@@ -497,36 +489,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("set_taxonomy_type", %{"kind" => _}, socket), do: {:noreply, socket}
-
-  # Templates use a multi-category checkbox popover (part Б). Toggling a
-  # category adds/removes that (category, nil-group) membership; the group
-  # select sets the type_uuid for an existing membership. Both write the
-  # template's FULL membership set via the replace-all API — the current set
-  # is read back from the DB, the one category is flipped, and the result is
-  # persisted. `assign_files/2` re-reads memberships on the next render.
-  def handle_event(
-        "toggle_template_category",
-        %{"template_uuid" => template_uuid, "category_uuid" => category_uuid} = params,
-        socket
-      ) do
-    checked? = Map.get(params, "value") == "on"
-    current = current_membership_maps(template_uuid)
-    updated = toggle_category_membership(current, category_uuid, checked?)
-
-    {:noreply, apply_membership_write(socket, template_uuid, updated)}
-  end
-
-  def handle_event(
-        "set_template_group",
-        %{"template_uuid" => template_uuid, "category_uuid" => category_uuid} = params,
-        socket
-      ) do
-    type_uuid = blank_to_nil(params["value"])
-    current = current_membership_maps(template_uuid)
-    updated = set_group_for_category(current, category_uuid, type_uuid)
-
-    {:noreply, apply_membership_write(socket, template_uuid, updated)}
-  end
 
   def handle_event("new_blank_document", _params, socket) do
     case Documents.create_document(gettext("Untitled Document"), actor_opts(socket)) do
@@ -776,8 +738,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # `template_modal_categories` carries the same
   # `[%{category_uuid:, type_uuid:}]` shape `Taxonomy.set_template_
   # memberships/3` expects, reusing `toggle_category_membership/3` and
-  # `set_group_for_category/3` — only the write destination differs (draft
-  # assign here vs. immediate DB write in the popover's handlers).
+  # `set_group_for_category/3` — same helpers the removed dropdown popover
+  # used to write straight to the DB on every click; here they only update
+  # the draft assign, and the DB write happens once, in "template_modal_save".
   def handle_event("open_template_modal", %{"id" => file_id}, socket) do
     case verify_known_file(socket, file_id) do
       :ok ->
@@ -1511,8 +1474,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       Template edit modal (A044): categories (multi), per-category group and
       language for one template, together in one dialog with a single Save.
       A `<dialog>` driven by the `show` assign (PkDialog hook) rather than
-      browser focus, so — unlike the dropdown popover above — a phx-change
-      patch while it's open does not close it.
+      browser focus, so a phx-change patch while it's open does not close
+      it — the defect the removed dropdown popover had.
     --%>
     <PhoenixKitWeb.Components.Core.Modal.modal
       id="template-edit-modal"
@@ -1881,20 +1844,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
             </button>
           </div>
           <%!--
-            Card view: language badge sits inline with the category picker
-            when the column is wide enough (xl/2xl), and the picker wraps to
-            its own row only when it can't fit — `basis-full` on the picker
-            (via `layout="card"`) forces the wrap when needed. `min-w-0`
-            propagates so the picker's inner `flex-1` selects can shrink
-            under daisyUI's `.select` floor.
+            Card view: the picker wraps to its own row only when it can't fit
+            — `basis-full` on the picker (via `layout="card"`) forces the
+            wrap when needed. `min-w-0` propagates so the picker's inner
+            `flex-1` selects can shrink under daisyUI's `.select` floor.
           --%>
           <div class="flex flex-wrap items-center gap-1 min-w-0">
-            <.render_language_picker
-              file={file}
-              is_template={@is_template}
-              enabled_languages={@enabled_languages}
-              status_mode={@status_mode}
-            />
             <.render_category_picker
               file={file}
               is_template={@is_template}
@@ -1904,6 +1859,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               types_by_category={@types_by_category}
               type_names={@type_names}
               memberships_by_template={@memberships_by_template}
+              enabled_languages={@enabled_languages}
               layout="card"
             />
           </div>
@@ -2010,12 +1966,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 >
                   {file["name"]}
                 </a>
-                <.render_language_picker
-                  file={file}
-                  is_template={@is_template}
-                  enabled_languages={@enabled_languages}
-                  status_mode={@status_mode}
-                />
                 <.render_category_picker
                   file={file}
                   is_template={@is_template}
@@ -2025,6 +1975,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   types_by_category={@types_by_category}
                   type_names={@type_names}
                   memberships_by_template={@memberships_by_template}
+                  enabled_languages={@enabled_languages}
                   layout="inline"
                 />
               </div>
@@ -2127,80 +2078,6 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   defp unfiled_success_message("current"), do: gettext("Saved current location")
   defp unfiled_success_message(_), do: gettext("Updated")
 
-  # Per-template language picker. Hidden on the documents tab (documents
-  # inherit language from their source template), in the trash view, and
-  # when the host app's Languages module isn't enabled (`enabled_languages`
-  # arrives as `[]`). Shows the current locale code or "Set language" on
-  # the trigger; clicking opens a native HTML `popover` listing every
-  # enabled language plus a "Clear" entry. Popovers escape the card's
-  # `overflow: hidden` clipping container automatically.
-  attr(:file, :map, required: true)
-  attr(:is_template, :boolean, required: true)
-  attr(:enabled_languages, :list, required: true)
-  attr(:status_mode, :string, required: true)
-
-  defp render_language_picker(assigns) do
-    ~H"""
-    <div
-      :if={@is_template and @status_mode != "trashed" and @enabled_languages != []}
-      class="relative inline-flex"
-    >
-      <button
-        type="button"
-        popovertarget={"lang-pop-" <> @file["id"]}
-        style={"anchor-name: --lang-trigger-#{@file["id"]}"}
-        class={"badge badge-xs cursor-pointer #{if @file["language"], do: "badge-ghost", else: "badge-outline border-dashed"}"}
-        title={gettext("Template language")}
-      >
-        <span :if={@file["language"]} class="font-mono uppercase">
-          {@file["language"]}
-        </span>
-        <span :if={!@file["language"]}>
-          {gettext("Set language")}
-        </span>
-        <span class="hero-chevron-down w-2.5 h-2.5" />
-      </button>
-      <div
-        id={"lang-pop-" <> @file["id"]}
-        popover="auto"
-        style={
-          "position-anchor: --lang-trigger-#{@file["id"]}; " <>
-          "position-area: bottom span-right; " <>
-          "margin: 4px 0 0 0; inset: auto;"
-        }
-        class="bg-base-100 rounded-box w-60 p-1 shadow-lg max-h-72 overflow-y-auto border border-base-300 [&:not(:popover-open)]:hidden"
-      >
-        <%= for lang <- @enabled_languages do %>
-          <button
-            type="button"
-            popovertarget={"lang-pop-" <> @file["id"]}
-            popovertargetaction="hide"
-            phx-click="set_template_language"
-            phx-value-id={@file["id"]}
-            phx-value-language={lang.code}
-            class={"w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm hover:bg-base-200 #{if @file["language"] == lang.code, do: "bg-primary/10 text-primary", else: ""}"}
-          >
-            <span class="font-mono uppercase text-xs opacity-60 w-12 shrink-0">{lang.code}</span>
-            <span class="truncate flex-1">{lang.name}</span>
-          </button>
-        <% end %>
-        <button
-          :if={@file["language"]}
-          type="button"
-          popovertarget={"lang-pop-" <> @file["id"]}
-          popovertargetaction="hide"
-          phx-click="set_template_language"
-          phx-value-id={@file["id"]}
-          phx-value-language=""
-          class="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-sm text-base-content/50 hover:bg-base-200 mt-1 border-t border-base-200 pt-2"
-        >
-          <span class="hero-x-mark w-3.5 h-3.5" /> {gettext("Clear language")}
-        </button>
-      </div>
-    </div>
-    """
-  end
-
   attr(:file, :map, required: true)
   attr(:is_template, :boolean, required: true)
   attr(:status_mode, :string, required: true)
@@ -2209,6 +2086,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   attr(:types_by_category, :map, required: true)
   attr(:type_names, :map, required: true)
   attr(:memberships_by_template, :map, default: %{})
+  attr(:enabled_languages, :list, required: true)
 
   attr(:layout, :string,
     default: "inline",
@@ -2223,10 +2101,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     # points at a trashed (or otherwise missing) row resolves to a nil name
     # here — that's the "stale ref" signal used below to render a visible
     # placeholder instead of silently falling back to "No category"/"No type".
-    # Template memberships (many-to-many) for this file, keyed by category so
-    # the checkbox picker can look up "is this template in category X, and
-    # with which group?" in O(1). Documents have no memberships (empty map).
+    # Template memberships (many-to-many) for this file — A044 step 2 folds
+    # them into a compact read-only summary (below) instead of a per-category
+    # checkbox list. Documents have no memberships (empty list).
     memberships = Map.get(assigns.memberships_by_template, assigns.file["uuid"], [])
+    {summary_text, summary_title} = category_summary(memberships, assigns.category_names)
 
     assigns =
       Map.merge(assigns, %{
@@ -2238,8 +2117,8 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         type_options: Map.get(assigns.types_by_category, assigns.file["category_uuid"], []),
         cat_stale?: stale_taxonomy_ref?(assigns.file["category_uuid"], assigns.category_names),
         type_stale?: stale_taxonomy_ref?(assigns.file["type_uuid"], assigns.type_names),
-        memberships_map: Map.new(memberships, &{&1.category_uuid, &1}),
-        membership_count: length(memberships)
+        category_summary_text: summary_text,
+        category_summary_title: summary_title
       })
 
     ~H"""
@@ -2295,35 +2174,34 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         </span>
       <% @is_template -> %>
         <%!--
-          Active view, templates: a template may belong to SEVERAL categories
-          at once (part Б), each with its own group. A per-row dropdown popover
-          lists every active category as a checkbox; checking one reveals that
-          category's group select. Writes go through the many-to-many
-          membership API, so the dense table row stays compact.
+          Active view, templates (A044 step 2): the owner reviewed the modal
+          on the live site and asked to remove the old per-checkbox dropdown
+          and the language popover — editing now happens only through the
+          modal (render/1, "template-edit-modal"). What's shown here is a
+          compact READ-ONLY summary of the current language + categories, so
+          it's visible before the Edit button is clicked, not only after —
+          full detail (every category name) is in the badge's `title`.
         --%>
-        <.render_template_category_popover
-          file={@file}
-          card?={@card?}
-          cat_options={@cat_options}
-          types_by_category={@types_by_category}
-          memberships_map={@memberships_map}
-          membership_count={@membership_count}
-        />
-        <%!--
-          A044: same edit (categories, groups, language), as a modal instead
-          of the dropdown above — the dropdown loses browser focus (and
-          therefore closes) on every phx-change patch when picking several
-          categories in a row. The dropdown stays as-is; this is an
-          additional way to do the same edit, not a replacement.
-        --%>
+        <span
+          :if={@enabled_languages != []}
+          class={
+            "badge badge-xs font-mono uppercase #{if @file["language"], do: "badge-ghost", else: "badge-outline border-dashed"}"
+          }
+          title={@file["language"] || gettext("No language")}
+        >
+          {@file["language"] || "—"}
+        </span>
+        <span class="badge badge-xs badge-ghost max-w-24 truncate" title={@category_summary_title}>
+          {@category_summary_text}
+        </span>
         <button
           type="button"
-          class="btn btn-ghost btn-xs px-1"
+          class="btn btn-ghost btn-xs gap-1 normal-case"
           phx-click="open_template_modal"
           phx-value-id={@file["id"]}
           title={gettext("Edit template (categories, groups, language)")}
         >
-          <span class="hero-pencil-square w-3 h-3" />
+          <span class="hero-pencil-square w-3 h-3" /> {gettext("Edit")}
         </button>
       <% true -> %>
         <%!--
@@ -2399,82 +2277,26 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   defp stale_taxonomy_ref?(nil, _names), do: false
   defp stale_taxonomy_ref?(uuid, names), do: not Map.has_key?(names, uuid)
 
-  attr(:file, :map, required: true)
-  attr(:card?, :boolean, required: true)
-  attr(:cat_options, :list, required: true)
-  attr(:types_by_category, :map, required: true)
-  attr(:memberships_map, :map, required: true)
-  attr(:membership_count, :integer, required: true)
+  # Compact read-only summary of a template's category memberships (A044
+  # step 2), for display in the row/card before the Edit button — owner:
+  # "не хотелось бы занимать много места". Returns `{short_text, full_title}`:
+  # the short form is what's shown (an em dash when there are none, so it
+  # reads as "loaded, empty" rather than "not loaded yet"; the one name when
+  # there's exactly one; the first name plus a "+N" count for the rest
+  # otherwise), the title always carries every name so hovering shows the
+  # complete list regardless of how many are cut off.
+  defp category_summary([], _category_names), do: {"—", gettext("Not categorized")}
 
-  # Per-row category picker for TEMPLATES: a dropdown popover listing every
-  # active category as a checkbox (multi-select — a template may belong to
-  # several categories at once). Checking a category reveals its group select
-  # (the category's Types, in configured order). Each control lives in its own
-  # `<form phx-change>` so LiveView serializes the value.
-  defp render_template_category_popover(assigns) do
-    ~H"""
-    <div class={["dropdown dropdown-end", @card? && "min-w-0"]}>
-      <label
-        tabindex="0"
-        class="btn btn-ghost btn-xs gap-1 normal-case"
-        title={gettext("Categories & groups")}
-      >
-        <span class="hero-tag w-3 h-3" />
-        <%= if @membership_count == 0 do %>
-          <span class="opacity-60">{gettext("Categories")}</span>
-        <% else %>
-          <span class="badge badge-primary badge-xs">{@membership_count}</span>
-        <% end %>
-      </label>
-      <ul
-        tabindex="0"
-        class="dropdown-content z-[1] menu menu-sm p-2 shadow bg-base-100 rounded-box border border-base-200 w-64 flex-nowrap max-h-80 overflow-y-auto"
-      >
-        <%= if @cat_options == [] do %>
-          <li class="text-xs text-base-content/50 px-2 py-1">{gettext("No categories yet")}</li>
-        <% else %>
-          <%= for {cat_uuid, cat_name} <- @cat_options do %>
-            <% member = Map.get(@memberships_map, cat_uuid) %>
-            <li class="block hover:bg-transparent">
-              <div class="flex flex-col gap-1 p-1 hover:bg-transparent active:!bg-transparent">
-                <form
-                  phx-change="toggle_template_category"
-                  phx-value-template_uuid={@file["uuid"]}
-                  phx-value-category_uuid={cat_uuid}
-                >
-                  <label class="label cursor-pointer justify-start gap-2 py-0">
-                    <input
-                      type="checkbox"
-                      name="value"
-                      class="checkbox checkbox-xs"
-                      checked={not is_nil(member)}
-                    />
-                    <span class="fieldset-legend text-xs">{cat_name}</span>
-                  </label>
-                </form>
-                <form
-                  :if={not is_nil(member)}
-                  phx-change="set_template_group"
-                  phx-value-template_uuid={@file["uuid"]}
-                  phx-value-category_uuid={cat_uuid}
-                  class="pl-6"
-                >
-                  <select name="value" class="select select-xs w-full" title={gettext("Group")}>
-                    <option value="">{gettext("No group")}</option>
-                    <%= for {type_uuid, type_name} <- Map.get(@types_by_category, cat_uuid, []) do %>
-                      <option value={type_uuid} selected={member.type_uuid == type_uuid}>
-                        {type_name}
-                      </option>
-                    <% end %>
-                  </select>
-                </form>
-              </div>
-            </li>
-          <% end %>
-        <% end %>
-      </ul>
-    </div>
-    """
+  defp category_summary(memberships, category_names) do
+    names =
+      Enum.map(memberships, fn m ->
+        category_names[m.category_uuid] || gettext("deleted category")
+      end)
+
+    case names do
+      [only] -> {only, only}
+      [first | rest] -> {"#{first} +#{length(rest)}", Enum.join(names, ", ")}
+    end
   end
 
   attr(:thumbnail, :any, default: nil, doc: "Thumbnail URL, or nil while loading.")
@@ -2734,10 +2556,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end)
   end
 
-  # Shared by "set_template_language" (popover) and "template_modal_save"
-  # (modal): writes the language, then in-place patches the existing
-  # `templates` assign — the self-broadcast is filtered out, so without this
-  # patch the badge would lag until the next sync.
+  # Writes the language, then in-place patches the existing `templates`
+  # assign — the self-broadcast is filtered out, so without this patch the
+  # badge would lag until the next sync. Called (via `maybe_apply_template_
+  # language_write/3` below) from "template_modal_save".
   defp apply_template_language_write(socket, file_id, language) do
     case Documents.update_template_language(file_id, language, actor_opts(socket)) do
       {:ok, updated} ->
