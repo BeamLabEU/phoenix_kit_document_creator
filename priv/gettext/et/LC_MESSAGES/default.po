@@ -254,20 +254,60 @@ msgstr "Liiguta dokumentidesse"
 msgid "Move To Templates"
 msgstr "Liiguta mallidesse"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1510
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1525
 #, elixir-autogen
-msgid "Template language"
-msgstr "Malli keel"
+msgid "Edit template"
+msgstr "Muuda malli"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1516
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2324
 #, elixir-autogen
-msgid "Set language"
-msgstr "Määra keel"
+msgid "Edit template (categories, groups, language)"
+msgstr "Muuda malli (kategooriad, grupid, keel)"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1554
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1533
 #, elixir-autogen
-msgid "Clear language"
-msgstr "Tühjenda keel"
+msgid "Language"
+msgstr "Keel"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1538
+#, elixir-autogen
+msgid "No language"
+msgstr "Keel puudub"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1551
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2420
+#, elixir-autogen
+msgid "Categories & groups"
+msgstr "Kategooriad ja grupid"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1555
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2434
+#, elixir-autogen
+msgid "No categories yet"
+msgstr "Kategooriaid pole veel"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1579
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2462
+#, elixir-autogen
+msgid "Group"
+msgstr "Grupp"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1580
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2463
+#, elixir-autogen
+msgid "No group"
+msgstr "Grupp puudub"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2290
+#, elixir-autogen
+msgid "Not categorized"
+msgstr "Kategoriseerimata"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2161
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2295
+#, elixir-autogen
+msgid "deleted category"
+msgstr "kustutatud kategooria"
 
 ## Loading / progress states
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:887
@@ -337,6 +377,21 @@ msgstr "Kustutamine…"
 #, elixir-autogen
 msgid "Name"
 msgstr "Nimi"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2001
+#, elixir-autogen
+msgid "Created"
+msgstr "Loodud"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1929
+#, elixir-autogen
+msgid "Updated:"
+msgstr "Muudetud:"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1932
+#, elixir-autogen
+msgid "Created:"
+msgstr "Loodud:"
 
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1018
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1360

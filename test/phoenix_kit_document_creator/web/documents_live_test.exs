@@ -625,23 +625,28 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert Process.alive?(view.pid)
     end
 
-    # ── set_template_language event coverage ───────────────────────────
+    # ── template edit modal — language ──────────────────────────────────
+    # `set_template_language` (the old language popover's event) is gone —
+    # editing a template's language now goes through the modal's
+    # "template_modal_set_language" + "template_modal_save". These pin the
+    # same behavior (actor threading, activity log, clearing) through the
+    # new path.
 
-    test "set_template_language ignores unknown file_id (verify_known_file guard)",
+    test "open_template_modal ignores unknown file_id (verify_known_file guard)",
          %{conn: conn} do
       scope = fake_scope()
       conn = put_test_scope(conn, scope)
       {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
 
       # File not seeded into the LV's known_file_ids — the handler
-      # guard rejects it before touching the DB. Pre-rejection there
-      # is no DB row to update, no broadcast, no activity log.
-      render_click(view, "set_template_language", %{"id" => "unknown", "language" => "en-US"})
+      # guard rejects it before the modal ever opens. Pre-rejection
+      # there is no DB row to update, no broadcast, no activity log.
+      render_click(view, "open_template_modal", %{"id" => "unknown"})
 
       assert Process.alive?(view.pid)
     end
 
-    test "set_template_language threads actor_uuid + flips DB language + activity-logs",
+    test "modal save threads actor_uuid + flips DB language + activity-logs",
          %{conn: conn} do
       scope = fake_scope()
       actor_uuid = scope.user.uuid
@@ -667,10 +672,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       send(view.pid, :sync_complete)
       _ = render(view)
 
-      render_click(view, "set_template_language", %{
-        "id" => file_id,
-        "language" => "et-EE"
-      })
+      render_click(view, "open_template_modal", %{"id" => file_id})
+      render_hook(view, "template_modal_set_language", %{"language" => "et-EE"})
+      render_click(view, "template_modal_save")
 
       # Activity log captures the from→to transition with the actor.
       assert_activity_logged("template.language_updated",
@@ -682,7 +686,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       )
     end
 
-    test "set_template_language clears the language when language is empty string",
+    test "modal save clears the language when the draft is blank",
          %{conn: conn} do
       scope = fake_scope()
       actor_uuid = scope.user.uuid
@@ -704,10 +708,9 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       send(view.pid, :sync_complete)
       _ = render(view)
 
-      render_click(view, "set_template_language", %{
-        "id" => file_id,
-        "language" => ""
-      })
+      render_click(view, "open_template_modal", %{"id" => file_id})
+      render_hook(view, "template_modal_set_language", %{"language" => ""})
+      render_click(view, "template_modal_save")
 
       assert_activity_logged("template.language_updated",
         actor_uuid: actor_uuid,
@@ -1436,49 +1439,95 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
     end
   end
 
-  describe "template category picker — multi-category checkbox popover (part Б)" do
-    # Templates (unlike documents) carry many-to-many category memberships;
-    # the per-row picker is a checkbox popover. These need a real template DB
-    # row (memberships FK to it) plus a faked file list, like the tests above.
+  describe "template edit modal — categories & groups" do
+    # Templates (unlike documents) carry many-to-many category memberships.
+    # They used to be edited through a per-row checkbox popover; the owner
+    # reviewed the modal on the live site and asked to remove that popover
+    # (and the language picker) once the modal was accepted, so editing now
+    # goes through "open_template_modal" → toggle/group/language →
+    # "template_modal_save". These need a real template DB row (memberships
+    # FK to it) plus a faked file list, like the tests above.
 
-    test "popover lists every active category as a checkbox for a template", %{conn: conn} do
-      {:ok, _klient} = Taxonomy.create_category(%{name: "Klient document"})
+    test "the open modal lists every active category, seeded from current memberships",
+         %{conn: conn} do
+      {:ok, klient} = Taxonomy.create_category(%{name: "Klient document"})
       {:ok, _tootmine} = Taxonomy.create_category(%{name: "Tootmine"})
       tmpl = insert_template("Tpl A")
+      {:ok, _} = Taxonomy.set_template_memberships(tmpl.uuid, [%{category_uuid: klient.uuid}])
 
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
 
-      html = force_connected_render(view, templates: [template_file(tmpl)])
+      force_connected_render(view,
+        templates: [template_file(tmpl)],
+        known_file_ids: MapSet.new([tmpl.google_doc_id])
+      )
+
+      html = render_click(view, "open_template_modal", %{"id" => tmpl.google_doc_id})
 
       assert html =~ "Klient document"
       assert html =~ "Tootmine"
-      assert html =~ ~s(phx-change="toggle_template_category")
+      # Seeded from the existing membership — the checkbox form for the
+      # template's current category is in the rendered modal.
+      assert html =~ ~s(phx-value-category_uuid="#{klient.uuid}")
     end
 
-    test "checking a category creates a membership and mirrors the legacy FK", %{conn: conn} do
+    test "checking a category + Save creates a membership and mirrors the legacy FK",
+         %{conn: conn} do
       {:ok, klient} = Taxonomy.create_category(%{name: "Klient document"})
       tmpl = insert_template("Tpl B")
 
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
-      force_connected_render(view, templates: [template_file(tmpl)])
 
-      # Drive the handler directly: the responsive table renders the picker
-      # form twice (card + table markup), so an element selector is ambiguous —
-      # render_hook pushes the phx-change payload the checkbox would send.
-      render_hook(view, "toggle_template_category", %{
-        "template_uuid" => tmpl.uuid,
+      force_connected_render(view,
+        templates: [template_file(tmpl)],
+        known_file_ids: MapSet.new([tmpl.google_doc_id])
+      )
+
+      render_click(view, "open_template_modal", %{"id" => tmpl.google_doc_id})
+
+      render_hook(view, "template_modal_toggle_category", %{
         "category_uuid" => klient.uuid,
         "value" => "on"
       })
+
+      # Toggling only updates the draft — nothing is written until Save.
+      assert Taxonomy.list_memberships_for_template(tmpl.uuid) == []
+
+      render_click(view, "template_modal_save")
 
       assert [%{category_uuid: cat}] = Taxonomy.list_memberships_for_template(tmpl.uuid)
       assert cat == klient.uuid
       assert Repo.get!(Template, tmpl.uuid).category_uuid == klient.uuid
     end
 
-    test "setting a group updates the membership's type_uuid", %{conn: conn} do
+    test "Cancel after checking a category discards the draft — no write happens",
+         %{conn: conn} do
+      {:ok, klient} = Taxonomy.create_category(%{name: "Klient document"})
+      tmpl = insert_template("Tpl Cancel")
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
+
+      force_connected_render(view,
+        templates: [template_file(tmpl)],
+        known_file_ids: MapSet.new([tmpl.google_doc_id])
+      )
+
+      render_click(view, "open_template_modal", %{"id" => tmpl.google_doc_id})
+
+      render_hook(view, "template_modal_toggle_category", %{
+        "category_uuid" => klient.uuid,
+        "value" => "on"
+      })
+
+      render_click(view, "template_modal_close")
+
+      assert Taxonomy.list_memberships_for_template(tmpl.uuid) == []
+    end
+
+    test "setting a group + Save updates the membership's type_uuid", %{conn: conn} do
       {:ok, klient} = Taxonomy.create_category(%{name: "Klient document"})
       {:ok, group} = Taxonomy.create_type(%{name: "Tellimus", category_uuid: klient.uuid})
       tmpl = insert_template("Tpl C")
@@ -1486,16 +1535,75 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
 
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
-      force_connected_render(view, templates: [template_file(tmpl)])
 
-      render_hook(view, "set_template_group", %{
-        "template_uuid" => tmpl.uuid,
+      force_connected_render(view,
+        templates: [template_file(tmpl)],
+        known_file_ids: MapSet.new([tmpl.google_doc_id])
+      )
+
+      render_click(view, "open_template_modal", %{"id" => tmpl.google_doc_id})
+
+      render_hook(view, "template_modal_set_group", %{
         "category_uuid" => klient.uuid,
         "value" => group.uuid
       })
 
+      render_click(view, "template_modal_save")
+
       assert [%{type_uuid: type_uuid}] = Taxonomy.list_memberships_for_template(tmpl.uuid)
       assert type_uuid == group.uuid
+    end
+
+    test "a repeat Save after the modal already closed is a no-op, not a crash",
+         %{conn: conn} do
+      tmpl = insert_template("Tpl DoubleClick")
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
+
+      force_connected_render(view,
+        templates: [template_file(tmpl)],
+        known_file_ids: MapSet.new([tmpl.google_doc_id])
+      )
+
+      render_click(view, "open_template_modal", %{"id" => tmpl.google_doc_id})
+      render_click(view, "template_modal_save")
+
+      # Simulates a fast double-click: the second "template_modal_save"
+      # lands after the first already reset template_modal_file to nil.
+      # Before the fix this crashed the LiveView process (FunctionClauseError
+      # in Taxonomy.set_template_memberships/3, which has no clause for a
+      # nil template_uuid).
+      render_click(view, "template_modal_save")
+
+      assert Process.alive?(view.pid)
+    end
+
+    test "an unchanged Save does not rewrite the memberships", %{conn: conn} do
+      {:ok, klient} = Taxonomy.create_category(%{name: "Klient document"})
+      tmpl = insert_template("Tpl Unchanged")
+
+      {:ok, existing} =
+        Taxonomy.set_template_memberships(tmpl.uuid, [%{category_uuid: klient.uuid}])
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
+
+      force_connected_render(view,
+        templates: [template_file(tmpl)],
+        known_file_ids: MapSet.new([tmpl.google_doc_id])
+      )
+
+      render_click(view, "open_template_modal", %{"id" => tmpl.google_doc_id})
+      # No toggle/group/language event fired — draft equals what was loaded.
+      render_click(view, "template_modal_save")
+
+      # Same membership row (uuid unchanged) — set_template_memberships/3
+      # is a delete-then-insert, so an actual (unwanted) write would have
+      # produced a new uuid for the same (category, group) pair.
+      assert [%{uuid: uuid}] = Taxonomy.list_memberships_for_template(tmpl.uuid)
+      assert [existing_membership] = existing
+      assert uuid == existing_membership.uuid
     end
   end
 

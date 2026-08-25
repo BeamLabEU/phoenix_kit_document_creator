@@ -254,20 +254,60 @@ msgstr "Move To Documents"
 msgid "Move To Templates"
 msgstr "Move To Templates"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1510
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1525
 #, elixir-autogen
-msgid "Template language"
-msgstr "Template language"
+msgid "Edit template"
+msgstr "Edit template"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1516
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2324
 #, elixir-autogen
-msgid "Set language"
-msgstr "Set language"
+msgid "Edit template (categories, groups, language)"
+msgstr "Edit template (categories, groups, language)"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1554
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1533
 #, elixir-autogen
-msgid "Clear language"
-msgstr "Clear language"
+msgid "Language"
+msgstr "Language"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1538
+#, elixir-autogen
+msgid "No language"
+msgstr "No language"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1551
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2420
+#, elixir-autogen
+msgid "Categories & groups"
+msgstr "Categories & groups"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1555
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2434
+#, elixir-autogen
+msgid "No categories yet"
+msgstr "No categories yet"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1579
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2462
+#, elixir-autogen
+msgid "Group"
+msgstr "Group"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1580
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2463
+#, elixir-autogen
+msgid "No group"
+msgstr "No group"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2290
+#, elixir-autogen
+msgid "Not categorized"
+msgstr "Not categorized"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2161
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2295
+#, elixir-autogen
+msgid "deleted category"
+msgstr "deleted category"
 
 ## Loading / progress states
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:887
@@ -337,6 +377,21 @@ msgstr "Deleting…"
 #, elixir-autogen
 msgid "Name"
 msgstr "Name"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2001
+#, elixir-autogen
+msgid "Created"
+msgstr "Created"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1929
+#, elixir-autogen
+msgid "Updated:"
+msgstr "Updated:"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1932
+#, elixir-autogen
+msgid "Created:"
+msgstr "Created:"
 
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1018
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1360
