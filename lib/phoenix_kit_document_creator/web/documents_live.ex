@@ -81,6 +81,16 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        unfiled_modal_open: false,
        unfiled_file: nil,
        unfiled_working: false,
+       # Template edit modal (A044): categories, groups and language edited
+       # together in one dialog, saved with a single button. Draft state —
+       # nothing hits the DB until "template_modal_save"; "template_modal_
+       # close" (Cancel, backdrop, Escape) discards it untouched. The old
+       # per-row dropdown popover (render_template_category_popover/1) is
+       # left in place, unmodified, as a second way to do the same edit.
+       template_modal_open: false,
+       template_modal_file: nil,
+       template_modal_categories: [],
+       template_modal_language: nil,
        # Mobile-only: filters/search are collapsed behind a "Filters" toggle on
        # narrow screens (< sm). Always visible on sm+ regardless of this flag.
        show_filters: false,
@@ -448,32 +458,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_event("set_template_language", %{"id" => file_id} = params, socket) do
-    language =
-      case Map.get(params, "language", "") do
-        "" -> nil
-        code -> code
-      end
+    language = blank_to_nil(Map.get(params, "language", ""))
 
     case verify_known_file(socket, file_id) do
-      :ok ->
-        case Documents.update_template_language(file_id, language, actor_opts(socket)) do
-          {:ok, updated} ->
-            # In-place patch on the existing assign — the self-broadcast is
-            # filtered out, so without this patch the badge would lag until
-            # the next sync. Beats re-reading the whole templates table.
-            templates =
-              patch_template_language(socket.assigns.templates, file_id, updated.language)
-
-            {:noreply, assign(socket, templates: templates)}
-
-          {:error, reason} ->
-            Logger.error("Failed to set template language for #{file_id}: #{inspect(reason)}")
-
-            {:noreply, assign(socket, error: gettext("Failed to update template language."))}
-        end
-
-      _ ->
-        {:noreply, socket}
+      :ok -> {:noreply, apply_template_language_write(socket, file_id, language)}
+      _ -> {:noreply, socket}
     end
   end
 
@@ -774,6 +763,99 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
          |> assign(unfiled_working: false)
          |> assign(error: gettext("Action failed. Please try again."))}
     end
+  end
+
+  # ── Template edit modal (A044) ────────────────────────────────────
+  # Categories (multi), groups and language for one template, edited
+  # together and saved with a single button — replaces the round-trip-
+  # per-checkbox flow of the dropdown popover, which lost DOM focus (and
+  # therefore closed) on every phx-change patch. This modal is a `<dialog>`
+  # driven by the `show`/`data-show` assign (see PkDialog hook), not by
+  # browser focus, so a patch while it's open doesn't close it.
+  #
+  # `template_modal_categories` carries the same
+  # `[%{category_uuid:, type_uuid:}]` shape `Taxonomy.set_template_
+  # memberships/3` expects, reusing `toggle_category_membership/3` and
+  # `set_group_for_category/3` — only the write destination differs (draft
+  # assign here vs. immediate DB write in the popover's handlers).
+  def handle_event("open_template_modal", %{"id" => file_id}, socket) do
+    case verify_known_file(socket, file_id) do
+      :ok ->
+        file = Enum.find(socket.assigns.templates, &(&1["id"] == file_id))
+
+        {:noreply,
+         assign(socket,
+           template_modal_open: true,
+           template_modal_file: file,
+           template_modal_categories: current_membership_maps(file["uuid"]),
+           template_modal_language: file["language"]
+         )}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("template_modal_close", _params, socket) do
+    {:noreply,
+     assign(socket,
+       template_modal_open: false,
+       template_modal_file: nil,
+       template_modal_categories: [],
+       template_modal_language: nil
+     )}
+  end
+
+  def handle_event(
+        "template_modal_toggle_category",
+        %{"category_uuid" => category_uuid} = params,
+        socket
+      ) do
+    checked? = Map.get(params, "value") == "on"
+
+    updated =
+      toggle_category_membership(
+        socket.assigns.template_modal_categories,
+        category_uuid,
+        checked?
+      )
+
+    {:noreply, assign(socket, template_modal_categories: updated)}
+  end
+
+  def handle_event(
+        "template_modal_set_group",
+        %{"category_uuid" => category_uuid} = params,
+        socket
+      ) do
+    type_uuid = blank_to_nil(params["value"])
+
+    updated =
+      set_group_for_category(socket.assigns.template_modal_categories, category_uuid, type_uuid)
+
+    {:noreply, assign(socket, template_modal_categories: updated)}
+  end
+
+  def handle_event("template_modal_set_language", params, socket) do
+    language = blank_to_nil(Map.get(params, "language", ""))
+    {:noreply, assign(socket, template_modal_language: language)}
+  end
+
+  def handle_event("template_modal_save", _params, socket) do
+    file = socket.assigns.template_modal_file
+
+    socket =
+      socket
+      |> apply_membership_write(file["uuid"], socket.assigns.template_modal_categories)
+      |> maybe_apply_template_language_write(file, socket.assigns.template_modal_language)
+      |> assign(
+        template_modal_open: false,
+        template_modal_file: nil,
+        template_modal_categories: [],
+        template_modal_language: nil
+      )
+
+    {:noreply, socket}
   end
 
   # ── PDF export ───────────────────────────────────────────────────
@@ -1425,6 +1507,100 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       </:actions>
     </PhoenixKitWeb.Components.Core.Modal.modal>
 
+    <%!--
+      Template edit modal (A044): categories (multi), per-category group and
+      language for one template, together in one dialog with a single Save.
+      A `<dialog>` driven by the `show` assign (PkDialog hook) rather than
+      browser focus, so — unlike the dropdown popover above — a phx-change
+      patch while it's open does not close it.
+    --%>
+    <PhoenixKitWeb.Components.Core.Modal.modal
+      id="template-edit-modal"
+      show={@template_modal_open}
+      on_close="template_modal_close"
+      max_width="lg"
+    >
+      <:title>
+        <span class="hero-pencil-square w-5 h-5" />
+        {gettext("Edit template")}
+      </:title>
+
+      <div :if={@template_modal_file} class="space-y-4">
+        <p class="text-sm font-medium truncate">{@template_modal_file["name"]}</p>
+
+        <div :if={@enabled_languages != []}>
+          <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            {gettext("Language")}
+          </span>
+          <form phx-change="template_modal_set_language" class="mt-1">
+            <select name="language" class="select select-sm w-full">
+              <option value="" selected={is_nil(@template_modal_language)}>
+                {gettext("No language")}
+              </option>
+              <%= for lang <- @enabled_languages do %>
+                <option value={lang.code} selected={@template_modal_language == lang.code}>
+                  {lang.name} ({String.upcase(lang.code)})
+                </option>
+              <% end %>
+            </select>
+          </form>
+        </div>
+
+        <div>
+          <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
+            {gettext("Categories & groups")}
+          </span>
+          <% {modal_cat_options, modal_types_by_category} = template_modal_taxonomy() %>
+          <div :if={modal_cat_options == []} class="text-xs text-base-content/50 py-1">
+            {gettext("No categories yet")}
+          </div>
+          <div class="mt-1 space-y-2 max-h-72 overflow-y-auto pr-1">
+            <%= for {cat_uuid, cat_name} <- modal_cat_options do %>
+              <% member =
+                Enum.find(@template_modal_categories, &(&1.category_uuid == cat_uuid)) %>
+              <div class="rounded-lg border border-base-200 p-2">
+                <form phx-change="template_modal_toggle_category" phx-value-category_uuid={cat_uuid}>
+                  <label class="label cursor-pointer justify-start gap-2 py-0">
+                    <input
+                      type="checkbox"
+                      name="value"
+                      class="checkbox checkbox-sm"
+                      checked={not is_nil(member)}
+                    />
+                    <span class="text-sm">{cat_name}</span>
+                  </label>
+                </form>
+                <form
+                  :if={member}
+                  phx-change="template_modal_set_group"
+                  phx-value-category_uuid={cat_uuid}
+                  class="pl-6 mt-1"
+                >
+                  <select name="value" class="select select-xs w-full" title={gettext("Group")}>
+                    <option value="">{gettext("No group")}</option>
+                    <%= for {type_uuid, type_name} <- Map.get(modal_types_by_category, cat_uuid, []) do %>
+                      <option value={type_uuid} selected={member.type_uuid == type_uuid}>
+                        {type_name}
+                      </option>
+                    <% end %>
+                  </select>
+                </form>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <:actions>
+        <button type="button" class="btn btn-ghost" phx-click="template_modal_close">
+          {gettext("Cancel")}
+        </button>
+        <button type="button" class="btn btn-primary" phx-click="template_modal_save">
+          {gettext("Save")}
+        </button>
+      </:actions>
+    </PhoenixKitWeb.Components.Core.Modal.modal>
+
     <script>
       // Idempotent script — guarded to prevent duplicate listeners on re-render (M3)
       if (!window.__pkDocCreatorInitialized) {
@@ -1462,6 +1638,30 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
       }
     </script>
     """
+  end
+
+  # Categories + their groups, for the template edit modal. Deliberately its
+  # own query rather than reusing `assign_files/2`'s `cat_options`/
+  # `types_by_category` (computed only for the currently rendered grid page
+  # and not carried in assigns) — this runs only while the modal is open,
+  # same shape as `assign_files/2` produces.
+  defp template_modal_taxonomy do
+    locale = Gettext.get_locale(PhoenixKitDocumentCreator.Gettext)
+    cats = Taxonomy.list_categories()
+
+    cat_options = Enum.map(cats, &{&1.uuid, Taxonomy.localized_name(&1, locale)})
+
+    types_by_category =
+      Map.new(cats, fn cat ->
+        options =
+          cat.uuid
+          |> Taxonomy.list_types_for_category()
+          |> Enum.map(&{&1.uuid, Taxonomy.localized_name(&1, locale)})
+
+        {cat.uuid, options}
+      end)
+
+    {cat_options, types_by_category}
   end
 
   # ── File grid ──────────────────────────────────────────────────
@@ -2109,6 +2309,22 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           memberships_map={@memberships_map}
           membership_count={@membership_count}
         />
+        <%!--
+          A044: same edit (categories, groups, language), as a modal instead
+          of the dropdown above — the dropdown loses browser focus (and
+          therefore closes) on every phx-change patch when picking several
+          categories in a row. The dropdown stays as-is; this is an
+          additional way to do the same edit, not a replacement.
+        --%>
+        <button
+          type="button"
+          class="btn btn-ghost btn-xs px-1"
+          phx-click="open_template_modal"
+          phx-value-id={@file["id"]}
+          title={gettext("Edit template (categories, groups, language)")}
+        >
+          <span class="hero-pencil-square w-3 h-3" />
+        </button>
       <% true -> %>
         <%!--
           Active view, documents: single category/type binding via two
@@ -2516,6 +2732,33 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     Enum.map(templates, fn t ->
       if t["id"] == file_id, do: Map.put(t, "language", new_language), else: t
     end)
+  end
+
+  # Shared by "set_template_language" (popover) and "template_modal_save"
+  # (modal): writes the language, then in-place patches the existing
+  # `templates` assign — the self-broadcast is filtered out, so without this
+  # patch the badge would lag until the next sync.
+  defp apply_template_language_write(socket, file_id, language) do
+    case Documents.update_template_language(file_id, language, actor_opts(socket)) do
+      {:ok, updated} ->
+        templates = patch_template_language(socket.assigns.templates, file_id, updated.language)
+        assign(socket, templates: templates)
+
+      {:error, reason} ->
+        Logger.error("Failed to set template language for #{file_id}: #{inspect(reason)}")
+        assign(socket, error: gettext("Failed to update template language."))
+    end
+  end
+
+  # Skips the write entirely when the modal's draft language matches what
+  # the file already has — Cancel already discards the draft untouched, and
+  # this keeps an unchanged Save from writing/broadcasting anything either.
+  defp maybe_apply_template_language_write(socket, file, new_language) do
+    if new_language == file["language"] do
+      socket
+    else
+      apply_template_language_write(socket, file["id"], new_language)
+    end
   end
 
   defp blank_to_nil(""), do: nil

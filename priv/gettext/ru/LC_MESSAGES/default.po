@@ -269,6 +269,50 @@ msgstr "Задать язык"
 msgid "Clear language"
 msgstr "Очистить язык"
 
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1525
+#, elixir-autogen
+msgid "Edit template"
+msgstr "Редактировать шаблон"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2324
+#, elixir-autogen
+msgid "Edit template (categories, groups, language)"
+msgstr "Редактировать шаблон (категории, группы, язык)"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1533
+#, elixir-autogen
+msgid "Language"
+msgstr "Язык"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1538
+#, elixir-autogen
+msgid "No language"
+msgstr "Без языка"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1551
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2420
+#, elixir-autogen
+msgid "Categories & groups"
+msgstr "Категории и группы"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1555
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2434
+#, elixir-autogen
+msgid "No categories yet"
+msgstr "Категорий пока нет"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1579
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2462
+#, elixir-autogen
+msgid "Group"
+msgstr "Группа"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1580
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2463
+#, elixir-autogen
+msgid "No group"
+msgstr "Без группы"
+
 ## Loading / progress states
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:887
 #, elixir-autogen
