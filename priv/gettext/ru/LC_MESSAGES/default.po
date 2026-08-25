@@ -254,21 +254,6 @@ msgstr "Переместить в документы"
 msgid "Move To Templates"
 msgstr "Переместить в шаблоны"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1510
-#, elixir-autogen
-msgid "Template language"
-msgstr "Язык шаблона"
-
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1516
-#, elixir-autogen
-msgid "Set language"
-msgstr "Задать язык"
-
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1554
-#, elixir-autogen
-msgid "Clear language"
-msgstr "Очистить язык"
-
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1525
 #, elixir-autogen
 msgid "Edit template"

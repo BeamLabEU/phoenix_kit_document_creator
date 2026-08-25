@@ -254,21 +254,6 @@ msgstr "Liiguta dokumentidesse"
 msgid "Move To Templates"
 msgstr "Liiguta mallidesse"
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1510
-#, elixir-autogen
-msgid "Template language"
-msgstr "Malli keel"
-
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1516
-#, elixir-autogen
-msgid "Set language"
-msgstr "Määra keel"
-
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1554
-#, elixir-autogen
-msgid "Clear language"
-msgstr "Tühjenda keel"
-
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1525
 #, elixir-autogen
 msgid "Edit template"
