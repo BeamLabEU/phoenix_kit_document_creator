@@ -393,6 +393,21 @@ msgstr "Kustutamine…"
 msgid "Name"
 msgstr "Nimi"
 
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2001
+#, elixir-autogen
+msgid "Created"
+msgstr "Loodud"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1929
+#, elixir-autogen
+msgid "Updated:"
+msgstr "Muudetud:"
+
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1932
+#, elixir-autogen
+msgid "Created:"
+msgstr "Loodud:"
+
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1018
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1360
 #, elixir-autogen

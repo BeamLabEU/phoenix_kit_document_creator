@@ -2561,16 +2561,32 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   defp format_time(nil), do: ""
 
-  defp format_time(%DateTime{} = dt) do
-    Calendar.strftime(dt, "%b %d, %Y %H:%M")
-  end
+  defp format_time(%DateTime{} = dt), do: format_datetime(dt)
 
   defp format_time(iso_string) when is_binary(iso_string) do
     case DateTime.from_iso8601(iso_string) do
-      {:ok, dt, _} -> Calendar.strftime(dt, "%b %d, %Y %H:%M")
+      {:ok, dt, _} -> format_datetime(dt)
       _ -> iso_string
     end
   end
+
+  # `inserted_at`/`updated_at` here are always our own DB timestamps —
+  # `schema_to_file_map/1` (documents.ex) sets them from the Ecto record,
+  # not from Google's API; the `"modifiedTime"` KEY only mirrors Drive's
+  # naming for a uniform file-map shape (see `Documents.list_templates_from_db/0`
+  # → `schema_to_file_map/1`). So this is our own display of our own data,
+  # not a foreign string — owner: format it per locale, not verbatim.
+  # `Calendar.strftime/2`'s `%b` is locale-blind and always English; the
+  # month abbreviation reuses PhoenixKit core's own translated table
+  # (`PhoenixKit.Utils.Date.short_month/1`) instead of duplicating a
+  # 12-entry translation this module would then have to keep in sync. Day/
+  # year/time and the day-month-year order are ours — kept identical across
+  # locales so this doesn't need per-locale date-order logic.
+  defp format_datetime(dt) do
+    "#{pad2(dt.day)} #{PhoenixKit.Utils.Date.short_month(dt.month)} #{dt.year}, #{pad2(dt.hour)}:#{pad2(dt.minute)}"
+  end
+
+  defp pad2(n), do: n |> to_string() |> String.pad_leading(2, "0")
 
   # Formats the "Deleted" display: "<date> · <display_name>" or "—" when
   # no deletion metadata is present.
@@ -2580,13 +2596,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     by_uuid = Map.get(deleted, "by_uuid")
     name = if by_uuid, do: Map.get(names, by_uuid, gettext("unknown")), else: gettext("unknown")
 
-    formatted_at =
-      case DateTime.from_iso8601(at_iso) do
-        {:ok, dt, _} -> Calendar.strftime(dt, "%b %d, %Y %H:%M")
-        _ -> at_iso
-      end
-
-    "#{formatted_at} · #{name}"
+    "#{format_time(at_iso)} · #{name}"
   end
 
   defp format_deleted_info(_deleted, _names), do: "—"
