@@ -91,7 +91,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        template_modal_open: false,
        template_modal_file: nil,
        template_modal_categories: [],
+       # Snapshot of `template_modal_categories` as loaded when the modal
+       # opened — lets Save skip the membership write entirely when the
+       # category/group draft comes back unchanged (pi review, A044,
+       # confirmed: this guard existed for language but not categories).
+       template_modal_original_categories: [],
        template_modal_language: nil,
+       # Categories + their groups for the modal, fetched once on open —
+       # NOT recomputed on every render (pi review, A044, confirmed: calling
+       # `template_modal_taxonomy/0` from inside the HEEx block re-ran it,
+       # and its N+1 category/type query, on every phx-change inside the
+       # open modal, not just on open).
+       template_modal_cat_options: [],
+       template_modal_types_by_category: %{},
        # Mobile-only: filters/search are collapsed behind a "Filters" toggle on
        # narrow screens (< sm). Always visible on sm+ regardless of this flag.
        show_filters: false,
@@ -745,13 +757,18 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     case verify_known_file(socket, file_id) do
       :ok ->
         file = Enum.find(socket.assigns.templates, &(&1["id"] == file_id))
+        categories = current_membership_maps(file["uuid"])
+        {cat_options, types_by_category} = template_modal_taxonomy()
 
         {:noreply,
          assign(socket,
            template_modal_open: true,
            template_modal_file: file,
-           template_modal_categories: current_membership_maps(file["uuid"]),
-           template_modal_language: file["language"]
+           template_modal_categories: categories,
+           template_modal_original_categories: categories,
+           template_modal_language: file["language"],
+           template_modal_cat_options: cat_options,
+           template_modal_types_by_category: types_by_category
          )}
 
       _ ->
@@ -765,7 +782,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
        template_modal_open: false,
        template_modal_file: nil,
        template_modal_categories: [],
-       template_modal_language: nil
+       template_modal_original_categories: [],
+       template_modal_language: nil,
+       template_modal_cat_options: [],
+       template_modal_types_by_category: %{}
      )}
   end
 
@@ -804,21 +824,55 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     {:noreply, assign(socket, template_modal_language: language)}
   end
 
+  # Double-submit guard (pi review, A044, confirmed): a second "template_
+  # modal_save" — e.g. a fast double-click, since the button has no disable-
+  # while-pending guard on its own — would otherwise land after the first
+  # click already reset `template_modal_file` to nil, and
+  # `Taxonomy.set_template_memberships(nil, ...)` has no clause for a nil
+  # template_uuid, so it raises and crashes the LiveView process. A repeat
+  # event now finds `template_modal_file: nil` and is a no-op.
+  def handle_event(
+        "template_modal_save",
+        _params,
+        %{assigns: %{template_modal_file: nil}} = socket
+      ) do
+    {:noreply, socket}
+  end
+
   def handle_event("template_modal_save", _params, socket) do
     file = socket.assigns.template_modal_file
 
-    socket =
-      socket
-      |> apply_membership_write(file["uuid"], socket.assigns.template_modal_categories)
-      |> maybe_apply_template_language_write(file, socket.assigns.template_modal_language)
-      |> assign(
-        template_modal_open: false,
-        template_modal_file: nil,
-        template_modal_categories: [],
-        template_modal_language: nil
-      )
-
-    {:noreply, socket}
+    # Write result gates the close (pi review, A044, confirmed): on `{:error,
+    # _}` the modal used to close and the draft was discarded regardless —
+    # the user lost their edits with only a page-level error banner and no
+    # way to see what they'd been changing. Now a failed write keeps the
+    # modal open with the draft intact so Save can just be retried.
+    with {:ok, socket} <-
+           maybe_apply_membership_write(
+             socket,
+             file["uuid"],
+             socket.assigns.template_modal_original_categories,
+             socket.assigns.template_modal_categories
+           ),
+         {:ok, socket} <-
+           maybe_apply_template_language_write(
+             socket,
+             file,
+             socket.assigns.template_modal_language
+           ) do
+      {:noreply,
+       assign(socket,
+         template_modal_open: false,
+         template_modal_file: nil,
+         template_modal_categories: [],
+         template_modal_original_categories: [],
+         template_modal_language: nil,
+         template_modal_cat_options: [],
+         template_modal_types_by_category: %{}
+       )}
+    else
+      {:error, socket} -> {:noreply, socket}
+    end
   end
 
   # ── PDF export ───────────────────────────────────────────────────
@@ -1513,12 +1567,11 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           <span class="text-xs font-semibold uppercase tracking-wide text-base-content/60">
             {gettext("Categories & groups")}
           </span>
-          <% {modal_cat_options, modal_types_by_category} = template_modal_taxonomy() %>
-          <div :if={modal_cat_options == []} class="text-xs text-base-content/50 py-1">
+          <div :if={@template_modal_cat_options == []} class="text-xs text-base-content/50 py-1">
             {gettext("No categories yet")}
           </div>
           <div class="mt-1 space-y-2 max-h-72 overflow-y-auto pr-1">
-            <%= for {cat_uuid, cat_name} <- modal_cat_options do %>
+            <%= for {cat_uuid, cat_name} <- @template_modal_cat_options do %>
               <% member =
                 Enum.find(@template_modal_categories, &(&1.category_uuid == cat_uuid)) %>
               <div class="rounded-lg border border-base-200 p-2">
@@ -1541,7 +1594,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                 >
                   <select name="value" class="select select-xs w-full" title={gettext("Group")}>
                     <option value="">{gettext("No group")}</option>
-                    <%= for {type_uuid, type_name} <- Map.get(modal_types_by_category, cat_uuid, []) do %>
+                    <%= for {type_uuid, type_name} <- Map.get(@template_modal_types_by_category, cat_uuid, []) do %>
                       <option value={type_uuid} selected={member.type_uuid == type_uuid}>
                         {type_name}
                       </option>
@@ -1558,7 +1611,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <button type="button" class="btn btn-ghost" phx-click="template_modal_close">
           {gettext("Cancel")}
         </button>
-        <button type="button" class="btn btn-primary" phx-click="template_modal_save">
+        <button
+          type="button"
+          class="btn btn-primary"
+          phx-click="template_modal_save"
+          phx-disable-with={gettext("Working…")}
+        >
           {gettext("Save")}
         </button>
       </:actions>
@@ -1606,8 +1664,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # Categories + their groups, for the template edit modal. Deliberately its
   # own query rather than reusing `assign_files/2`'s `cat_options`/
   # `types_by_category` (computed only for the currently rendered grid page
-  # and not carried in assigns) — this runs only while the modal is open,
-  # same shape as `assign_files/2` produces.
+  # and not carried in assigns) — same shape as `assign_files/2` produces.
+  # Called once from "open_template_modal" and cached into `template_modal_
+  # cat_options`/`template_modal_types_by_category` (pi review, A044,
+  # confirmed: calling this from inside the modal's HEEx re-ran its N+1
+  # category/type query on every phx-change while the modal was open, not
+  # only when it opened).
   defp template_modal_taxonomy do
     locale = Gettext.get_locale(PhoenixKitDocumentCreator.Gettext)
     cats = Taxonomy.list_categories()
@@ -2559,16 +2621,19 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # Writes the language, then in-place patches the existing `templates`
   # assign — the self-broadcast is filtered out, so without this patch the
   # badge would lag until the next sync. Called (via `maybe_apply_template_
-  # language_write/3` below) from "template_modal_save".
+  # language_write/3` below) from "template_modal_save". Returns `{:ok, _} |
+  # {:error, _}` for the same reason as `apply_membership_write/3` — the
+  # caller must be able to tell a failed write happened and keep the modal
+  # open instead of closing it over a discarded draft.
   defp apply_template_language_write(socket, file_id, language) do
     case Documents.update_template_language(file_id, language, actor_opts(socket)) do
       {:ok, updated} ->
         templates = patch_template_language(socket.assigns.templates, file_id, updated.language)
-        assign(socket, templates: templates)
+        {:ok, assign(socket, templates: templates)}
 
       {:error, reason} ->
         Logger.error("Failed to set template language for #{file_id}: #{inspect(reason)}")
-        assign(socket, error: gettext("Failed to update template language."))
+        {:error, assign(socket, error: gettext("Failed to update template language."))}
     end
   end
 
@@ -2577,7 +2642,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   # this keeps an unchanged Save from writing/broadcasting anything either.
   defp maybe_apply_template_language_write(socket, file, new_language) do
     if new_language == file["language"] do
-      socket
+      {:ok, socket}
     else
       apply_template_language_write(socket, file["id"], new_language)
     end
@@ -2633,16 +2698,40 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     |> Enum.map(&%{category_uuid: &1.category_uuid, type_uuid: &1.type_uuid})
   end
 
-  # Persists the full membership set. On success the socket is returned as-is;
-  # `assign_files/2` (which receives `assigns` wholesale and is therefore not
-  # change-tracked) re-reads memberships from the DB on the next render, so the
-  # popover reflects the write without a manual assign patch.
+  # Persists the full membership set. On success the socket is returned as-is
+  # (wrapped `{:ok, _}`) — `assign_files/2` (which receives `assigns` wholesale
+  # and is therefore not change-tracked) re-reads memberships from the DB on
+  # the next render, so the row/card summary reflects the write without a
+  # manual assign patch. On `{:error, _}` the caller ("template_modal_save")
+  # uses the `{:error, _}` tag to keep the modal open and the draft intact
+  # instead of discarding the user's edits on a failed write (pi review, A044).
   defp apply_membership_write(socket, template_uuid, memberships) do
     case Taxonomy.set_template_memberships(template_uuid, memberships, actor_opts(socket)) do
-      {:ok, _rows} -> socket
-      {:error, _reason} -> assign(socket, error: gettext("Could not update template categories"))
+      {:ok, _rows} ->
+        {:ok, socket}
+
+      {:error, _reason} ->
+        {:error, assign(socket, error: gettext("Could not update template categories"))}
     end
   end
+
+  # Skips the write entirely when the modal's draft categories/groups come
+  # back exactly as they were loaded on open — the same guard `maybe_apply_
+  # template_language_write/3` already had for language (pi review, A044,
+  # confirmed asymmetry: this one was missing, so an unchanged Save still
+  # did a full replace-all write and broadcast). Compared as sets, not lists
+  # — the draft can reorder entries relative to the DB read (new memberships
+  # are appended), and order must not read as a change.
+  defp maybe_apply_membership_write(socket, template_uuid, original, draft) do
+    if membership_set(original) == membership_set(draft) do
+      {:ok, socket}
+    else
+      apply_membership_write(socket, template_uuid, draft)
+    end
+  end
+
+  defp membership_set(memberships),
+    do: MapSet.new(memberships, &{&1.category_uuid, &1.type_uuid})
 
   defp patch_file_in_assigns(socket, %{"id" => file_id} = file_map) do
     assigns = socket.assigns
