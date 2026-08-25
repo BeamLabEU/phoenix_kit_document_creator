@@ -2241,8 +2241,17 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           and the language popover — editing now happens only through the
           modal (render/1, "template-edit-modal"). What's shown here is a
           compact READ-ONLY summary of the current language + categories, so
-          it's visible before the Edit button is clicked, not only after —
-          full detail (every category name) is in the badge's `title`.
+          it's visible before the Edit button is clicked, not only after.
+
+          The category summary used `badge ... truncate` (single line,
+          ellipsis) — daisyUI's `badge` forces `white-space: nowrap`, so a
+          long category name (or a short one plus its "+N" count) got cut
+          mid-word, and a name long enough could truncate the "+N" away
+          entirely since both share one text node. Owner: show the name in
+          full, multiple lines if needed. Dropped `badge` for a plain
+          wrapping box — `break-words` wraps even a single long word with no
+          natural break point, `max-w-32` is what actually induces the wrap
+          (unconstrained inline text never wraps on its own).
         --%>
         <span
           :if={@enabled_languages != []}
@@ -2253,7 +2262,10 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         >
           {@file["language"] || "—"}
         </span>
-        <span class="badge badge-xs badge-ghost max-w-24 truncate" title={@category_summary_title}>
+        <span
+          class="text-xs leading-tight px-1.5 py-0.5 rounded bg-base-200 text-base-content/70 max-w-32 break-words"
+          title={@category_summary_title}
+        >
           {@category_summary_text}
         </span>
         <button
