@@ -363,12 +363,12 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
             provider="google"
             compact={true}
             on_select="select_connection"
-            empty_url={Routes.path("/admin/settings/integrations/new")}
+            empty_url={Routes.path("/admin/settings/integrations/website/new")}
           />
 
           <p class="text-xs text-base-content/50 mt-2">
             {gettext("Manage your Google connections in")}
-            <a href={Routes.path("/admin/settings/integrations")} class="link">{gettext("Settings → Integrations")}</a>.
+            <a href={Routes.path("/admin/settings/integrations/website")} class="link">{gettext("Settings → Integrations")}</a>.
           </p>
         </div>
       </div>
