@@ -1,3 +1,27 @@
+## 0.9.1 - 2026-09-07
+
+### Fixed
+
+- The folder-settings page's "Settings → Integrations" links (both the
+  connection-picker's "Add" link and the manage-connections link) pointed at
+  `/admin/settings/integrations[/new]`, which renders the **personal**
+  integrations UI over a `{:user, uuid}` owner scope. Every read/write this
+  module actually does (`list_connections/1`, `add_connection/2`,
+  `get_integration/1`, ...) runs in the default `:system` scope, i.e. Settings
+  → Integrations → **Website Integrations**. Following either link landed on a
+  page that couldn't show the connection the picker just listed, and "Add"
+  there would have created a connection this module never reads. Both links
+  now point at `/admin/settings/integrations/website[/new]` (#44).
+
+### Changed
+
+- Upgraded locked dependencies: `phoenix_kit` 2.13.9 → 2.21.1 (pulls in the
+  new `phoenix_kit_templates` dependency), `phoenix` 1.8.12 → 1.8.13,
+  `phoenix_live_view` 1.2.10 → 1.2.11, `req` 0.7.3 → 0.7.4, `oban` 2.23.1 →
+  2.24.1, `leaf` 0.5.1 → 0.6.1, `dialyxir` 1.4.7 → 1.4.8, `ex_doc` 0.40.3 →
+  0.40.4, `hammer` 7.4.0 → 7.5.0, `mint` 1.9.3 → 1.10.0, `tesla` 1.21.2 →
+  1.21.3, `quic` 1.8.1 → 1.8.2.
+
 ## 0.9.0 - 2026-08-25
 
 ### Changed
