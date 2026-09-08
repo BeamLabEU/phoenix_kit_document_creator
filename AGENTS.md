@@ -22,7 +22,7 @@ template sections.
   deps.
 - **Consumed by:** `phoenix_kit_projects` (duck-typed — it reads
   `phoenix_kit_project_extensions/0`; neither package depends on the other).
-  An external ANDI consumer still reads the deprecated
+  An external consumer still reads the deprecated
   `phoenix_kit_doc_templates.category_uuid` / `type_uuid` columns.
 - **Admin surface:** `Document Creator` (`/admin/document-creator`) with subtabs
   `Documents`, `Templates`, `Categories`; a settings tab at
@@ -185,7 +185,7 @@ mix gettext.extract --merge priv/gettext
   `category_uuid` / `type_uuid` are a compatibility mirror of the *primary*
   membership only; the source of truth is
   `phoenix_kit_doc_template_taxonomy`. They carry a deprecation `COMMENT` and
-  must not be dropped until the ANDI consumer migrates. Read memberships
+  must not be dropped until that consumer migrates. Read memberships
   through `Taxonomy`, not through the mirror.
 - **`test_helper.exs` runs the module chain through a version-keyed wrapper.**
   `PhoenixKitDocumentCreator.Test.SchemaMigration` is keyed on
