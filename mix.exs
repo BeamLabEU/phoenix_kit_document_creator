@@ -88,13 +88,18 @@ defmodule PhoenixKitDocumentCreator.MixProject do
     [
       # PhoenixKit provides the Module behaviour and Settings API — and, since
       # the `put_slug/3` adoption, the slug changeset glue as well.
-      # 2.4.0+ is REQUIRED, not preferred: `Template.changeset/2` calls
-      # `PhoenixKit.Utils.Slug.put_slug/3`, which does not exist before core
-      # 2.4.0. Under `~> 2.0` a host could resolve core 2.0.x and every save
-      # touching `:name` would raise UndefinedFunctionError — in the consumer's
-      # app, never in this repo's own run, because the workspace always resolves
-      # the newest core. Two-segment, so every later 2.x still satisfies it.
-      pk_dep(:phoenix_kit, "~> 2.4"),
+      # 2.21.3+ is REQUIRED, not preferred. Two facts set the floor:
+      #   - `Template.changeset/2` calls `PhoenixKit.Utils.Slug.put_slug/3`,
+      #     which does not exist before core 2.4.0.
+      #   - `Paths.integrations/0` links to `/admin/settings/integrations` as
+      #     the WEBSITE-wide connections page. Core 2.4–2.18 served the personal
+      #     page at that path, 2.19–2.21.2 served the website page under a
+      #     `/website` segment, and only 2.21.3 renamed it to the bare path.
+      # Under a looser floor a host resolves a core where the link lands on the
+      # wrong page — in the consumer's app, never in this repo's own run,
+      # because the workspace always resolves the newest core. Two-segment
+      # `~> 2.21` plus a patch guard, so every later 2.x still satisfies it.
+      pk_dep(:phoenix_kit, "~> 2.21 and >= 2.21.3"),
 
       # mdex_native (pulled in transitively through phoenix_kit's mdex dep)
       # builds from source when MDEX_NATIVE_BUILD=1 is set in the

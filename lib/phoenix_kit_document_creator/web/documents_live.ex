@@ -1294,6 +1294,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           <%!-- Filters: collapsed behind the "Filters" toggle below sm; always
                visible (search full-width then fixed; selects grow + wrap) on sm+. --%>
           <form
+            id="document-creator-filters"
             phx-change="filter"
             class={[
               "flex-wrap items-center gap-2 lg:flex-1",
