@@ -140,9 +140,9 @@ defmodule PhoenixKitDocumentCreator.MixProject do
   defp docs do
     [
       main: "PhoenixKitDocumentCreator",
-      # Tags in this repo are v-prefixed, not bare version numbers — a bare ref
-      # points at a tag that does not exist and 404s every HexDocs source link.
-      source_ref: "v#{@version}"
+      # Must match the release tag's form exactly, or every HexDocs source link
+      # 404s. Tags were v-prefixed through v0.7.0 and are bare from 0.8.0 on.
+      source_ref: @version
     ]
   end
 end

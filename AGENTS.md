@@ -369,7 +369,11 @@ Rules for the chain:
 
 ## Testing
 
-Test database `phoenix_kit_document_creator_test`. `test_helper.exs` makes one
+Test database `phoenix_kit_document_creator_test`. Before anything connects,
+`test_helper.exs` passes the resolved database name to
+`Test.LiveDatabaseGuard.check!/1`, which raises for any name ending in `_dev` or
+`_prod` — `PGDATABASE` is honoured, so a dev shell's export would otherwise
+point the migration run at a real database. It then makes one
 bounded connection attempt with the repo's own credentials through core's
 `PhoenixKit.TestSupport.PostgresPreflight` (falling back to a plain
 `start_link` attempt on a core that predates it) and, when the database is
