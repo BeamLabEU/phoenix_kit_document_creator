@@ -63,10 +63,10 @@ defmodule PhoenixKitDocumentCreator.LiveDatabaseGuardWiringTest do
 
       # Matches the raised-exception banner specifically
       # (`** (...LiveDatabaseError) ...`), not a bare "LiveDatabaseError"
-      # substring — a sibling repo's compiler "redefining module" warnings
-      # can contain that bare substring regardless of whether the guard
-      # actually fires, so a bare substring check isn't trustworthy here
-      # either.
+      # substring — the module and exception name alone could show up in an
+      # unrelated stack trace or log line without the guard actually having
+      # fired, so anchoring on the raised-exception banner is what makes
+      # this a trustworthy check.
       assert output =~
                "** (PhoenixKitDocumentCreator.Test.LiveDatabaseGuard.LiveDatabaseError)",
              "process failed, but not with the guard's own exception — some other crash " <>
@@ -75,6 +75,23 @@ defmodule PhoenixKitDocumentCreator.LiveDatabaseGuardWiringTest do
       assert output =~ unquote(live_db),
              "refusal happened but didn't name the actual database, not the legible " <>
                "message the guard promises:\n#{output}"
+
+      # Proves the guard runs BEFORE anything else touches the database, not
+      # merely that it runs somewhere in the boot. Verified live (mutation):
+      # moving the `check!/1` call below the `PostgresPreflight` block in
+      # `test_helper.exs` left this test's earlier assertions green (the
+      # guard still fires, just too late) while the preflight's own
+      # connection-refused text showed up ahead of the guard's banner in the
+      # output. These refutes catch that: they fail if the preflight (or its
+      # unreachable-database fallback) got a chance to run first.
+      refute output =~ "No PostgreSQL server answered",
+             "the preflight attempted a connection before the guard refused:\n#{output}"
+
+      refute output =~ "Cannot reach test database",
+             "test_helper's unreachable-database fallback ran before the guard refused:\n#{output}"
+
+      refute output =~ "Could not start the test database",
+             "test_helper's repo-start fallback ran before the guard refused:\n#{output}"
     end
   end
 
