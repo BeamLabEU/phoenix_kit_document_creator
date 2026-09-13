@@ -2290,7 +2290,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
           not serialize its value (only the phx-value-* attrs would arrive).
         --%>
         <form
-          id={"taxonomy-category-#{@file["id"]}"}
+          id={"taxonomy-category-#{if(@card?, do: "card", else: "row")}-#{@file["id"]}"}
           class={@card? && "min-w-0 flex-1 basis-28"}
           phx-change="set_taxonomy_category"
           phx-value-google_doc_id={@file["id"]}
@@ -2321,7 +2321,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         <%!-- Type select — only shown when a category is chosen --%>
         <form
           :if={@file["category_uuid"]}
-          id={"taxonomy-type-#{@file["id"]}"}
+          id={"taxonomy-type-#{if(@card?, do: "card", else: "row")}-#{@file["id"]}"}
           class={@card? && "min-w-0 flex-1 basis-28"}
           phx-change="set_taxonomy_type"
           phx-value-google_doc_id={@file["id"]}
