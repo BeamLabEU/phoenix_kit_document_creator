@@ -829,6 +829,71 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
     end
   end
 
+  describe "open_media_picker with a configured attachments_parent_folder hook" do
+    defmodule ScopeFolderHook do
+      def parent_for(:document_image, _actor_uuid, %{template_file_id: _template_file_id}) do
+        {:ok, "11111111-1111-1111-1111-111111111111"}
+      end
+    end
+
+    test "the media selector URL carries scope_folder=<hook folder>", %{conn: conn} do
+      Application.put_env(
+        :phoenix_kit_document_creator,
+        :attachments_parent_folder,
+        {ScopeFolderHook, :parent_for}
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:phoenix_kit_document_creator, :attachments_parent_folder)
+      end)
+
+      scope = fake_scope(user_uuid: "22222222-2222-2222-2222-222222222222")
+      conn = put_test_scope(conn, scope)
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      :sys.replace_state(view.pid, fn state ->
+        new_socket =
+          Phoenix.Component.assign(state.socket,
+            modal_open: true,
+            modal_step: "variables",
+            modal_image_values: %{},
+            modal_selected_template: %{"id" => "tpl-xyz", "name" => "Test"}
+          )
+
+        %{state | socket: new_socket}
+      end)
+
+      assert {:error, {:live_redirect, %{to: redirect_url}}} =
+               render_click(view, "open_media_picker", %{"name" => "logo", "mode" => "single"})
+
+      query = URI.decode_query(URI.parse(redirect_url).query)
+      assert query["scope_folder"] == "11111111-1111-1111-1111-111111111111"
+    end
+
+    test "no scope_folder param when the hook is not configured", %{conn: conn} do
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      :sys.replace_state(view.pid, fn state ->
+        new_socket =
+          Phoenix.Component.assign(state.socket,
+            modal_open: true,
+            modal_step: "variables",
+            modal_image_values: %{},
+            modal_selected_template: %{"id" => "tpl-xyz", "name" => "Test"}
+          )
+
+        %{state | socket: new_socket}
+      end)
+
+      assert {:error, {:live_redirect, %{to: redirect_url}}} =
+               render_click(view, "open_media_picker", %{"name" => "logo", "mode" => "single"})
+
+      query = URI.decode_query(URI.parse(redirect_url).query)
+      refute Map.has_key?(query, "scope_folder")
+    end
+  end
+
   describe "sort_files/2 — assign-level tests (Google not connected)" do
     # Tests for toggle_sort behavior via assigns inspection.
     # Runs in the non-connected state (no StubIntegrations) so there is no
