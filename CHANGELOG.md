@@ -1,3 +1,13 @@
+## Unreleased
+
+### Added
+
+- Images picked or uploaded from the template picker can be filed into a
+  host-configured folder: `config :phoenix_kit_document_creator,
+  attachments_parent_folder: {Mod, :fun}`, called as `fun(:document_image,
+  actor_uuid, %{template_file_id: id})` (or `/2`), returning `{:ok,
+  folder_uuid}` or `nil` for today's behaviour (root). No config, no change.
+
 ## 0.9.3 - 2026-09-13
 
 ### Changed

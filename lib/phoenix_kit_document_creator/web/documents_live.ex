@@ -17,6 +17,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   import PhoenixKitWeb.Components.Core.TableRowMenu
 
   alias PhoenixKit.Users.Auth
+  alias PhoenixKitDocumentCreator.Attachments
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.Errors
   alias PhoenixKitDocumentCreator.GoogleDocsClient
@@ -569,6 +570,18 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         mode: mode_atom,
         filter: :image
       )
+
+    scope_folder = Attachments.scope_folder(template_file_id, Helpers.actor_uuid(socket))
+
+    # The released core may not know :scope_folder yet — append the param
+    # ourselves in that case (media_selector_url/2 already adds it once core
+    # supports it, guarded by the same String.contains?/2 check).
+    selector_url =
+      if scope_folder && not String.contains?(selector_url, "scope_folder=") do
+        selector_url <> "&scope_folder=" <> scope_folder
+      else
+        selector_url
+      end
 
     {:noreply, push_navigate(socket, to: selector_url)}
   end
