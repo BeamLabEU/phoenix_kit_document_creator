@@ -1,5 +1,6 @@
 defmodule PhoenixKitDocumentCreator.AttachmentsTest do
-  use ExUnit.Case, async: true
+  # Mutates global application env, which async modules would race on.
+  use ExUnit.Case, async: false
 
   alias PhoenixKitDocumentCreator.Attachments
 
@@ -21,6 +22,14 @@ defmodule PhoenixKitDocumentCreator.AttachmentsTest do
     def parent_for(:document_image, _actor_uuid, _subject) do
       raise "boom"
     end
+  end
+
+  defmodule ExitingHook do
+    def parent_for(:document_image, _actor_uuid, _subject), do: exit(:timeout)
+  end
+
+  defmodule ThrowingHook do
+    def parent_for(:document_image, _actor_uuid, _subject), do: throw(:nope)
   end
 
   defmodule NilHook do
@@ -77,5 +86,17 @@ defmodule PhoenixKitDocumentCreator.AttachmentsTest do
     )
 
     assert Attachments.scope_folder("tpl-1", "actor-1") == nil
+  end
+
+  test "returns nil (and does not crash) when the hook exits or throws" do
+    for hook <- [ExitingHook, ThrowingHook] do
+      Application.put_env(
+        :phoenix_kit_document_creator,
+        :attachments_parent_folder,
+        {hook, :parent_for}
+      )
+
+      assert Attachments.scope_folder("tpl-1", "actor-1") == nil
+    end
   end
 end
