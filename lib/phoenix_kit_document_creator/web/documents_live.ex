@@ -382,7 +382,12 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
           {:error, :drive_file_not_found} when action == :restore ->
             Logger.warning("#{action} failed for #{file_id}: drive file not found (404)")
-            assign(socket, warning: Errors.message(:drive_file_not_found))
+
+            warning =
+              Errors.message(:drive_file_not_found) <>
+                " " <> gettext("You can permanently delete this record.")
+
+            assign(socket, warning: warning)
 
           {:error, reason} ->
             Logger.error("#{action} failed for #{file_id}: #{inspect(reason)}")

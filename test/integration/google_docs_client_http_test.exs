@@ -930,6 +930,40 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
 
       assert {:error, :drive_forbidden} = GoogleDocsClient.export_pdf("doc-1")
     end
+
+    test "returns {:error, :drive_rate_limited} on 403 with a rate/quota limit reason" do
+      StubIntegrations.stub_request(
+        :get,
+        "/drive/v3/files/doc-1/export",
+        {:ok,
+         %{
+           status: 403,
+           body: %{"error" => %{"errors" => [%{"reason" => "userRateLimitExceeded"}]}}
+         }}
+      )
+
+      assert {:error, :drive_rate_limited} = GoogleDocsClient.export_pdf("doc-1")
+    end
+
+    test "returns {:error, :pdf_export_failed} on 403 with an unrecognized reason" do
+      StubIntegrations.stub_request(
+        :get,
+        "/drive/v3/files/doc-1/export",
+        {:ok, %{status: 403, body: %{"error" => %{"errors" => [%{"reason" => "somethingElse"}]}}}}
+      )
+
+      assert {:error, :pdf_export_failed} = GoogleDocsClient.export_pdf("doc-1")
+    end
+
+    test "returns {:error, :pdf_export_failed} on 403 with a body that has no errors list" do
+      StubIntegrations.stub_request(
+        :get,
+        "/drive/v3/files/doc-1/export",
+        {:ok, %{status: 403, body: %{"error" => "boom"}}}
+      )
+
+      assert {:error, :pdf_export_failed} = GoogleDocsClient.export_pdf("doc-1")
+    end
   end
 
   describe "move_file/2 (HTTP)" do
