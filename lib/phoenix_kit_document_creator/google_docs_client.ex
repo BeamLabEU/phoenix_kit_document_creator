@@ -1481,9 +1481,24 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
-  @doc "Export a Google Doc as PDF. Returns `{:ok, pdf_binary}`."
+  @doc """
+  Export a Google Doc as PDF. Returns `{:ok, pdf_binary}`.
+
+  On failure the reason names why Drive refused the export instead of
+  collapsing every case into `:pdf_export_failed`:
+
+    * `:drive_file_not_found` — Drive returned 404 (the file was deleted)
+    * `:drive_forbidden` — Drive returned 403 (the service account can't read it)
+    * `:pdf_export_failed` — any other non-200 response
+  """
   @spec export_pdf(String.t()) ::
-          {:ok, binary()} | {:error, :invalid_file_id | :pdf_export_failed | term()}
+          {:ok, binary()}
+          | {:error,
+             :invalid_file_id
+             | :drive_file_not_found
+             | :drive_forbidden
+             | :pdf_export_failed
+             | term()}
   def export_pdf(doc_id) do
     with {:ok, fid} <- validate_file_id(doc_id) do
       case authenticated_request(:get, "#{@drive_base}/files/#{fid}/export",
@@ -1491,6 +1506,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
            ) do
         {:ok, %{status: 200, body: body}} when is_binary(body) ->
           {:ok, body}
+
+        {:ok, %{status: 404, body: body}} ->
+          log_drive_error("PDF export failed", body)
+          {:error, :drive_file_not_found}
+
+        {:ok, %{status: 403, body: body}} ->
+          log_drive_error("PDF export failed", body)
+          {:error, :drive_forbidden}
 
         {:ok, %{body: body}} ->
           log_drive_error("PDF export failed", body)

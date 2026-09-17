@@ -558,6 +558,11 @@ msgstr ""
 msgid "Documents folder not found"
 msgstr ""
 
+#: lib/phoenix_kit_document_creator/errors.ex:81
+#, elixir-autogen
+msgid "Google Drive refused access to the document (the service account cannot read it)"
+msgstr ""
+
 #: lib/phoenix_kit_document_creator/errors.ex:69
 #, elixir-autogen
 msgid "File is in the Drive trash"

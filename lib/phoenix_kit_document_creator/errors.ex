@@ -29,6 +29,7 @@ defmodule PhoenixKitDocumentCreator.Errors do
           | :deleted_folder_not_found
           | :documents_folder_not_found
           | :drive_file_not_found
+          | :drive_forbidden
           | :file_trashed
           | :folder_not_found
           | :folder_search_failed
@@ -74,6 +75,10 @@ defmodule PhoenixKitDocumentCreator.Errors do
       gettext(
         "File is missing in Google Drive — it cannot be restored. You can permanently delete this record."
       )
+
+  def message(:drive_forbidden),
+    do:
+      gettext("Google Drive refused access to the document (the service account cannot read it)")
 
   def message(:file_trashed), do: gettext("File is in the Drive trash")
   def message(:folder_not_found), do: gettext("Folder not found")

@@ -19,6 +19,8 @@ defmodule PhoenixKitDocumentCreator.ErrorsTest do
       {:documents_folder_not_found, "Documents folder not found"},
       {:drive_file_not_found,
        "File is missing in Google Drive — it cannot be restored. You can permanently delete this record."},
+      {:drive_forbidden,
+       "Google Drive refused access to the document (the service account cannot read it)"},
       {:file_trashed, "File is in the Drive trash"},
       {:folder_not_found, "Folder not found"},
       {:folder_search_failed, "Failed to search Drive for the folder"},

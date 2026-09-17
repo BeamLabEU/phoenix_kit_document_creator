@@ -910,6 +910,26 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
 
       assert {:error, :pdf_export_failed} = GoogleDocsClient.export_pdf("doc-1")
     end
+
+    test "returns {:error, :drive_file_not_found} on 404 (Drive file deleted)" do
+      StubIntegrations.stub_request(
+        :get,
+        "/drive/v3/files/doc-1/export",
+        {:ok, %{status: 404, body: %{"error" => %{"errors" => [%{"reason" => "notFound"}]}}}}
+      )
+
+      assert {:error, :drive_file_not_found} = GoogleDocsClient.export_pdf("doc-1")
+    end
+
+    test "returns {:error, :drive_forbidden} on 403 (service account can't read file)" do
+      StubIntegrations.stub_request(
+        :get,
+        "/drive/v3/files/doc-1/export",
+        {:ok, %{status: 403, body: %{"error" => %{"errors" => [%{"reason" => "forbidden"}]}}}}
+      )
+
+      assert {:error, :drive_forbidden} = GoogleDocsClient.export_pdf("doc-1")
+    end
   end
 
   describe "move_file/2 (HTTP)" do
