@@ -560,7 +560,7 @@ msgstr "Не удалось создать документ. Попробуйт�
 msgid "Action failed. Please try again."
 msgstr "Не удалось выполнить действие. Попробуйте ещё раз."
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:688
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:915
 #, elixir-autogen
 msgid "PDF export failed. Please try again."
 msgstr "Не удалось экспортировать PDF. Попробуйте ещё раз."
@@ -603,17 +603,22 @@ msgstr "Папка удалённых не найдена"
 msgid "Documents folder not found"
 msgstr "Папка документов не найдена"
 
-#: lib/phoenix_kit_document_creator/errors.ex:75
-#, elixir-autogen
-msgid "The file no longer exists in Google Drive (it was deleted)"
-msgstr "Файла больше нет в Google Drive (он был удалён)"
-
 #: lib/phoenix_kit_document_creator/errors.ex:79
 #, elixir-autogen
-msgid "Google Drive refused access to the document (the service account cannot read it)"
-msgstr "Google Drive отказал в доступе к документу (сервисный аккаунт не может его прочитать)"
+msgid "The document is too large for Google Drive to export as PDF"
+msgstr "Документ слишком велик для экспорта в PDF через Google Drive"
 
-#: lib/phoenix_kit_document_creator/errors.ex:82
+#: lib/phoenix_kit_document_creator/errors.ex:84
+#, elixir-autogen
+msgid "The file is not available in Google Drive — it was deleted, or this Google connection cannot see it"
+msgstr "Файл недоступен в Google Drive — он удалён или текущее подключение Google его не видит"
+
+#: lib/phoenix_kit_document_creator/errors.ex:90
+#, elixir-autogen
+msgid "Google Drive refused access to the document (the connected Google account cannot read it)"
+msgstr "Google Drive отказал в доступе к документу (подключённый аккаунт Google не может его прочитать)"
+
+#: lib/phoenix_kit_document_creator/errors.ex:94
 #, elixir-autogen
 msgid "Google Drive rate limit reached, try again in a minute"
 msgstr "Достигнут лимит запросов Google Drive, повторите через минуту"

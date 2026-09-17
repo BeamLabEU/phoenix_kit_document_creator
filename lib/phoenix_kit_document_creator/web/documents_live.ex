@@ -906,7 +906,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
           {:error, reason} ->
             Logger.error("PDF export failed: #{inspect(reason)}")
-            {:noreply, assign(socket, error: Errors.message(reason))}
+
+            # `message/2`, not `message/1`: the reason can also be an
+            # internal term (a Req transport error, `:not_configured`)
+            # that must not reach the flash as a raw inspect/1 string.
+            {:noreply,
+             assign(socket,
+               error: Errors.message(reason, gettext("PDF export failed. Please try again."))
+             )}
         end
 
       _ ->

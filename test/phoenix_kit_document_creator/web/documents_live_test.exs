@@ -467,6 +467,32 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert :sys.get_state(view.pid).socket.assigns.error == Errors.message(:drive_forbidden)
     end
 
+    test "export_pdf renders a generic message for an internal failure term",
+         %{conn: conn} do
+      file_id = "lv-doc-export-transport"
+
+      {:ok, _doc} =
+        Documents.register_existing_document(%{google_doc_id: file_id, name: "Report"})
+
+      # Not a Drive status — a transport failure travelling up from
+      # `authenticated_request/4`. `Errors.message/1` would inspect it
+      # straight into the flash; the LV must fall back to its own text.
+      StubIntegrations.stub_request(
+        :get,
+        "/drive/v3/files/#{file_id}/export",
+        {:error, %RuntimeError{message: "econnrefused"}}
+      )
+
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      render_click(view, "export_pdf", %{"id" => file_id, "name" => "Report.pdf"})
+
+      error = :sys.get_state(view.pid).socket.assigns.error
+      assert error == "PDF export failed. Please try again."
+      refute error =~ "econnrefused"
+    end
+
     # ── handle_info coverage (PubSub + sync flow) ─────────────────────
 
     test "handle_info :sync_complete refreshes file lists from DB", %{conn: conn} do
