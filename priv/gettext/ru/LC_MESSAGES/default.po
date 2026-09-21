@@ -1316,7 +1316,7 @@ msgstr "Не удалось прочитать Google-документ"
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:363
 #, elixir-autogen, elixir-format
 msgid "Failed to refresh the thumbnail. Please try again."
-msgstr "Не удалось обновить миниатюру. Попробуйте ещё раз."
+msgstr "Не удалось обновить эскиз. Попробуйте ещё раз."
 
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:1324
 #, elixir-autogen, elixir-format
@@ -1384,7 +1384,7 @@ msgstr "Обновить"
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:2170
 #, elixir-autogen, elixir-format
 msgid "Refresh thumbnail"
-msgstr "Обновить миниатюру"
+msgstr "Обновить эскиз"
 
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:377
 #, elixir-autogen, elixir-format
