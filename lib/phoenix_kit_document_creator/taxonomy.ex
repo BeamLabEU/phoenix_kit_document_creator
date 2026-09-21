@@ -66,9 +66,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   # ---------------------------------------------------------------------------
 
   defp log_activity(attrs) do
-    if Code.ensure_loaded?(PhoenixKit.Activity) do
-      PhoenixKit.Activity.log(Map.put(attrs, :module, @module_key))
-    end
+    PhoenixKit.Activity.log(Map.put(attrs, :module, @module_key))
 
     :ok
   end

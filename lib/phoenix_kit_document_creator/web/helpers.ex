@@ -4,28 +4,15 @@ defmodule PhoenixKitDocumentCreator.Web.Helpers do
   """
 
   @doc """
-  Build the actor opts list to thread into context-fn calls.
-
-  Returns `[actor_uuid: uuid]` when the LV's `phoenix_kit_current_scope`
-  assign carries a user, otherwise `[]`. Pass-through into mutating
-  `Documents.*` functions for activity-log attribution.
+  The actor opts list to thread into context-fn calls: `[actor_uuid: uuid]`
+  for a signed-in user, otherwise `[]` — see `PhoenixKitWeb.Actor.opts/1`.
+  Pass-through into mutating `Documents.*` functions for activity-log
+  attribution.
   """
   @spec actor_opts(Phoenix.LiveView.Socket.t()) :: keyword()
-  def actor_opts(socket) do
-    case actor_uuid(socket) do
-      nil -> []
-      uuid -> [actor_uuid: uuid]
-    end
-  end
+  defdelegate actor_opts(socket), to: PhoenixKitWeb.Actor, as: :opts
 
-  @doc """
-  Pull the acting user's UUID out of the LV scope, or `nil` when not signed in.
-  """
+  @doc "The acting user's uuid, or `nil` — see `PhoenixKitWeb.Actor.uuid/1`."
   @spec actor_uuid(Phoenix.LiveView.Socket.t()) :: String.t() | nil
-  def actor_uuid(socket) do
-    case socket.assigns[:phoenix_kit_current_scope] do
-      %{user: %{uuid: uuid}} -> uuid
-      _ -> nil
-    end
-  end
+  defdelegate actor_uuid(socket), to: PhoenixKitWeb.Actor, as: :uuid
 end

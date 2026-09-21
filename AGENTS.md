@@ -131,14 +131,16 @@ mix gettext.extract --merge priv/gettext
 - **`enabled?/0` must `rescue` and `catch :exit`.** Module discovery runs early
   in boot, before Settings may be ready, and the test sandbox can exit the pool
   checkout under a caller — both paths must return `false` rather than crash.
-- **Activity logging must not crash the caller.** Every call to
-  `PhoenixKit.Activity.log/1` sits behind a
-  `Code.ensure_loaded?(PhoenixKit.Activity)` guard: the `log_activity/1`
-  helpers in `Documents` and `Taxonomy`, plus the two legacy-migration sites in
-  `GoogleDocsClient` and the top-level module. Route new logging through one of
-  the two helpers rather than adding a fifth guarded call. Mutating functions
-  take `opts` with `:actor_uuid` for attribution; LiveViews thread it via
-  `Web.Helpers.actor_opts/1`.
+- **Activity logging goes through core, which never raises.** Logging runs
+  through the `log_activity/1` helpers in `Documents` and `Taxonomy` (plus the
+  two legacy-migration sites in `GoogleDocsClient` and the top-level module);
+  route new logging through one of the two helpers. Mutating functions take
+  `opts` with `:actor_uuid` for attribution; LiveViews thread it via
+  `Web.Helpers.actor_opts/1` (core's `PhoenixKitWeb.Actor`).
+- **Edit forms open on the viewing language.** The category and type forms
+  pass `open_on: :viewing_language` to `mount_multilang/2` for an edit (a
+  `"uuid"` param) and the main language for a new record, whose required
+  fields live there.
 - **Soft-delete sentinels.** Files use a four-value `status`:
   `"published"` (inside the managed tree, root or any descendant), `"trashed"`
   (deleted via the app or found in Drive's trash), `"lost"` (gone from Drive —

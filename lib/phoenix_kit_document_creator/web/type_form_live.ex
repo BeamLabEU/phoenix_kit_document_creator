@@ -24,7 +24,7 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
   @translatable_fields ["name", "description"]
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(params, _session, socket) do
     {:ok,
      socket
      |> assign(
@@ -35,8 +35,13 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
        mode: :new,
        categories: []
      )
-     |> mount_multilang()}
+     |> mount_multilang(open_on: open_on(params))}
   end
+
+  # An edit opens on the language the admin is viewing the page in; a new
+  # record starts on the main language, which holds its required fields.
+  defp open_on(%{"uuid" => _}), do: :viewing_language
+  defp open_on(_params), do: :primary
 
   @impl true
   def handle_params(params, uri, socket) do

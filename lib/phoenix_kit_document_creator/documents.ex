@@ -63,9 +63,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
   end
 
   defp log_activity(attrs) do
-    if Code.ensure_loaded?(PhoenixKit.Activity) do
-      PhoenixKit.Activity.log(Map.put(attrs, :module, @module_key))
-    end
+    PhoenixKit.Activity.log(Map.put(attrs, :module, @module_key))
   end
 
   # Log the user-initiated mutation even when it failed, so the audit
