@@ -577,6 +577,21 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert state.error == "Failed to refresh the thumbnail. Please try again."
     end
 
+    test "handle_info {:thumbnail_refresh_failed, ...} renders the mapped reason's own message",
+         %{conn: conn} do
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      force_connected_render(view, pending_files: MapSet.new(["doc-thumb-3"]))
+
+      send(view.pid, {:thumbnail_refresh_failed, "doc-thumb-3", :thumbnail_fetch_failed})
+      _ = render(view)
+
+      state = :sys.get_state(view.pid).socket.assigns
+      refute MapSet.member?(state.pending_files, "doc-thumb-3")
+      assert state.error == Errors.message(:thumbnail_fetch_failed)
+    end
+
     test "handle_info :poll_for_changes is a no-op when loading", %{conn: conn} do
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/document-creator")
