@@ -347,7 +347,22 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_info({:thumbnail_result, file_id, data_uri}, socket) do
-    {:noreply, assign(socket, thumbnails: Map.put(socket.assigns.thumbnails, file_id, data_uri))}
+    {:noreply,
+     socket
+     |> assign(thumbnails: Map.put(socket.assigns.thumbnails, file_id, data_uri))
+     |> assign(pending_files: MapSet.delete(socket.assigns.pending_files, file_id))}
+  end
+
+  def handle_info({:thumbnail_refresh_failed, file_id, reason}, socket) do
+    Logger.error("Thumbnail refresh failed for #{file_id}: #{inspect(reason)}")
+
+    {:noreply,
+     socket
+     |> assign(pending_files: MapSet.delete(socket.assigns.pending_files, file_id))
+     |> assign(
+       error:
+         Errors.message(reason, gettext("Failed to refresh the thumbnail. Please try again."))
+     )}
   end
 
   def handle_info(:poll_for_changes, socket) do
@@ -939,6 +954,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
     end
   end
 
+  # ── Thumbnail refresh ────────────────────────────────────────────
+
+  def handle_event("refresh_thumbnail", %{"id" => file_id}, socket) do
+    case verify_known_file(socket, file_id) do
+      :ok -> do_refresh_thumbnail(socket, file_id)
+      _ -> {:noreply, socket}
+    end
+  end
+
   # ── Refresh ──────────────────────────────────────────────────────
 
   def handle_event("refresh", _params, socket) do
@@ -1032,6 +1056,15 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   defp do_delete(socket, file_id), do: schedule_file_action(socket, file_id, :delete)
   defp do_restore(socket, file_id), do: schedule_file_action(socket, file_id, :restore)
+
+  defp do_refresh_thumbnail(socket, file_id) do
+    if MapSet.member?(socket.assigns.pending_files, file_id) do
+      {:noreply, socket}
+    else
+      Documents.refresh_thumbnail_async(file_id, self(), actor_opts(socket))
+      {:noreply, assign(socket, pending_files: MapSet.put(socket.assigns.pending_files, file_id))}
+    end
+  end
 
   # Optimistically marks the file as pending so the card renders a spinner,
   # then kicks off the backend call asynchronously via `handle_info`.
@@ -1984,6 +2017,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
               icon="hero-arrow-down-tray"
               label={gettext("Export PDF")}
             />
+            <.table_row_menu_button
+              phx-click="refresh_thumbnail"
+              phx-value-id={file["id"]}
+              phx-disable-with={gettext("Refreshing…")}
+              icon="hero-arrow-path"
+              label={gettext("Refresh thumbnail")}
+            />
             <.table_row_menu_divider />
             <%= if @status_mode == "trashed" do %>
               <.table_row_menu_button
@@ -2122,6 +2162,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
                   phx-disable-with={gettext("Exporting…")}
                   icon="hero-arrow-down-tray"
                   label={gettext("Export PDF")}
+                />
+                <.table_row_menu_button
+                  phx-click="refresh_thumbnail"
+                  phx-value-id={file["id"]}
+                  phx-disable-with={gettext("Refreshing…")}
+                  icon="hero-arrow-path"
+                  label={gettext("Refresh thumbnail")}
                 />
                 <.table_row_menu_divider />
                 <%= if @status_mode == "trashed" do %>
