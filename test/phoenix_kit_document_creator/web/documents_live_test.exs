@@ -547,11 +547,13 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       _ = render(view)
     end
 
-    test "handle_info {:thumbnail_result, ...} stores the data URI and clears pending_files",
+    test "handle_info {:thumbnail_result, ...} stores the data URI and leaves pending_files alone",
          %{conn: conn} do
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/document-creator")
 
+      # A background thumbnail landing while e.g. a delete is in flight must
+      # not clear that action's spinner.
       force_connected_render(view, pending_files: MapSet.new(["doc-thumb-1"]))
 
       send(view.pid, {:thumbnail_result, "doc-thumb-1", "data:image/png;base64,XYZ"})
@@ -559,7 +561,22 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
 
       state = :sys.get_state(view.pid).socket.assigns
       assert state.thumbnails["doc-thumb-1"] == "data:image/png;base64,XYZ"
-      refute MapSet.member?(state.pending_files, "doc-thumb-1")
+      assert MapSet.member?(state.pending_files, "doc-thumb-1")
+    end
+
+    test "handle_info {:thumbnail_refreshed, ...} stores the data URI and clears pending_files",
+         %{conn: conn} do
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator")
+
+      force_connected_render(view, pending_files: MapSet.new(["doc-thumb-4"]))
+
+      send(view.pid, {:thumbnail_refreshed, "doc-thumb-4", "data:image/png;base64,NEW"})
+      _ = render(view)
+
+      state = :sys.get_state(view.pid).socket.assigns
+      assert state.thumbnails["doc-thumb-4"] == "data:image/png;base64,NEW"
+      refute MapSet.member?(state.pending_files, "doc-thumb-4")
     end
 
     test "handle_info {:thumbnail_refresh_failed, ...} sets a translated error and clears pending_files",

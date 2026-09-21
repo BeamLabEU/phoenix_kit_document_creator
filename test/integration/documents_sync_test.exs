@@ -273,7 +273,7 @@ defmodule PhoenixKitDocumentCreator.Integration.DocumentsSyncTest do
       {:ok, stub: stub_name}
     end
 
-    test "sends :thumbnail_result to the caller on success", %{stub: stub_name} do
+    test "sends :thumbnail_refreshed to the caller on success", %{stub: stub_name} do
       {:ok, _tpl} =
         Documents.register_existing_template(%{google_doc_id: "refresh-async-tpl", name: "Tpl"})
 
@@ -294,7 +294,8 @@ defmodule PhoenixKitDocumentCreator.Integration.DocumentsSyncTest do
       end)
 
       assert :ok = Documents.refresh_thumbnail_async("refresh-async-tpl", self())
-      assert_receive {:thumbnail_result, "refresh-async-tpl", _data_uri}, 1000
+      assert_receive {:thumbnail_refreshed, "refresh-async-tpl", _data_uri}, 1000
+      refute_received {:thumbnail_result, "refresh-async-tpl", _}
     end
 
     test "sends :thumbnail_refresh_failed to the caller on failure" do
@@ -327,6 +328,21 @@ defmodule PhoenixKitDocumentCreator.Integration.DocumentsSyncTest do
 
       assert :ok = Documents.refresh_thumbnail_async("refresh-crash-tpl", self())
       assert_receive {:thumbnail_refresh_failed, "refresh-crash-tpl", :internal_error}, 1000
+    end
+
+    test "notifies the caller with :internal_error when the fetch exits" do
+      {:ok, _tpl} =
+        Documents.register_existing_template(%{google_doc_id: "refresh-exit-tpl", name: "Tpl"})
+
+      # `rescue` alone doesn't see an exit (e.g. a pool checkout timeout).
+      StubIntegrations.stub_request(
+        :get,
+        "/drive/v3/files/refresh-exit-tpl",
+        fn -> exit(:checkout_timeout) end
+      )
+
+      assert :ok = Documents.refresh_thumbnail_async("refresh-exit-tpl", self())
+      assert_receive {:thumbnail_refresh_failed, "refresh-exit-tpl", :internal_error}, 1000
     end
   end
 

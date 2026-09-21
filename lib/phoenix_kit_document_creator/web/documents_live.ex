@@ -347,6 +347,14 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
   end
 
   def handle_info({:thumbnail_result, file_id, data_uri}, socket) do
+    {:noreply, assign(socket, thumbnails: Map.put(socket.assigns.thumbnails, file_id, data_uri))}
+  end
+
+  # Completion of a manual refresh (`refresh_thumbnail_async/3`). Only this
+  # message may clear `pending_files`: a background `:thumbnail_result` for
+  # the same file can land while a delete/restore is still in flight, and
+  # clearing the spinner then would re-enable the card mid-action.
+  def handle_info({:thumbnail_refreshed, file_id, data_uri}, socket) do
     {:noreply,
      socket
      |> assign(thumbnails: Map.put(socket.assigns.thumbnails, file_id, data_uri))

@@ -2421,22 +2421,29 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc """
   Builds the `updateSectionStyle` request that gives an appended section its
-  template's own page margins (`documentStyle.margin*` of `template_doc`).
-  `section_index` is any index inside the section — `append_template/3`
-  passes the section's `content_start`.
+  template's own page margins. `section_index` is any index inside the
+  section — `append_template/3` passes the section's `content_start`.
 
-  Only the margins the template's `documentStyle` actually states are
-  touched; a margin present without a magnitude is an explicit zero (the
-  API omits a zero magnitude from its JSON — see `dimension_or_nil/1`). No
-  `documentStyle`, or none of the margins in it, produces no request.
+  The margins are the ones the template's own first page renders with: its
+  first section's `sectionStyle.margin*` where set, else
+  `documentStyle.margin*` — the API's own resolution order (a section margin
+  left unset defaults to the document's). A template that is itself a
+  composed document carries per-section margins this way, and reading
+  `documentStyle` alone would hand its first section the wrong ones.
+
+  Only the margins the template actually states are touched; a margin
+  present without a magnitude is an explicit zero (the API omits a zero
+  magnitude from its JSON — see `dimension_or_nil/1`). No margins in either
+  place produces no request.
   """
   @spec section_margin_requests(non_neg_integer(), map()) :: [map()]
   def section_margin_requests(section_index, template_doc) do
     document_style = Map.get(template_doc, "documentStyle") || %{}
+    section_style = first_section_style(template_doc)
 
     margins =
       Enum.flat_map(@section_margin_fields, fn field ->
-        case dimension_or_nil(Map.get(document_style, field)) do
+        case dimension_or_nil(Map.get(section_style, field) || Map.get(document_style, field)) do
           nil -> []
           dimension -> [{field, dimension_payload(dimension)}]
         end
@@ -2456,6 +2463,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
             }
           }
         ]
+    end
+  end
+
+  # A body's first structural element is always the section break that
+  # opens its first section.
+  defp first_section_style(template_doc) do
+    case get_in(template_doc, ["body", "content"]) do
+      [%{"sectionBreak" => %{"sectionStyle" => %{} = style}} | _] -> style
+      _ -> %{}
     end
   end
 

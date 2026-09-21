@@ -2256,10 +2256,16 @@ defmodule PhoenixKitDocumentCreator.Documents do
   Asynchronous variant of `refresh_thumbnail/2` for LiveView callers.
 
   Spawns a supervised task under `PhoenixKit.TaskSupervisor` that sends
-  `{:thumbnail_result, google_doc_id, data_uri}` to `caller_pid` on
+  `{:thumbnail_refreshed, google_doc_id, data_uri}` to `caller_pid` on
   success or `{:thumbnail_refresh_failed, google_doc_id, reason}` on
-  failure — including when `refresh_thumbnail/2` raises (e.g. a transient
-  DB error), so the caller is always notified and never left waiting.
+  failure — including when `refresh_thumbnail/2` raises, throws or exits
+  (e.g. a transient DB error), so the caller is always notified and never
+  left waiting.
+
+  The success message is deliberately not `fetch_thumbnails_async/2`'s
+  `{:thumbnail_result, …}`: a caller that tracks this refresh as pending
+  must be able to tell its completion apart from a background thumbnail
+  that happens to arrive for the same file.
   """
   @spec refresh_thumbnail_async(String.t(), pid(), keyword()) :: :ok
   def refresh_thumbnail_async(google_doc_id, caller_pid, opts \\ [])
@@ -2270,7 +2276,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
         try do
           case refresh_thumbnail(google_doc_id, opts) do
             {:ok, data_uri} ->
-              send(caller_pid, {:thumbnail_result, google_doc_id, data_uri})
+              send(caller_pid, {:thumbnail_refreshed, google_doc_id, data_uri})
 
             {:error, reason} ->
               send(caller_pid, {:thumbnail_refresh_failed, google_doc_id, reason})
@@ -2282,6 +2288,14 @@ defmodule PhoenixKitDocumentCreator.Documents do
           e ->
             Logger.error(
               "refresh_thumbnail_async crashed for #{google_doc_id}: #{Exception.message(e)}"
+            )
+
+            send(caller_pid, {:thumbnail_refresh_failed, google_doc_id, :internal_error})
+        catch
+          kind, reason ->
+            Logger.error(
+              "refresh_thumbnail_async crashed for #{google_doc_id}: " <>
+                Exception.format_banner(kind, reason)
             )
 
             send(caller_pid, {:thumbnail_refresh_failed, google_doc_id, :internal_error})

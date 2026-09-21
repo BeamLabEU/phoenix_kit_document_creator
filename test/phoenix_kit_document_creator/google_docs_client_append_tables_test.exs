@@ -3107,6 +3107,38 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                "marginFooter" => %{"magnitude" => 10.0, "unit" => "MM"}
              }
     end
+
+    test "the template's first section margins win over its documentStyle, field by field" do
+      doc = %{
+        "documentStyle" => %{"marginTop" => points(72), "marginLeft" => points(72)},
+        "body" => %{
+          "content" => [
+            %{
+              "endIndex" => 1,
+              "sectionBreak" => %{
+                "sectionStyle" => %{
+                  "columnSeparatorStyle" => "NONE",
+                  "marginTop" => points(20),
+                  "marginBottom" => %{"unit" => "PT"}
+                }
+              }
+            },
+            %{"startIndex" => 1, "endIndex" => 5, "paragraph" => %{"elements" => []}}
+          ]
+        }
+      }
+
+      assert [%{"updateSectionStyle" => request}] =
+               GoogleDocsClient.section_margin_requests(3, doc)
+
+      assert request["fields"] == "marginTop,marginBottom,marginLeft"
+
+      assert request["sectionStyle"] == %{
+               "marginTop" => points(20.0),
+               "marginBottom" => points(0.0),
+               "marginLeft" => points(72.0)
+             }
+    end
   end
 
   describe "paragraph_bullet_requests/2" do
