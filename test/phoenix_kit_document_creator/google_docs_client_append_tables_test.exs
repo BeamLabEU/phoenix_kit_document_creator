@@ -969,9 +969,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                  batch_fn: batch_fn
                )
 
-      # insert_index=9, page_break_index=10, content_start=11 (one extra
-      # unit beyond insert_index+1 for the leading paragraph-break insert —
-      # see append_template/3's doc for why it's needed). content_end = 11 +
+      # insert_index=9, content_start=11 (the section break occupies one unit
+      # and inserts a newline ahead of itself — see append_template/3's doc
+      # for why that fresh paragraph is needed). content_end = 11 +
       # utf16_units("Plain body.\n") = 11+12=23.
       #
       # The plain paragraph has no textStyle/paragraphStyle at all, so it
@@ -985,8 +985,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
       assert_receive {:batch,
                       [
-                        %{insertText: %{location: %{index: 9}, text: "\n"}},
-                        %{insertPageBreak: %{location: %{index: 10}}},
+                        %{insertSectionBreak: %{location: %{index: 9}, sectionType: "NEXT_PAGE"}},
                         %{insertText: %{location: %{index: 11}, text: "Plain body.\n"}},
                         ^paragraph_style,
                         %{
@@ -1043,8 +1042,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       }
 
       # State after Phase 0's insertText: the marker text now lives at
-      # content_start (11 — insert_index 9 + the leading paragraph-break
-      # insert + the page break, see append_template/3's doc). Real Google
+      # content_start (11 — insert_index 9 + the section break and the
+      # newline it inserts ahead of itself, see append_template/3's doc). Real Google
       # Docs would split this across several paragraph structural elements
       # (one per embedded \n) — collapsed to a single textRun here since
       # find_table_marker_ranges/1 only cares about locating the marker
@@ -1144,7 +1143,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                  batch_fn: batch_fn
                )
 
-      # Phase 0: leading "\n" + page break + the marked-up text (marker
+      # Phase 0: section break + the marked-up text (marker
       # included), plus a paragraph-style request per body paragraph either
       # side of the marker ("Hi\n" at 11-14, "Bye\n" at 32-36 — the marker
       # itself gets no style request since it's deleted before Phase 1
@@ -1156,8 +1155,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
 
       assert_receive {:batch,
                       [
-                        %{insertText: %{location: %{index: 9}, text: "\n"}},
-                        %{insertPageBreak: %{location: %{index: 10}}},
+                        %{insertSectionBreak: %{location: %{index: 9}, sectionType: "NEXT_PAGE"}},
                         %{insertText: %{location: %{index: 11}, text: ^text}},
                         ^hi_paragraph_style,
                         ^bye_paragraph_style,
@@ -1756,7 +1754,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                  batch_fn: batch_fn_2
                )
 
-      # Phase 0 (page break + marker text) and Phase 1 (skeleton) batches —
+      # Phase 0 (section break + marker text) and Phase 1 (skeleton) batches —
       # not under test here.
       assert_receive {:call2_batch, _}
       assert_receive {:call2_batch, _}
@@ -2432,8 +2430,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       plain_paragraph_style = unset_paragraph_style_request(19, 31)
 
       assert [
-               %{insertText: %{location: %{index: 9}, text: "\n"}},
-               %{insertPageBreak: %{location: %{index: 10}}},
+               %{insertSectionBreak: %{location: %{index: 9}, sectionType: "NEXT_PAGE"}},
                %{insertText: %{location: %{index: 11}, text: "Heading\nPlain text.\n"}},
                ^heading_paragraph_style,
                ^plain_paragraph_style,
@@ -2835,6 +2832,102 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
     end
   end
 
+  describe "append_template/3 — each appended template is its own section with its own margins" do
+    defp append_batches(template) do
+      target = %{"body" => %{"content" => [%{"startIndex" => 1, "endIndex" => 10}]}}
+      test_pid = self()
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template}}
+        "target-id" -> {:ok, %{body: target}}
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(test_pid, {:batch, requests})
+        {:ok, %{}}
+      end
+
+      assert {:ok, range} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_received {:batch, requests}
+      {range, requests}
+    end
+
+    defp pt(magnitude), do: %{"magnitude" => magnitude, "unit" => "PT"}
+
+    test "the template's page margins are applied to the new section, after its content is in" do
+      template = %{
+        "documentStyle" => %{
+          "marginTop" => pt(72),
+          "marginBottom" => pt(72),
+          "marginLeft" => pt(72),
+          "marginRight" => pt(72),
+          "marginHeader" => pt(36),
+          "marginFooter" => pt(36),
+          "pageSize" => %{"width" => pt(595), "height" => pt(842)}
+        },
+        "body" => %{"content" => [styled_paragraph_block(["Contract\n"])]}
+      }
+
+      {{content_start, _end}, requests} = append_batches(template)
+
+      # A section break inserts its own newline ahead of itself (verified
+      # live), so content starts two units past the insertion point — the
+      # same offset the old "\n" + page break pair produced.
+      assert content_start == 11
+
+      assert [%{insertSectionBreak: %{location: %{index: 9}, sectionType: "NEXT_PAGE"}} | _] =
+               requests
+
+      assert %{
+               "updateSectionStyle" => %{
+                 "range" => %{"startIndex" => 11, "endIndex" => 12},
+                 "sectionStyle" => section_style,
+                 "fields" => fields
+               }
+             } = List.last(requests)
+
+      assert section_style == %{
+               "marginTop" => pt(72.0),
+               "marginBottom" => pt(72.0),
+               "marginLeft" => pt(72.0),
+               "marginRight" => pt(72.0),
+               "marginHeader" => pt(36.0),
+               "marginFooter" => pt(36.0)
+             }
+
+      assert fields == "marginTop,marginBottom,marginLeft,marginRight,marginHeader,marginFooter"
+    end
+
+    test "a zero margin (unit-only in the API's JSON) is applied as an explicit zero" do
+      template = %{
+        "documentStyle" => %{"marginTop" => %{"unit" => "PT"}, "marginLeft" => pt(44)},
+        "body" => %{"content" => [styled_paragraph_block(["x\n"])]}
+      }
+
+      {_range, requests} = append_batches(template)
+
+      assert %{"updateSectionStyle" => %{"sectionStyle" => style, "fields" => fields}} =
+               List.last(requests)
+
+      # Only the margins the template states are touched.
+      assert style == %{"marginTop" => pt(0.0), "marginLeft" => pt(44.0)}
+      assert fields == "marginTop,marginLeft"
+    end
+
+    test "a template without a documentStyle leaves the section's margins alone" do
+      template = %{"body" => %{"content" => [styled_paragraph_block(["x\n"])]}}
+
+      {_range, requests} = append_batches(template)
+
+      refute Enum.any?(requests, &Map.has_key?(&1, "updateSectionStyle"))
+    end
+  end
+
   describe "paragraph_bullet_requests/2" do
     test "merges contiguous spans sharing the same listId into one range, using the first span's preset" do
       bullet = %{list_id: "L1", preset: "NUMBERED_DECIMAL_ALPHA_ROMAN"}
@@ -3083,8 +3176,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
     end
   end
 
-  describe "append_template/3 — leading paragraph break guarantees a fresh first paragraph" do
-    test "inserts \"\\n\" then the page break then content, content_start landing two past insert_index" do
+  describe "append_template/3 — the section break guarantees a fresh first paragraph" do
+    test "inserts the section break then content, content_start landing two past insert_index" do
       template_doc = %{"body" => %{"content" => [styled_paragraph_block(["Plain\n"])]}}
 
       target_doc = %{
@@ -3115,11 +3208,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
         {:ok, %{}}
       end
 
-      # insert_index = document_end_index(target_doc) - 1 = 9. page break
-      # lands at 10 (one past the leading "\n"). content_start = 11 (one
-      # past the page break) — the whole point of the leading "\n": without
-      # it content_start would be 10, landing one before the target's own
-      # closing character instead of in a fresh paragraph.
+      # insert_index = document_end_index(target_doc) - 1 = 9. The section
+      # break inserts a newline ahead of itself (9) and occupies 10, so
+      # content_start = 11 — in the new section's own fresh paragraph rather
+      # than one before the target's closing character.
       assert {:ok, {11, 17}} =
                GoogleDocsClient.append_template("target-id", "template-id",
                  get_fn: get_fn,
@@ -3129,8 +3221,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert_receive {:batch, requests}
 
       assert [
-               %{insertText: %{location: %{index: 9}, text: "\n"}},
-               %{insertPageBreak: %{location: %{index: 10}}},
+               %{insertSectionBreak: %{location: %{index: 9}, sectionType: "NEXT_PAGE"}},
                %{insertText: %{location: %{index: 11}, text: "Plain\n"}}
                | _rest
              ] = requests

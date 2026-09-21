@@ -1679,8 +1679,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @doc """
   Append a template's content to an existing Google Doc via batchUpdate.
 
-  Inserts a paragraph break, a page break, then the content of
-  `template_doc_id` into `target_doc_id`. Returns `{:ok, {start_index,
+  Inserts a section break (next page), then the content of
+  `template_doc_id` into `target_doc_id`, then gives the new section the
+  template's own page margins. Returns `{:ok, {start_index,
   end_index}}` representing the character range of the inserted content —
   callers use this for section-scoped substitution.
 
@@ -1748,32 +1749,29 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   preset for that family — this reproduces glyph *family*, not an arbitrary
   custom glyph/format exactly (see `extract_bullet_info/2`'s doc).
 
-  The leading `insertText(insert_index, "\\n")` exists ONLY to make this
-  safe for the appended section's own first paragraph. `insertPageBreak`
-  inserts an inline element — it does not split a paragraph — and, without
-  it, the appended content would start one position before the target
-  document's own closing character. Verified live: that closing character
-  is not a separate, shiftable paragraph separator, it's the document's
-  shared terminal marker, so inserting immediately before it (as this
-  function did before this `"\\n"` was added) always continued the
-  target's existing last paragraph — meaning `updateParagraphStyle`/
-  `createParagraphBullets` on the appended section's first paragraph (they
-  target whole paragraphs, not sub-ranges) silently reformatted the
-  *preceding* section's trailing text too. A first attempt at fixing this
-  tried detecting the condition instead of forcing it (skip styling that
-  first paragraph only when the target's own last paragraph didn't already
-  end in `"\\n"`) — that check always came back "safe" for real documents,
-  since a paragraph's own trailing `"\\n"`, when present, IS the shared
-  terminal marker rather than a boundary the appended content lands after,
-  so the check was inert and still corrupted the preceding paragraph live.
-  Explicitly inserting a real paragraph break first, ahead of the page
-  break, is what actually guarantees the appended section starts in a
-  fresh, empty paragraph — the same guarantee a table's cells already get
-  for free from a bare `insertTable`. `content_start` shifts by one extra
-  unit accordingly (`insert_index + 2`, not `+ 1`) to land after both the
-  new paragraph break and the page break; every offset downstream
-  (`body_runs`, `body_paragraphs`, the table marker pipeline) is anchored
-  at `content_start` and unaffected by the shift itself.
+  Each appended template becomes its own document SECTION: the content is
+  preceded by `insertSectionBreak` (`NEXT_PAGE`, so it still starts on a new
+  page) rather than a page break, and the section then gets the template's
+  own page margins via `updateSectionStyle` (`section_margin_requests/2`).
+  Margins are a document-level setting otherwise, so a contract laid out
+  for 72pt margins used to be poured into whatever the first template's
+  were. Traps, all verified live (2026-09-21):
+
+    * A section break inserts a newline ahead of itself, so the appended
+      content starts at `insert_index + 2` — in a fresh, empty paragraph of
+      the new section. That fresh paragraph is what makes paragraph-level
+      styling safe for the section's own first paragraph:
+      `updateParagraphStyle`/`createParagraphBullets` target whole
+      paragraphs, and content that merely continued the target's last
+      paragraph would reformat the preceding section's trailing text too.
+      (The target's closing character is the document's shared terminal
+      marker, not a shiftable paragraph separator — a page break alone, an
+      inline element, never split it, which is why this used to insert its
+      own `"\\n"` first.)
+    * `updateDocumentStyle` on margins overwrites the margins of EVERY
+      section, silently. Nothing here sends it; anything that ever does must
+      run before the section margins are set.
+    * Page size is document-wide in the API — a section cannot have its own.
 
   Known limitations: cell shading, borders, and merged cells are not
   restored — `insertTable` creates a bare table beyond the column widths
@@ -1796,26 +1794,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
          {:ok, %{body: current_doc}} <- get_fn.(target_doc_id) do
       end_index = document_end_index(current_doc)
       insert_index = max(end_index - 1, 1)
-      page_break_index = insert_index + 1
-      content_start = page_break_index + 1
+      content_start = insert_index + 2
 
-      # A literal "\n" inserted here, one position ahead of everything else,
-      # is what makes paragraph-level styling safe for this section's own
-      # first paragraph — see this function's doc for why it's needed:
-      # insertPageBreak alone inserts an inline element, it does not split a
-      # paragraph, so without this the appended content would always start
-      # inside the target's existing last paragraph, and
-      # updateParagraphStyle/createParagraphBullets (whole-paragraph,
-      # not sub-range) would reformat that pre-existing content too.
+      # insertSectionBreak puts a newline ahead of itself, so content_start
+      # lands in the new section's own fresh paragraph — see this function's
+      # doc. The section margins go last: by then the section has content
+      # for the range to point into.
       requests =
         [
-          %{insertText: %{location: %{index: insert_index}, text: "\n"}},
-          %{insertPageBreak: %{location: %{index: page_break_index}}},
+          %{insertSectionBreak: %{location: %{index: insert_index}, sectionType: "NEXT_PAGE"}},
           %{insertText: %{location: %{index: content_start}, text: text}}
         ] ++
           paragraph_then_text_style_requests(content_start, body_paragraphs, body_runs) ++
           clear_inherited_bullets(content_start, text) ++
-          paragraph_bullet_requests(content_start, body_paragraphs)
+          paragraph_bullet_requests(content_start, body_paragraphs) ++
+          section_margin_requests(content_start, template_doc)
 
       case batch_fn.(target_doc_id, requests) do
         {:ok, _} ->
@@ -2417,6 +2410,45 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         }
       }
     end)
+  end
+
+  @section_margin_fields ~w(marginTop marginBottom marginLeft marginRight marginHeader marginFooter)
+
+  @doc """
+  Builds the `updateSectionStyle` request that gives an appended section its
+  template's own page margins (`documentStyle.margin*` of `template_doc`).
+  `section_index` is any index inside the section — `append_template/3`
+  passes the section's `content_start`.
+
+  Only the margins the template's `documentStyle` actually states are
+  touched; a margin present without a magnitude is an explicit zero (the
+  API omits a zero magnitude — see `extract_paragraph_style/2`). No
+  `documentStyle`, or none of the margins in it, produces no request.
+  """
+  @spec section_margin_requests(integer(), map()) :: [map()]
+  def section_margin_requests(section_index, template_doc) do
+    document_style = Map.get(template_doc, "documentStyle") || %{}
+
+    margins =
+      for field <- @section_margin_fields,
+          dimension = dimension_or_nil(Map.get(document_style, field)),
+          do: {field, dimension_payload(dimension)}
+
+    case margins do
+      [] ->
+        []
+
+      margins ->
+        [
+          %{
+            "updateSectionStyle" => %{
+              "range" => %{"startIndex" => section_index, "endIndex" => section_index + 1},
+              "sectionStyle" => Map.new(margins),
+              "fields" => Enum.map_join(margins, ",", &elem(&1, 0))
+            }
+          }
+        ]
+    end
   end
 
   defp text_insert_request(idx, text),
