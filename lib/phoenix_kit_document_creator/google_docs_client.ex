@@ -1734,7 +1734,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   style type (headings), start/first-line indentation — is captured the
   same way and replayed via `updateParagraphStyle`
   (`paragraph_style_requests/2`), same anti-inheritance guarantee: every
-  field is always stated explicitly. List bullets are replayed via
+  field is always in the mask — with the template's value, or unset so it
+  resolves against the paragraph's named style. Paragraph style is always
+  sent BEFORE character style: an `updateParagraphStyle` whose mask includes
+  `namedStyleType` resets the paragraph's text style (verified live, even
+  when the named style doesn't change), so the opposite order silently
+  stripped every appended section of its font sizes and bold. List bullets are replayed via
   `createParagraphBullets` (`paragraph_bullet_requests/2`), resolving
   bulleted vs numbered from the source and mapping to Google's own default
   preset for that family — this reproduces glyph *family*, not an arbitrary
@@ -1805,8 +1810,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           %{insertPageBreak: %{location: %{index: page_break_index}}},
           %{insertText: %{location: %{index: content_start}, text: text}}
         ] ++
-          text_style_requests(content_start, body_runs) ++
           paragraph_style_requests(content_start, body_paragraphs) ++
+          text_style_requests(content_start, body_runs) ++
           clear_inherited_bullets(content_start, text) ++
           paragraph_bullet_requests(content_start, body_paragraphs)
 
@@ -2209,18 +2214,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp cell_paragraph_spans(_, _doc_lists), do: []
 
-  # Alignment/spacing/named-style defaults a paragraph gets when Google omits
-  # the corresponding `paragraphStyle` key (i.e. what a paragraph with no
-  # explicit style already renders as) — used for the anti-inheritance
-  # guarantee: a captured span always states every field explicitly, so a
-  # freshly inserted/split paragraph in the target document can never
-  # silently inherit alignment/spacing/named style from whatever paragraph
-  # sat at the insertion point, the same philosophy `text_style_fields/1`
-  # already applies to bold/italic.
-  @default_alignment "START"
-  @default_line_spacing 100.0
+  # A `paragraphStyle` key Google omits is NOT "the API default" — it means
+  # the paragraph inherits that property from its named style (a template
+  # whose NORMAL_TEXT says 115% line spacing, a heading relying on
+  # HEADING_1's own space above/below). It is captured as `nil` and replayed
+  # as an explicit *unset* (see `paragraph_style_requests/2`), which still
+  # gives the anti-inheritance guarantee: a freshly inserted/split paragraph
+  # can never silently keep alignment/spacing from whatever paragraph sat at
+  # the insertion point. Substituting a concrete default here instead (as
+  # this used to: START / 100% / zero spacing) flattened every appended
+  # section's spacing to values its template never asked for.
+  #
+  # `namedStyleType` alone keeps a concrete fallback — every paragraph has
+  # one, and it is what the unset properties resolve against.
   @default_named_style_type "NORMAL_TEXT"
-  @zero_dimension %{magnitude: 0.0, unit: "PT"}
 
   defp paragraph_span(paragraph, start_offset, length, doc_lists) do
     %{
@@ -2235,24 +2242,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     style = Map.get(paragraph, "paragraphStyle", %{})
 
     %{
-      alignment: Map.get(style, "alignment", @default_alignment),
-      line_spacing: numeric_or_default(Map.get(style, "lineSpacing"), @default_line_spacing),
-      space_above: dimension_or_default(Map.get(style, "spaceAbove")),
-      space_below: dimension_or_default(Map.get(style, "spaceBelow")),
+      alignment: Map.get(style, "alignment"),
+      line_spacing: numeric_or_nil(Map.get(style, "lineSpacing")),
+      space_above: dimension_or_nil(Map.get(style, "spaceAbove")),
+      space_below: dimension_or_nil(Map.get(style, "spaceBelow")),
       named_style_type: Map.get(style, "namedStyleType", @default_named_style_type),
-      indent_start: dimension_or_default(Map.get(style, "indentStart")),
-      indent_first_line: dimension_or_default(Map.get(style, "indentFirstLine"))
+      indent_start: dimension_or_nil(Map.get(style, "indentStart")),
+      indent_first_line: dimension_or_nil(Map.get(style, "indentFirstLine"))
     }
   end
 
-  defp numeric_or_default(n, _default) when is_number(n), do: n * 1.0
-  defp numeric_or_default(_, default), do: default
+  defp numeric_or_nil(n) when is_number(n), do: n * 1.0
+  defp numeric_or_nil(_), do: nil
 
-  defp dimension_or_default(%{"magnitude" => m} = dimension) when is_number(m) do
+  # Google spells an unset dimension as `%{"unit" => "PT"}` with no
+  # magnitude — that is "inherit", same as an absent key.
+  defp dimension_or_nil(%{"magnitude" => m} = dimension) when is_number(m) do
     %{magnitude: m * 1.0, unit: Map.get(dimension, "unit", "PT")}
   end
 
-  defp dimension_or_default(_), do: @zero_dimension
+  defp dimension_or_nil(_), do: nil
 
   # List membership: only glyph *family* (bulleted vs numbered) is
   # reproduced, via Google's own default preset for that family
@@ -2500,15 +2509,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   `body_paragraphs`), anchored at `base_index` the same way
   `text_style_requests/2` anchors character runs.
 
-  Every field is always included in the request, including values that
-  merely reproduce Google's own default (`alignment: "START"`, `lineSpacing:
-  100.0`, zero spacing/indentation, `namedStyleType: "NORMAL_TEXT"`) — the
+  Every field is always included in the request's `fields` mask — the
   same anti-inheritance guarantee `text_style_fields/1` applies to
-  bold/italic: a newly split paragraph in the target document otherwise
-  inherits alignment/spacing/named style from whatever paragraph sat at the
-  insertion point (e.g. an appended section's plain paragraph picking up
-  CENTER alignment from a neighboring heading), not from the source
-  template.
+  bold/italic. A property the template paragraph doesn't set (captured as
+  `nil`) is left out of the payload, which the Docs API reads as "unset":
+  it then resolves against the paragraph's named style, exactly as in the
+  template, instead of being pinned to a concrete value the template never
+  asked for. Without the complete mask, a newly split paragraph in the
+  target document would inherit alignment/spacing/named style from whatever
+  paragraph sat at the insertion point (e.g. an appended section's plain
+  paragraph picking up CENTER alignment from a neighboring heading), not
+  from the source template.
 
   Unlike `text_style_requests/2`, spans are never merged — each paragraph
   gets its own request, since paragraphs are already discrete units (no
@@ -2545,15 +2556,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     %{
       "updateParagraphStyle" => %{
         "range" => %{"startIndex" => range_start, "endIndex" => range_end},
-        "paragraphStyle" => %{
-          "alignment" => style.alignment,
-          "lineSpacing" => style.line_spacing,
-          "spaceAbove" => dimension_payload(style.space_above),
-          "spaceBelow" => dimension_payload(style.space_below),
-          "namedStyleType" => style.named_style_type,
-          "indentStart" => dimension_payload(style.indent_start),
-          "indentFirstLine" => dimension_payload(style.indent_first_line)
-        },
+        "paragraphStyle" =>
+          reject_unset(%{
+            "alignment" => style.alignment,
+            "lineSpacing" => style.line_spacing,
+            "spaceAbove" => dimension_payload(style.space_above),
+            "spaceBelow" => dimension_payload(style.space_below),
+            "namedStyleType" => style.named_style_type,
+            "indentStart" => dimension_payload(style.indent_start),
+            "indentFirstLine" => dimension_payload(style.indent_first_line)
+          }),
         "fields" =>
           "alignment,lineSpacing,spaceAbove,spaceBelow,namedStyleType,indentStart,indentFirstLine"
       }
@@ -2562,6 +2574,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp dimension_payload(%{magnitude: magnitude, unit: unit}),
     do: %{"magnitude" => magnitude, "unit" => unit}
+
+  defp dimension_payload(nil), do: nil
+
+  # A property named in the `fields` mask but absent from the payload is how
+  # the Docs API spells "unset it" (verified live) — the mask always stays
+  # complete, so nothing is ever left to inherit from neighboring content.
+  defp reject_unset(paragraph_style),
+    do: paragraph_style |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
 
   @doc """
   Builds `createParagraphBullets` requests replaying captured list
@@ -2702,8 +2722,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     do: paragraph_style_requests(idx, paragraphs)
 
   defp cell_fill_requests(idx, text, runs, paragraphs) do
-    [text_insert_request(idx, text) | text_style_requests(idx, runs)] ++
-      paragraph_style_requests(idx, paragraphs) ++ paragraph_bullet_requests(idx, paragraphs)
+    [text_insert_request(idx, text) | paragraph_style_requests(idx, paragraphs)] ++
+      text_style_requests(idx, runs) ++ paragraph_bullet_requests(idx, paragraphs)
   end
 
   @doc """
