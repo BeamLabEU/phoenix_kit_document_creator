@@ -1073,10 +1073,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       # State after Phase 0's insertText: the marker text now lives at
       # content_start (11 — insert_index 9 + the section break and the
       # newline it inserts ahead of itself, see append_template/3's doc).
-      # Real Google Docs would split this across several paragraph structural elements
-      # (one per embedded \n) — collapsed to a single textRun here since
-      # find_table_marker_ranges/1 only cares about locating the marker
-      # substring and its startIndex.
+      # Real Google Docs would split this across several paragraph
+      # structural elements (one per embedded \n) — collapsed to a single
+      # textRun here since find_table_marker_ranges/1 only cares about
+      # locating the marker substring and its startIndex.
       doc1 = %{
         "body" => %{
           "content" => [
@@ -1172,13 +1172,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                  batch_fn: batch_fn
                )
 
-      # Phase 0: section break + the marked-up text (marker
-      # included), plus a paragraph-style request per body paragraph either
-      # side of the marker ("Hi\n" at 11-14, "Bye\n" at 32-36 — the marker
-      # itself gets no style request since it's deleted before Phase 1
-      # finishes), then a char-style request per plain-text run, same
-      # ranges — each captured span happens to be a single run here, so char
-      # and paragraph ranges coincide.
+      # Phase 0: section break + the marked-up text (marker included), plus
+      # a paragraph-style request per body paragraph either side of the
+      # marker ("Hi\n" at 11-14, "Bye\n" at 32-36 — the marker itself gets
+      # no style request since it's deleted before Phase 1 finishes), then a
+      # char-style request per plain-text run, same ranges — each captured
+      # span happens to be a single run here, so char and paragraph ranges
+      # coincide.
       hi_paragraph_style = unset_paragraph_style_request(11, 14)
       bye_paragraph_style = unset_paragraph_style_request(32, 36)
 
@@ -3337,8 +3337,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       # The inherited-bullet sweep (deleteParagraphBullets over the whole
       # inserted body) must run BEFORE the section's own creates within the
       # batch: a target document ending in a list item leaks its bullet
-      # onto the fresh first paragraph via the "\n" split, and the sweep is
-      # what clears it — sweeping after the creates would wipe the
+      # onto the fresh first paragraph via the section break's paragraph
+      # split, and the sweep is what clears it — sweeping after the creates would wipe the
       # section's own lists instead.
       delete_at =
         Enum.find_index(requests, &Map.has_key?(&1, "deleteParagraphBullets"))

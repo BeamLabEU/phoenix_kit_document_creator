@@ -1803,8 +1803,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       # insertSectionBreak puts a newline ahead of itself, so content_start
       # lands in the new section's own fresh paragraph — see this function's
       # doc. The section margins are position-independent within the batch
-      # (the new section always holds at least its terminal paragraph); they
-      # go last only so that nothing after them shifts the range.
+      # (the new section always holds at least its terminal paragraph, and
+      # nothing in the batch moves content_start); last by convention.
       requests =
         [
           %{insertSectionBreak: %{location: %{index: insert_index}, sectionType: "NEXT_PAGE"}},
