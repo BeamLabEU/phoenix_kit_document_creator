@@ -1725,10 +1725,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   italic, font size, foreground color — is captured for both table cell
   text and the section's own (non-table) body text, and replayed via
   `updateTextStyle` in the same batch as the corresponding `insertText`
-  (after that text's paragraph style — see below). Every inserted character is covered by an explicit range, including `bold:
-  false`/`italic: false` for plain runs, so freshly inserted text can never
-  silently inherit formatting from neighboring content already in the
-  target document.
+  (after that text's paragraph style — see below). Every inserted character
+  is covered by an explicit range, including `bold: false`/`italic: false`
+  for plain runs, so freshly inserted text can never silently inherit
+  formatting from neighboring content already in the target document.
 
   Paragraph-level style — alignment, line spacing, space above/below, named
   style type (headings), start/first-line indentation — is captured the
@@ -2219,10 +2219,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # A `paragraphStyle` key Google omits is NOT "the API default" — it means
   # the paragraph inherits that property from its named style (a template
   # whose NORMAL_TEXT says 115% line spacing, a heading relying on
-  # HEADING_1's own space above/below). NB it then resolves against the
-  # TARGET document's named styles — the target is a copy of the first
-  # template, and later templates' named-style definitions are not carried
-  # over — so this matches the template exactly only where the two agree. It is captured as `nil` and replayed
+  # HEADING_1's own space above/below). It is captured as `nil` and replayed
   # as an explicit *unset* (see `paragraph_style_requests/2`), which still
   # gives the anti-inheritance guarantee: a freshly inserted/split paragraph
   # can never silently keep alignment/spacing from whatever paragraph sat at
@@ -2243,6 +2240,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     }
   end
 
+  # NB an unset property resolves against the TARGET document's named
+  # styles. The target is a copy of the first template, and later templates'
+  # named-style definitions are not carried over, so the replay matches the
+  # template exactly only where the two documents' named styles agree.
   defp extract_paragraph_style(paragraph, _doc_lists) do
     style = Map.get(paragraph, "paragraphStyle", %{})
 
@@ -2531,11 +2532,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   it then resolves against the paragraph's named style in the target
   document (the same result as in the template wherever the two documents'
   named styles agree — see `extract_paragraph_style/2`), instead of being
-  pinned to a concrete value the template never asked for. Without the complete mask, a newly split paragraph in the
-  target document would inherit alignment/spacing/named style from whatever
-  paragraph sat at the insertion point (e.g. an appended section's plain
-  paragraph picking up CENTER alignment from a neighboring heading), not
-  from the source template.
+  pinned to a concrete value the template never asked for. Without the
+  complete mask, a newly split paragraph in the target document would
+  inherit alignment/spacing/named style from whatever paragraph sat at the
+  insertion point (e.g. an appended section's plain paragraph picking up
+  CENTER alignment from a neighboring heading), not from the source
+  template.
 
   Unlike `text_style_requests/2`, spans are never merged — each paragraph
   gets its own request, since paragraphs are already discrete units (no

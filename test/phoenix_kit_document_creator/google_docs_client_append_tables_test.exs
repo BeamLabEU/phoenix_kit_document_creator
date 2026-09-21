@@ -140,6 +140,23 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
     %{"paragraph" => paragraph}
   end
 
+  # "updateParagraphStyle" / "updateTextStyle" / "insertText" … — requests
+  # are single-key maps, atom-keyed for the three leading inserts and
+  # string-keyed for the rest.
+  defp request_kind(request), do: request |> Map.keys() |> List.first() |> to_string()
+
+  # Every updateParagraphStyle in `requests` comes before every
+  # updateTextStyle — see the "paragraph style is applied before character
+  # style" describe block for why the order matters.
+  defp assert_paragraph_style_before_text_style(requests) do
+    kinds = Enum.map(requests, &request_kind/1)
+    paragraph_at = for {"updateParagraphStyle", i} <- Enum.with_index(kinds), do: i
+    text_at = for {"updateTextStyle", i} <- Enum.with_index(kinds), do: i
+
+    assert paragraph_at != [] and text_at != [], "fixture must produce both kinds"
+    assert Enum.max(paragraph_at) < Enum.min(text_at), inspect(kinds)
+  end
+
   # Table block variant of `table_block/1` that accepts styled runs per cell
   # (a cell is a list of runs, see text_run_elem/1) and an optional
   # `tableStyle.tableColumnProperties` list — for cell-style and
@@ -960,10 +977,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       # The plain paragraph has no textStyle/paragraphStyle at all, so it
       # captures as a single bold:false/italic:false run and an
       # all-unset paragraph style (sent first — it resets text style), both
-      # spanning the whole insert — the
-      # anti-inheritance guarantee (text_style_requests/2,
-      # paragraph_style_requests/2) applies even when nothing in the source
-      # was actually styled. No createParagraphBullets request — not a list
+      # spanning the whole insert — the anti-inheritance guarantee
+      # (text_style_requests/2, paragraph_style_requests/2) applies even when
+      # nothing in the source was actually styled. No createParagraphBullets request — not a list
       # item.
       paragraph_style = unset_paragraph_style_request(11, 23)
 
@@ -2689,8 +2705,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
                GoogleDocsClient.paragraph_style_requests(1, spans)
 
       # A template heading that relies on HEADING_1's own spaceAbove/Below
-      # must not come out with them forced to zero, nor a 150% body paragraph
-      # flattened to 100%.
+      # must not come out with them forced to zero; a property the template
+      # does set (150% here) is still replayed verbatim.
       assert request["paragraphStyle"] == %{
                "namedStyleType" => "HEADING_1",
                "lineSpacing" => 150.0
@@ -2705,17 +2721,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
     # whose mask includes namedStyleType resets the paragraph's text style,
     # even when the named style doesn't change. With the character styles
     # sent first, every appended section lost its font sizes and bold.
-    defp request_kind(request), do: request |> Map.keys() |> List.first() |> to_string()
-
-    defp assert_paragraph_style_before_text_style(requests) do
-      kinds = Enum.map(requests, &request_kind/1)
-      paragraph_at = for {"updateParagraphStyle", i} <- Enum.with_index(kinds), do: i
-      text_at = for {"updateTextStyle", i} <- Enum.with_index(kinds), do: i
-
-      assert paragraph_at != [] and text_at != [], "fixture must produce both kinds"
-      assert Enum.max(paragraph_at) < Enum.min(text_at), inspect(kinds)
-    end
-
     test "paragraph_then_text_style_requests/3 puts every paragraph request ahead of every text request" do
       paragraphs = [
         %{start_offset: 0, length: 5, style: unset_span_style()},
@@ -2803,6 +2808,30 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       # HEADING_1's own back.
       assert payload["spaceAbove"] == %{"magnitude" => 0.0, "unit" => "PT"}
       refute Map.has_key?(payload, "spaceBelow")
+    end
+  end
+
+  describe "flatten_template_with_table_markers_and_styles/1 — dimension shapes" do
+    defp captured_space_above(dimension) do
+      doc = %{
+        "body" => %{
+          "content" => [paragraph_block(["x\n"], paragraph_style: %{"spaceAbove" => dimension})]
+        }
+      }
+
+      {_text, [], _runs, [para]} =
+        GoogleDocsClient.flatten_template_with_table_markers_and_styles(doc)
+
+      para.style.space_above
+    end
+
+    test "an explicit zero keeps its own unit" do
+      assert captured_space_above(%{"unit" => "MM"}) == %{magnitude: 0.0, unit: "MM"}
+    end
+
+    test "a dimension with neither a magnitude nor a usable unit is unset" do
+      assert captured_space_above(%{}) == nil
+      assert captured_space_above(%{"unit" => nil}) == nil
     end
   end
 
