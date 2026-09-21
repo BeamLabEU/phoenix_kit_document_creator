@@ -1724,8 +1724,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   `table_column_width_requests/2`'s doc). Per-run character style — bold,
   italic, font size, foreground color — is captured for both table cell
   text and the section's own (non-table) body text, and replayed via
-  `updateTextStyle` immediately after the corresponding `insertText`. Every
-  inserted character is covered by an explicit range, including `bold:
+  `updateTextStyle` in the same batch as the corresponding `insertText`
+  (after that text's paragraph style — see below). Every inserted character is covered by an explicit range, including `bold:
   false`/`italic: false` for plain runs, so freshly inserted text can never
   silently inherit formatting from neighboring content already in the
   target document.
@@ -1735,11 +1735,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   same way and replayed via `updateParagraphStyle`
   (`paragraph_style_requests/2`), same anti-inheritance guarantee: every
   field is always in the mask — with the template's value, or unset so it
-  resolves against the paragraph's named style. Paragraph style is always
-  sent BEFORE character style: an `updateParagraphStyle` whose mask includes
-  `namedStyleType` resets the paragraph's text style (verified live, even
-  when the named style doesn't change), so the opposite order silently
-  stripped every appended section of its font sizes and bold. List bullets are replayed via
+  resolves against the paragraph's named style in the target document.
+  Paragraph style is always sent BEFORE character style
+  (`paragraph_then_text_style_requests/3`): an `updateParagraphStyle` whose
+  mask includes `namedStyleType` resets the paragraph's text style, even
+  when the named style doesn't change, so the opposite order silently
+  stripped every appended section of its font sizes and bold. That reset is
+  not in Google's public API reference — verified live 2026-09-21, and no
+  mock-based test can guard it. List bullets are replayed via
   `createParagraphBullets` (`paragraph_bullet_requests/2`), resolving
   bulleted vs numbered from the source and mapping to Google's own default
   preset for that family — this reproduces glyph *family*, not an arbitrary
@@ -1810,8 +1813,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           %{insertPageBreak: %{location: %{index: page_break_index}}},
           %{insertText: %{location: %{index: content_start}, text: text}}
         ] ++
-          paragraph_style_requests(content_start, body_paragraphs) ++
-          text_style_requests(content_start, body_runs) ++
+          paragraph_then_text_style_requests(content_start, body_paragraphs, body_runs) ++
           clear_inherited_bullets(content_start, text) ++
           paragraph_bullet_requests(content_start, body_paragraphs)
 
@@ -2217,7 +2219,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # A `paragraphStyle` key Google omits is NOT "the API default" — it means
   # the paragraph inherits that property from its named style (a template
   # whose NORMAL_TEXT says 115% line spacing, a heading relying on
-  # HEADING_1's own space above/below). It is captured as `nil` and replayed
+  # HEADING_1's own space above/below). NB it then resolves against the
+  # TARGET document's named styles — the target is a copy of the first
+  # template, and later templates' named-style definitions are not carried
+  # over — so this matches the template exactly only where the two agree. It is captured as `nil` and replayed
   # as an explicit *unset* (see `paragraph_style_requests/2`), which still
   # gives the anti-inheritance guarantee: a freshly inserted/split paragraph
   # can never silently keep alignment/spacing from whatever paragraph sat at
@@ -2255,11 +2260,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp numeric_or_nil(n) when is_number(n), do: n * 1.0
   defp numeric_or_nil(_), do: nil
 
-  # Google spells an unset dimension as `%{"unit" => "PT"}` with no
-  # magnitude — that is "inherit", same as an absent key.
+  # Only an ABSENT key means "inherit". A dimension that is present but
+  # carries no magnitude — `%{"unit" => "PT"}` — is an explicit zero: the API
+  # omits a zero `magnitude` from its JSON (verified live 2026-09-21: a
+  # HEADING_1 paragraph whose space above was set to 0pt reads back as
+  # `"spaceAbove" => %{"unit" => "PT"}`, one that inherits it has no
+  # `spaceAbove` key at all). Reading it as "inherit" would hand a heading
+  # its named style's spacing back after the template author removed it.
   defp dimension_or_nil(%{"magnitude" => m} = dimension) when is_number(m) do
     %{magnitude: m * 1.0, unit: Map.get(dimension, "unit", "PT")}
   end
+
+  defp dimension_or_nil(%{"unit" => unit}) when is_binary(unit),
+    do: %{magnitude: 0.0, unit: unit}
 
   defp dimension_or_nil(_), do: nil
 
@@ -2421,9 +2434,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   content (seen live: an appended section's plain paragraph inheriting bold
   from an adjacent heading).
 
-  Safe to batch immediately after the insert it styles: text style changes
-  never shift document character indices, so nothing else in the same batch
-  needs to account for these requests' presence.
+  Safe to batch with the insert it styles: text style changes never shift
+  document character indices, so nothing else in the same batch needs to
+  account for these requests' presence. One ordering contract: for the same
+  range these must come AFTER `paragraph_style_requests/2`, which resets
+  text style — use `paragraph_then_text_style_requests/3`.
   """
   @spec text_style_requests(integer(), [map()]) :: [map()]
   def text_style_requests(base_index, runs) when is_list(runs) do
@@ -2513,9 +2528,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   same anti-inheritance guarantee `text_style_fields/1` applies to
   bold/italic. A property the template paragraph doesn't set (captured as
   `nil`) is left out of the payload, which the Docs API reads as "unset":
-  it then resolves against the paragraph's named style, exactly as in the
-  template, instead of being pinned to a concrete value the template never
-  asked for. Without the complete mask, a newly split paragraph in the
+  it then resolves against the paragraph's named style in the target
+  document (the same result as in the template wherever the two documents'
+  named styles agree — see `extract_paragraph_style/2`), instead of being
+  pinned to a concrete value the template never asked for. Without the complete mask, a newly split paragraph in the
   target document would inherit alignment/spacing/named style from whatever
   paragraph sat at the insertion point (e.g. an appended section's plain
   paragraph picking up CENTER alignment from a neighboring heading), not
@@ -2536,8 +2552,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   either way, so the natural length lands the range exactly on it. See
   `cell_paragraph_spans/2`'s doc for the full argument.
 
-  Safe to batch immediately after the insert/fill it styles: like character
-  style changes, paragraph style changes never shift document indices.
+  Safe to batch with the insert/fill it styles: like character style
+  changes, paragraph style changes never shift document indices. They DO
+  reset the text style of the paragraphs they touch (the mask includes
+  `namedStyleType`), so for the same range they must come BEFORE
+  `text_style_requests/2` — use `paragraph_then_text_style_requests/3`.
   """
   @spec paragraph_style_requests(integer(), [map()]) :: [map()]
   def paragraph_style_requests(base_index, spans) when is_list(spans) do
@@ -2581,7 +2600,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # the Docs API spells "unset it" (verified live) — the mask always stays
   # complete, so nothing is ever left to inherit from neighboring content.
   defp reject_unset(paragraph_style),
-    do: paragraph_style |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
+    do: Map.reject(paragraph_style, fn {_key, value} -> is_nil(value) end)
 
   @doc """
   Builds `createParagraphBullets` requests replaying captured list
@@ -2679,8 +2698,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # list. Fills must be applied in descending index order ACROSS tables (not
   # just within one), since an earlier insert would otherwise shift a later
   # table's captured cell indices. Each cell's `insertText` is immediately
-  # followed by its `text_style_requests/2` (safe within the same descending
-  # pass — style requests don't shift indices, see that function's doc).
+  # followed by its own style requests — paragraph, then character, see
+  # `paragraph_then_text_style_requests/3` (safe within the same descending
+  # pass — style requests don't shift indices).
   defp build_table_fill_requests(marker_ranges, new_tables, tables_by_index) do
     matched = marker_ranges |> Enum.sort_by(& &1.start_index) |> Enum.zip(new_tables)
 
@@ -2722,9 +2742,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     do: paragraph_style_requests(idx, paragraphs)
 
   defp cell_fill_requests(idx, text, runs, paragraphs) do
-    [text_insert_request(idx, text) | paragraph_style_requests(idx, paragraphs)] ++
-      text_style_requests(idx, runs) ++ paragraph_bullet_requests(idx, paragraphs)
+    [text_insert_request(idx, text) | paragraph_then_text_style_requests(idx, paragraphs, runs)] ++
+      paragraph_bullet_requests(idx, paragraphs)
   end
+
+  # The one place the two style kinds are put in order, for body text and
+  # table cells alike: paragraph style first. An `updateParagraphStyle` whose
+  # mask includes `namedStyleType` resets the text style of the paragraphs
+  # it touches, so character style sent before it is wiped (see
+  # `append_template/3`'s doc). Neither kind shifts indices, so both share
+  # the same `base_index`.
+  @doc false
+  @spec paragraph_then_text_style_requests(integer(), [map()], [map()]) :: [map()]
+  def paragraph_then_text_style_requests(base_index, paragraphs, runs),
+    do: paragraph_style_requests(base_index, paragraphs) ++ text_style_requests(base_index, runs)
 
   @doc """
   Return the range `{1, end_index}` of the current content in a Google Doc.
