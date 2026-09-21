@@ -1954,6 +1954,10 @@ defmodule PhoenixKitDocumentCreator.Documents do
 
   Required opts: `:created_by_uuid`, `:name`. Optional: `:separator` (default `:page_break`).
 
+  The first template is copied as the document; every later one starts on a
+  new page as its own Google Docs section, carrying that template's own page
+  margins (headers and footers still come from the first template).
+
   Variable substitution is range-scoped per section: each section's `variable_values`
   are applied only within the character range that section occupies in the composed doc.
   Identical placeholder keys in different sections (e.g. `{{name}}` in section 0 and

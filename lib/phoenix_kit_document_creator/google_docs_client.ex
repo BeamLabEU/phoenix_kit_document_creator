@@ -1679,11 +1679,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @doc """
   Append a template's content to an existing Google Doc via batchUpdate.
 
-  Inserts a section break (next page), then the content of
-  `template_doc_id` into `target_doc_id`, then gives the new section the
-  template's own page margins. Returns `{:ok, {start_index,
-  end_index}}` representing the character range of the inserted content —
-  callers use this for section-scoped substitution.
+  Inserts a section break (next page), then the content of `template_doc_id`
+  into `target_doc_id`, then gives the new section the template's own page
+  margins. Returns `{:ok, {start_index, end_index}}` representing the
+  character range of the inserted content — callers use this for
+  section-scoped substitution.
 
   Paragraph text is inserted via a single `insertText`, same as before this
   function also handled tables. Tables are NOT part of that flattened text —
@@ -1755,7 +1755,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   own page margins via `updateSectionStyle` (`section_margin_requests/2`).
   Margins are a document-level setting otherwise, so a contract laid out
   for 72pt margins used to be poured into whatever the first template's
-  were. Traps, all verified live (2026-09-21):
+  were. The margins ride in the same atomic batch as the content, on
+  purpose: a composed document with the wrong margins is the very defect
+  this exists to prevent, so a margin request Google rejects fails the
+  append (and the compose) loudly rather than leaving a quietly mis-laid-out
+  document behind. Traps (the first two verified live 2026-09-21):
 
     * A section break inserts a newline ahead of itself, so the appended
       content starts at `insert_index + 2` — in a fresh, empty paragraph of
@@ -1798,8 +1802,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
       # insertSectionBreak puts a newline ahead of itself, so content_start
       # lands in the new section's own fresh paragraph — see this function's
-      # doc. The section margins go last: by then the section has content
-      # for the range to point into.
+      # doc. The section margins are position-independent within the batch
+      # (the new section always holds at least its terminal paragraph); they
+      # go last only so that nothing after them shifts the range.
       requests =
         [
           %{insertSectionBreak: %{location: %{index: insert_index}, sectionType: "NEXT_PAGE"}},
@@ -2422,17 +2427,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   Only the margins the template's `documentStyle` actually states are
   touched; a margin present without a magnitude is an explicit zero (the
-  API omits a zero magnitude — see `extract_paragraph_style/2`). No
+  API omits a zero magnitude from its JSON — see `dimension_or_nil/1`). No
   `documentStyle`, or none of the margins in it, produces no request.
   """
-  @spec section_margin_requests(integer(), map()) :: [map()]
+  @spec section_margin_requests(non_neg_integer(), map()) :: [map()]
   def section_margin_requests(section_index, template_doc) do
     document_style = Map.get(template_doc, "documentStyle") || %{}
 
     margins =
-      for field <- @section_margin_fields,
-          dimension = dimension_or_nil(Map.get(document_style, field)),
-          do: {field, dimension_payload(dimension)}
+      Enum.flat_map(@section_margin_fields, fn field ->
+        case dimension_or_nil(Map.get(document_style, field)) do
+          nil -> []
+          dimension -> [{field, dimension_payload(dimension)}]
+        end
+      end)
 
     case margins do
       [] ->
@@ -2675,8 +2683,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   # List membership lives on `paragraph.bullet`, which updateParagraphStyle
   # cannot touch — only deleteParagraphBullets clears it. When the target
-  # document's last paragraph is a list item, the "\n" split that opens the
-  # append (see append_template/3) leaves the fresh first paragraph a list
+  # document's last paragraph is a list item, the paragraph split the section
+  # break makes (see append_template/3) leaves the fresh first paragraph a list
   # item too, so the appended section's heading would render with a stray
   # bullet glyph. One delete over the whole inserted body clears anything
   # inherited; the createParagraphBullets requests that follow re-create the
