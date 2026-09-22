@@ -992,7 +992,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
     end
 
     test "past the export size cap, downloads the PDF from the file's exportLinks" do
-      pdf_body = String.duplicate("PDF", 50)
+      pdf_body = "%PDF-1.4\n" <> String.duplicate("PDF", 50)
 
       link =
         "https://docs.google.com/feeds/download/documents/export/Export?id=doc-1&exportFormat=pdf"
@@ -1008,9 +1008,33 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
 
       assert {:ok, ^pdf_body} = GoogleDocsClient.export_pdf("doc-1")
 
-      assert Enum.any?(StubIntegrations.recorded_requests(), fn {method, url, _} ->
-               method == :get and url == link
+      assert Enum.any?(StubIntegrations.recorded_requests(), fn {method, url, opts} ->
+               method == :get and url == link and opts[:receive_timeout] > 15_000
              end)
+    end
+
+    test "past the export size cap, rejects a 200 export link answer that is not a PDF" do
+      stub_export_too_large("doc-1")
+
+      stub_export_links(
+        "doc-1",
+        "https://docs.google.com/feeds/download/documents/export/Export?id=doc-1&exportFormat=pdf"
+      )
+
+      StubIntegrations.stub_request(
+        :get,
+        "docs.google.com/feeds/download",
+        {:ok, %{status: 200, body: "<!DOCTYPE html><html>Sign in</html>", headers: %{}}}
+      )
+
+      assert {:error, :drive_export_too_large} = GoogleDocsClient.export_pdf("doc-1")
+    end
+
+    test "past the export size cap, reports :drive_export_too_large when exportLinks has no usable PDF link" do
+      stub_export_too_large("doc-1")
+      stub_export_links("doc-1", nil)
+
+      assert {:error, :drive_export_too_large} = GoogleDocsClient.export_pdf("doc-1")
     end
 
     test "past the export size cap, never sends the token to an export link off docs.google.com" do

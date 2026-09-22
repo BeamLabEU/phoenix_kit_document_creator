@@ -63,6 +63,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # `upload_image_for_embedding/3`.
   @embed_image_max_side 4096
 
+  # Receive timeout for the over-the-cap PDF download — see
+  # `export_pdf_via_export_link/1`.
+  @export_link_receive_timeout 120_000
+
   # All access to `PhoenixKit.Integrations` flows through this resolver so
   # tests can route the three call sites (get_credentials/1,
   # get_integration/1, authenticated_request/4) through a stub module
@@ -1568,14 +1572,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # `files.export` refuses documents whose PDF is past ~10 MB — a few
   # full-resolution photos are enough. The file's `exportLinks` PDF URL
   # serves the same export without that cap.
+  #
+  # The body must start with the `%PDF-` magic: docs.google.com answers
+  # some auth and interstitial failures with a 200 HTML page, which would
+  # otherwise be handed to the caller as a PDF. The longer receive timeout
+  # is because every document reaching this path renders to over 10 MB,
+  # which can outlast Req's 15s default.
   defp export_pdf_via_export_link(fid) do
-    with {:ok, %{status: 200, body: %{"exportLinks" => %{"application/pdf" => link}}}} <-
+    with {:ok, %{status: 200, body: %{"exportLinks" => %{"application/pdf" => link}}}}
+         when is_binary(link) <-
            authenticated_request(:get, "#{@drive_base}/files/#{fid}",
              params: [fields: "exportLinks"]
            ),
          %URI{scheme: "https", host: "docs.google.com"} <- URI.parse(link),
-         {:ok, %{status: 200, body: pdf}} when is_binary(pdf) <-
-           authenticated_request(:get, link) do
+         {:ok, %{status: 200, body: "%PDF-" <> _ = pdf}} <-
+           authenticated_request(:get, link, receive_timeout: @export_link_receive_timeout) do
       {:ok, pdf}
     else
       other ->
