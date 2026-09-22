@@ -7,6 +7,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
   alias PhoenixKitDocumentCreator.Errors
   alias PhoenixKitDocumentCreator.Schemas.Template
   alias PhoenixKitDocumentCreator.Taxonomy
+  alias PhoenixKitDocumentCreator.Test.ImageFixtures
   alias PhoenixKitDocumentCreator.Test.Repo
 
   describe "mount — Google not connected (test env default)" do
@@ -566,27 +567,35 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
 
     test "a loaded thumbnail sits in a fixed portrait frame and fits a landscape page whole",
          %{conn: conn} do
-      tmpl = insert_template("Framed")
+      portrait = insert_template("Portrait")
+      landscape = insert_template("Landscape")
+      portrait_uri = ImageFixtures.png_uri(1200, 1600)
+      landscape_uri = ImageFixtures.png_uri(1600, 1200)
       conn = put_test_scope(conn, fake_scope())
       {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
 
       force_connected_render(view,
-        templates: [template_file(tmpl)],
-        known_file_ids: MapSet.new([tmpl.google_doc_id]),
-        thumbnails: %{tmpl.google_doc_id => "data:image/png;base64,AA"}
+        templates: [template_file(portrait), template_file(landscape)],
+        known_file_ids: MapSet.new([portrait.google_doc_id, landscape.google_doc_id]),
+        thumbnails: %{
+          portrait.google_doc_id => portrait_uri,
+          landscape.google_doc_id => landscape_uri
+        }
       )
 
-      html = render(view)
-
-      [frame] =
-        Regex.run(
+      frames =
+        Regex.scan(
           ~r/<div style="width:100%;max-width:183px;aspect-ratio:183\/258;[^"]*">\s*<img[^>]*>/,
-          html
+          render(view)
         )
+        |> List.flatten()
 
-      assert frame =~ ~s(src="data:image/png;base64,AA")
-      assert frame =~ "object-fit:cover;object-position:top"
-      assert frame =~ "naturalWidth&gt;this.naturalHeight"
+      [portrait_frame] = Enum.filter(frames, &(&1 =~ portrait_uri))
+      [landscape_frame] = Enum.filter(frames, &(&1 =~ landscape_uri))
+
+      assert portrait_frame =~ "object-fit:cover;object-position:top"
+      assert landscape_frame =~ "object-fit:contain;object-position:center"
+      refute landscape_frame =~ "onload"
     end
 
     test "handle_info {:thumbnail_refreshed, ...} stores the data URI and clears pending_files",

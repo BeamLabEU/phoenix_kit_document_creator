@@ -1,3 +1,20 @@
+## 0.9.8 - 2026-09-22
+
+### Fixed
+
+- Landscape documents and templates (`documentStyle.flipPageOrientation`) are
+  no longer cropped to their middle strip in the fixed portrait thumbnail
+  frames of the documents / templates grid and the create-document modal.
+  They are fitted whole and centred. The orientation is read server-side from
+  the cached thumbnail's image header (PNG, GIF, WebP, JPEG) by the new
+  `PhoenixKitDocumentCreator.Thumbnail`, so it survives LiveView re-renders
+  and needs no inline script.
+
+### Changed
+
+- Upgraded locked `phoenix_kit` 2.37.0 → 2.37.3. The `:phoenix_kit`
+  requirement is unchanged (`~> 2.21 and >= 2.21.3`).
+
 ## 0.9.7 - 2026-09-22
 
 ### Fixed

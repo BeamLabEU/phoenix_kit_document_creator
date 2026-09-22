@@ -232,26 +232,32 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModalTest do
   end
 
   describe "template tiles" do
-    test "a fixed portrait tile that fits a landscape page whole once loaded" do
+    alias PhoenixKitDocumentCreator.Test.ImageFixtures
+
+    defp tile(thumbnail) do
       html =
         render_component(&CreateDocumentModal.modal/1,
           open: true,
-          templates: [%{"id" => "tpl-1", "name" => "Landscape"}],
-          thumbnails: %{"tpl-1" => "data:image/png;base64,AA"},
+          templates: [%{"id" => "tpl-1", "name" => "Tile"}],
+          thumbnails: %{"tpl-1" => thumbnail},
           step: "choose"
         )
 
       [tile] = Regex.run(~r/<div style="width:100px;height:141px;[^"]*">\s*<img[^>]*>/, html)
-      assert tile =~ ~s(src="data:image/png;base64,AA")
-      assert tile =~ "object-fit:cover;object-position:top"
-      assert tile =~ ~s(onload=")
-      assert tile =~ "naturalWidth&gt;this.naturalHeight"
+      tile
     end
 
-    test "landscape_fit_js/0 only changes the fit when the image is wider than tall" do
-      js = CreateDocumentModal.landscape_fit_js()
-      assert js =~ "if(this.naturalWidth>this.naturalHeight)"
-      assert js =~ "objectFit='contain'"
+    test "a portrait template keeps the top-anchored cover crop in its fixed tile" do
+      thumb = ImageFixtures.png_uri(1200, 1600)
+      tile = tile(thumb)
+      assert tile =~ ~s(src="#{thumb}")
+      assert tile =~ "object-fit:cover;object-position:top"
+      refute tile =~ "onload"
+    end
+
+    test "a landscape template is fitted whole in the same fixed tile" do
+      tile = tile(ImageFixtures.png_uri(1600, 1200))
+      assert tile =~ "object-fit:contain;object-position:center"
     end
   end
 end
