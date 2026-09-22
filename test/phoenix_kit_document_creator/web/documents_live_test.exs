@@ -564,6 +564,31 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLiveTest do
       assert MapSet.member?(state.pending_files, "doc-thumb-1")
     end
 
+    test "a loaded thumbnail sits in a fixed portrait frame and fits a landscape page whole",
+         %{conn: conn} do
+      tmpl = insert_template("Framed")
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, view, _html} = live(conn, "/en/admin/document-creator/templates")
+
+      force_connected_render(view,
+        templates: [template_file(tmpl)],
+        known_file_ids: MapSet.new([tmpl.google_doc_id]),
+        thumbnails: %{tmpl.google_doc_id => "data:image/png;base64,AA"}
+      )
+
+      html = render(view)
+
+      [frame] =
+        Regex.run(
+          ~r/<div style="width:100%;max-width:183px;aspect-ratio:183\/258;[^"]*">\s*<img[^>]*>/,
+          html
+        )
+
+      assert frame =~ ~s(src="data:image/png;base64,AA")
+      assert frame =~ "object-fit:cover;object-position:top"
+      assert frame =~ "naturalWidth&gt;this.naturalHeight"
+    end
+
     test "handle_info {:thumbnail_refreshed, ...} stores the data URI and clears pending_files",
          %{conn: conn} do
       conn = put_test_scope(conn, fake_scope())

@@ -65,13 +65,19 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
           phx-value-id={tpl["id"]}
           phx-value-name={tpl["name"]}
         >
-          <%!-- Width fixed, height from the image: a landscape template
-               (flipPageOrientation) shows whole instead of its middle strip. --%>
-          <div style="width:100px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <%!-- A fixed portrait tile (every tile on a line stays the same
+               height); a landscape template (flipPageOrientation) is fitted
+               whole once its image has loaded instead of cropped to its
+               middle strip — see landscape_fit_js/0. --%>
+          <div style="width:100px;height:141px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
             <%= if @thumbnails[tpl["id"]] do %>
-              <img src={@thumbnails[tpl["id"]]} style="display:block;width:100%;height:auto;" />
+              <img
+                src={@thumbnails[tpl["id"]]}
+                style="width:100%;height:100%;object-fit:cover;object-position:top;"
+                onload={landscape_fit_js()}
+              />
             <% else %>
-              <div style="width:100%;height:141px;background:#fff;display:flex;align-items:center;justify-content:center;">
+              <div style="width:100%;height:100%;background:#fff;display:flex;align-items:center;justify-content:center;">
                 <span class="loading loading-spinner loading-sm text-base-300" />
               </div>
             <% end %>
@@ -210,5 +216,16 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
       <span :if={@count > 0} class="badge badge-success badge-sm">{@count}</span>
     </div>
     """
+  end
+
+  @doc """
+  The `onload` handler for a thumbnail in a fixed portrait frame: an image
+  that turns out wider than tall (a landscape page) is fitted whole and
+  centred instead of cropped to its middle strip by `object-fit: cover`.
+  Shared with the documents/templates list (`DocumentsLive`).
+  """
+  @spec landscape_fit_js() :: String.t()
+  def landscape_fit_js do
+    "if(this.naturalWidth>this.naturalHeight){this.style.objectFit='contain';this.style.objectPosition='center'}"
   end
 end

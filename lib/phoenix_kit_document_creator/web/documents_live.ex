@@ -2453,19 +2453,23 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
 
   attr(:thumbnail, :any, default: nil, doc: "Thumbnail URL, or nil while loading.")
 
-  # The frame is as wide as a portrait page and as tall as the image needs:
-  # Drive's thumbnail comes in the page's own orientation, so a landscape
-  # document (`documentStyle.flipPageOrientation`) shows whole and wide.
-  # A fixed portrait box with `object-fit: cover` showed only the middle
-  # strip of such a page. The portrait aspect is kept for the placeholder,
-  # so a card does not jump when its image arrives.
+  # A fixed portrait frame (every card in the grid stays the same height)
+  # showing the top of a portrait page. Drive's thumbnail comes in the
+  # page's own orientation, so a landscape document
+  # (`documentStyle.flipPageOrientation`) would be cropped to its middle
+  # strip by `object-fit: cover`; once such an image has loaded and turns
+  # out wider than tall, it is fitted whole instead.
   defp render_thumbnail(assigns) do
     ~H"""
-    <div style="width:100%;max-width:183px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+    <div style="width:100%;max-width:183px;aspect-ratio:183/258;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
       <%= if @thumbnail do %>
-        <img src={@thumbnail} style="display:block;width:100%;height:auto;" />
+        <img
+          src={@thumbnail}
+          style="width:100%;height:100%;object-fit:cover;object-position:top;"
+          onload={landscape_fit_js()}
+        />
       <% else %>
-        <div style="width:100%;aspect-ratio:183/258;background:#fff;display:flex;align-items:center;justify-content:center;">
+        <div style="width:100%;height:100%;background:#fff;display:flex;align-items:center;justify-content:center;">
           <span class="loading loading-spinner loading-md text-base-300" />
         </div>
       <% end %>
