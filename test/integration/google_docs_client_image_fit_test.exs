@@ -221,11 +221,11 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       width = get_in(insert, [:insertInlineImage, :objectSize, :width, :magnitude])
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
 
-      # box_w = 451.28pt; avail_h = 697.89 - 60 (default safety, no preceding
-      # paragraphs) = 637.89pt. scale = min(451.28/1600, 637.89/900) → width wins.
+      # box_w = 451.28pt; avail_h = 697.89 - 130 (default safety, no preceding
+      # paragraphs) = 567.89pt. scale = min(451.28/1600, 567.89/900) → width wins.
       assert_in_delta width, 451.28, 0.01
       assert_in_delta height, 900 * (451.28 / 1600), 0.01
-      assert height < 637.89
+      assert height < 567.89
     end
 
     test "a vertical image is bound by height" do
@@ -253,7 +253,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       [insert] = insert_inline_image_requests()
       width = get_in(insert, [:insertInlineImage, :objectSize, :width, :magnitude])
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
-      avail_h = 697.89 - 60.0
+      avail_h = 697.89 - 130.0
 
       assert_in_delta height, avail_h, 0.01
       assert width < 451.28
@@ -261,7 +261,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
 
     test "reserve is the estimated height of the section's 3 preceding paragraphs, plus the safety margin" do
       # 3 empty (default-style) paragraphs before the slot: each contributes
-      # 11pt * 1.15 = 12.65pt → 37.95pt total, plus the default safety margin (60pt).
+      # 11pt * 1.15 = 12.65pt → 37.95pt total, plus the default safety margin (130pt).
       doc = %{
         "documentStyle" => doc_style(),
         "body" => %{
@@ -296,7 +296,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       [insert] = insert_inline_image_requests()
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
 
-      expected_avail_h = 697.89 - (3 * 12.65 + 60.0)
+      expected_avail_h = 697.89 - (3 * 12.65 + 130.0)
       assert_in_delta height, expected_avail_h, 0.01
     end
   end

@@ -31,11 +31,39 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   ## Configuration
 
-  - `:page_fit_safety_pt` (float, default `60.0`) — safety margin subtracted
-    from a `fit: "page"` image slot's available height on every page it
-    occupies. See `page_fit_safety_pt/0`.
+  - `:page_fit_safety_pt` (float, default `130.0`) — safety margin
+    subtracted from a `fit: "page"` image slot's available height on every
+    page it occupies. See `page_fit_safety_pt/0`.
 
-        config :phoenix_kit_document_creator, :page_fit_safety_pt, 60.0
+        config :phoenix_kit_document_creator, :page_fit_safety_pt, 130.0
+
+    Calibrated live 2026-09-22 against Andi's landscape "Joonised
+    (tootmine)" template (A4 landscape, 72pt margins, a house header — 1x2
+    table with a logo — and a house footer — a rule + a details table —
+    both taller than their `marginHeader`/`marginFooter` of 36pt):
+
+    - text on a fresh page starts at 72pt (`marginTop`), but Docs starts an
+      inline image's paragraph at ~111pt — it lays the image out under the
+      header, which extends past its own margin (36pt + ~75pt of content);
+      plain text is NOT pushed down the same way.
+    - the footer extends ~68pt past its own margin: the last line of text
+      that still fits lands around y≈448pt against a nominal `marginBottom`
+      of 72pt (523pt).
+    - the section's terminal paragraph (present after the last image, when
+      the image slot ends its section) costs one more line, ~12pt.
+    - total for an image sized to its own page: `451 - (39 + 68 + 12) ≈
+      332pt` of usable height out of ~451pt — a `126pt` safety margin
+      matched that live (2 and 3-image slots: one image per page, the
+      first sitting under the header, no blank pages); `130pt` is that
+      with a 4pt margin of error. At `60pt` and `100pt` the section's
+      trailing paragraph was pushed onto its own blank page; at the
+      original `24pt` guess the second image overran the footer.
+    - none of this reaches the first image's OWN reserve (the paragraphs
+      immediately before it): its real start is ~117pt (after 3 lines of
+      text), so `paragraphs_reserve_before_slot/3` + this safety margin
+      overshoot it by ~33pt there — a known v1 simplicity cost, not
+      something this constant alone can fix (it would need a per-position,
+      not per-document, correction).
   """
 
   require Logger
@@ -3441,20 +3469,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   # Host-tunable safety margin subtracted from a `fit: "page"` image's
   # available height — on EVERY image of the slot, not just the section's
-  # first. Live calibration (Andi's landscape "Joonised (tootmine)"
-  # template, 2026-09-22) found two things the estimated reserve can't see
-  # from the Docs API alone: the house header/footer render outside their
-  # nominal margins (so the first image's reserve needs more slack than the
-  # visible paragraphs before it suggest), and each image after the first
-  # is followed by a separator paragraph before the API even starts
-  # measuring the next page — both eat into "the whole box" a naive
-  # box_h-only budget for non-first images would assume. Configure via
-  # `config :phoenix_kit_document_creator, :page_fit_safety_pt, N` (see the
-  # `Configuration` section of this module's `@moduledoc`); no config set
-  # defaults to `60.0`.
+  # first. Configure via `config :phoenix_kit_document_creator,
+  # :page_fit_safety_pt, N` (see the `Configuration` section of this
+  # module's `@moduledoc` for the live measurement the `130.0` default is
+  # calibrated against).
   @spec page_fit_safety_pt() :: float()
   def page_fit_safety_pt do
-    Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 60.0) * 1.0
+    Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 130.0) * 1.0
   end
 
   # Same last-first / separator dance as `inline_image_inserts_pt/3`, but
