@@ -28,6 +28,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   read; the rewritten setting then drives all subsequent dispatches.
   Folder configuration is stored separately under the
   `"document_creator_folders"` settings key.
+
+  ## Configuration
+
+  - `:page_fit_safety_pt` (float, default `60.0`) — safety margin subtracted
+    from a `fit: "page"` image slot's available height on every page it
+    occupies. See `page_fit_safety_pt/0`.
+
+        config :phoenix_kit_document_creator, :page_fit_safety_pt, 60.0
   """
 
   require Logger
@@ -938,12 +946,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @max_columns 4
   @default_paragraph_font_size_pt 11.0
   @default_line_spacing_pct 115.0
-  # Starting guess for the gap `fit: "page"` leaves below a section's
-  # preceding paragraphs before the estimated-height reserve runs out —
-  # covers what the estimate can't see (a house header taller than
-  # marginTop, table/list overhead). Calibrated live against real
-  # templates; not derived from any Docs API field.
-  @page_fit_safety_pt 24.0
 
   @doc """
   Page content width in points = pageSize.width − marginLeft − marginRight.
@@ -3428,8 +3430,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         ]
 
       box && MapSet.member?(fit_page_names, name) ->
-        avail_h = max(box.height_pt - reserve_before_slot(doc2, box, index), 0.0)
-        page_fit_image_list_inserts(fill, index, box, avail_h)
+        paragraphs_reserve_pt = paragraphs_reserve_before_slot(doc2, box, index)
+        page_fit_image_list_inserts(fill, index, box, paragraphs_reserve_pt)
 
       true ->
         w_pt = image_width_for_columns(content_width_pt, 1)
@@ -3437,22 +3439,45 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  # Host-tunable safety margin subtracted from a `fit: "page"` image's
+  # available height — on EVERY image of the slot, not just the section's
+  # first. Live calibration (Andi's landscape "Joonised (tootmine)"
+  # template, 2026-09-22) found two things the estimated reserve can't see
+  # from the Docs API alone: the house header/footer render outside their
+  # nominal margins (so the first image's reserve needs more slack than the
+  # visible paragraphs before it suggest), and each image after the first
+  # is followed by a separator paragraph before the API even starts
+  # measuring the next page — both eat into "the whole box" a naive
+  # box_h-only budget for non-first images would assume. Configure via
+  # `config :phoenix_kit_document_creator, :page_fit_safety_pt, N` (see the
+  # `Configuration` section of this module's `@moduledoc`); no config set
+  # defaults to `60.0`.
+  @spec page_fit_safety_pt() :: float()
+  def page_fit_safety_pt do
+    Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 60.0) * 1.0
+  end
+
   # Same last-first / separator dance as `inline_image_inserts_pt/3`, but
   # sizes each image to fill the section's remaining page (`fit: "page"`).
-  # Only the media item that ends up FIRST in the rendered document (the
-  # last one processed here, since inserts land ahead of what's already
-  # there — see `inline_image_inserts_pt/3`'s sibling logic) is constrained
-  # by `avail_h_first`; every image after it starts a fresh page (the
-  # previous one filled its own), so it gets the section's full height.
-  defp page_fit_image_list_inserts(fill, index, box, avail_h_first) do
+  # `page_fit_safety_pt/0` is subtracted from EVERY image's available
+  # height (see its doc); the media item that ends up FIRST in the
+  # rendered document (the last one processed here, since inserts land
+  # ahead of what's already there — see `inline_image_inserts_pt/3`'s
+  # sibling logic) additionally loses `paragraphs_reserve_pt`, the
+  # estimated height of the paragraphs the section's own text puts ahead
+  # of it. Every image after it starts a fresh page (the previous one
+  # filled its own), so only the safety margin applies.
+  defp page_fit_image_list_inserts(fill, index, box, paragraphs_reserve_pt) do
     %{media: media, separator: sep} = fill
     reversed = Enum.reverse(media)
     last_idx = length(reversed) - 1
+    safety_pt = page_fit_safety_pt()
 
     reversed
     |> Enum.with_index()
     |> Enum.flat_map(fn {m, i} ->
-      avail_h = if i == last_idx, do: avail_h_first, else: box.height_pt
+      reserve = safety_pt + if(i == last_idx, do: paragraphs_reserve_pt, else: 0.0)
+      avail_h = max(box.height_pt - reserve, 0.0)
       img = page_fit_insert(m, index, box.width_pt, avail_h)
       if i < last_idx, do: [img, separator_request(sep, index)], else: [img]
     end)
@@ -3496,21 +3521,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   # Sum of estimated heights of every paragraph in `box`'s section that
   # fully precedes `slot_start_index` (a paragraph containing the slot
-  # itself has `endIndex > slot_start_index` and is excluded), plus the
-  # calibration safety margin. See `estimate_paragraph_height_pt/1` for the
-  # per-paragraph estimate.
-  defp reserve_before_slot(doc, box, slot_start_index) do
-    paragraphs_pt =
-      (get_in(doc, ["body", "content"]) || [])
-      |> Enum.filter(fn el ->
-        Map.has_key?(el, "paragraph") and
-          Map.get(el, "startIndex", 0) >= box.start_index and
-          Map.get(el, "endIndex", 0) <= slot_start_index
-      end)
-      |> Enum.map(&estimate_paragraph_height_pt/1)
-      |> Enum.sum()
-
-    paragraphs_pt + @page_fit_safety_pt
+  # itself has `endIndex > slot_start_index` and is excluded). Combined
+  # with `page_fit_safety_pt/0` by the caller — see
+  # `page_fit_image_list_inserts/4`'s doc. See
+  # `estimate_paragraph_height_pt/1` for the per-paragraph estimate.
+  defp paragraphs_reserve_before_slot(doc, box, slot_start_index) do
+    (get_in(doc, ["body", "content"]) || [])
+    |> Enum.filter(fn el ->
+      Map.has_key?(el, "paragraph") and
+        Map.get(el, "startIndex", 0) >= box.start_index and
+        Map.get(el, "endIndex", 0) <= slot_start_index
+    end)
+    |> Enum.map(&estimate_paragraph_height_pt/1)
+    |> Enum.sum()
   end
 
   # fontSize × lineSpacing/100 + spaceAbove + spaceBelow, each falling back

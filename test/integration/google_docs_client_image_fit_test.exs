@@ -156,11 +156,11 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       width = get_in(insert, [:insertInlineImage, :objectSize, :width, :magnitude])
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
 
-      # box_w = 451.28pt; avail_h = 697.89 - 24 (safety, no preceding
-      # paragraphs) = 673.89pt. scale = min(451.28/1600, 673.89/900) → width wins.
+      # box_w = 451.28pt; avail_h = 697.89 - 60 (default safety, no preceding
+      # paragraphs) = 637.89pt. scale = min(451.28/1600, 637.89/900) → width wins.
       assert_in_delta width, 451.28, 0.01
       assert_in_delta height, 900 * (451.28 / 1600), 0.01
-      assert height < 673.89
+      assert height < 637.89
     end
 
     test "a vertical image is bound by height" do
@@ -188,7 +188,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       [insert] = insert_inline_image_requests()
       width = get_in(insert, [:insertInlineImage, :objectSize, :width, :magnitude])
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
-      avail_h = 697.89 - 24.0
+      avail_h = 697.89 - 60.0
 
       assert_in_delta height, avail_h, 0.01
       assert width < 451.28
@@ -196,7 +196,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
 
     test "reserve is the estimated height of the section's 3 preceding paragraphs, plus the safety margin" do
       # 3 empty (default-style) paragraphs before the slot: each contributes
-      # 11pt * 1.15 = 12.65pt → 37.95pt total, plus @page_fit_safety_pt (24pt).
+      # 11pt * 1.15 = 12.65pt → 37.95pt total, plus the default safety margin (60pt).
       doc = %{
         "documentStyle" => doc_style(),
         "body" => %{
@@ -231,7 +231,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       [insert] = insert_inline_image_requests()
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
 
-      expected_avail_h = 697.89 - (3 * 12.65 + 24.0)
+      expected_avail_h = 697.89 - (3 * 12.65 + 60.0)
       assert_in_delta height, expected_avail_h, 0.01
     end
   end
@@ -384,6 +384,51 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       assert first_height < 697.89
       # Second slot fell back to fit: "width" — full box width.
       assert_in_delta second_width, 451.28, 0.01
+    end
+  end
+
+  describe "page_fit_safety_pt/0 — host-tunable via config" do
+    setup do
+      previous = Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt)
+
+      on_exit(fn ->
+        if previous,
+          do: Application.put_env(:phoenix_kit_document_creator, :page_fit_safety_pt, previous),
+          else: Application.delete_env(:phoenix_kit_document_creator, :page_fit_safety_pt)
+      end)
+
+      :ok
+    end
+
+    test "an env override changes the reserve applied to a fit: \"page\" image" do
+      Application.put_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 200.0)
+
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{"content" => [section_break(0), para(1, "{{ images: photos }}\n")]}
+      }
+
+      stub_doc_and_batch(doc)
+
+      slot =
+        image_list_slot(%{
+          "fit" => "page",
+          "media" => [%{"uri" => "u", "width_px" => 100, "height_px" => 1000}]
+        })
+
+      sections = [
+        %{position: 0, variable_values: %{}, image_params: %{"photos" => slot}}
+      ]
+
+      ranges = %{0 => {1, 23}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, ranges)
+
+      [insert] = insert_inline_image_requests()
+      height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
+
+      # avail_h = 697.89 - 200.0 (overridden safety, no preceding paragraphs).
+      assert_in_delta height, 697.89 - 200.0, 0.01
     end
   end
 end
