@@ -3228,6 +3228,29 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert request["sectionStyle"] == %{"flipPageOrientation" => false}
     end
 
+    test "a target with a literally wide pageSize (landscape-shaped) + a portrait template -> true" do
+      template = %{"documentStyle" => %{"pageSize" => portrait_page_size()}}
+      target = %{"documentStyle" => %{"pageSize" => landscape_page_size()}}
+
+      assert [%{"updateSectionStyle" => request}] =
+               GoogleDocsClient.section_layout_requests(11, template, target)
+
+      assert request["sectionStyle"] == %{"flipPageOrientation" => true}
+    end
+
+    test "a target with a literally wide pageSize (landscape-shaped) + a template landscape by flag -> false" do
+      template = %{
+        "documentStyle" => %{"pageSize" => portrait_page_size(), "flipPageOrientation" => true}
+      }
+
+      target = %{"documentStyle" => %{"pageSize" => landscape_page_size()}}
+
+      assert [%{"updateSectionStyle" => request}] =
+               GoogleDocsClient.section_layout_requests(11, template, target)
+
+      assert request["sectionStyle"] == %{"flipPageOrientation" => false}
+    end
+
     test "a template's own section-level flipPageOrientation wins over its documentStyle's, even when false" do
       template = %{
         "documentStyle" => %{"pageSize" => portrait_page_size(), "flipPageOrientation" => true},

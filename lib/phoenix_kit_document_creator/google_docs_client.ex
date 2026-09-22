@@ -2589,7 +2589,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     template_page_size = get_in(template_doc, ["documentStyle", "pageSize"])
     target_page_size = get_in(target_doc, ["documentStyle", "pageSize"])
 
-    template_landscape? = landscape_shaped?(template_page_size) != template_flip(template_doc)
+    template_landscape? = landscape_shaped?(template_page_size) != template_flip?(template_doc)
     target_landscape_shaped? = landscape_shaped?(target_page_size)
 
     template_landscape? != target_landscape_shaped?
@@ -2600,7 +2600,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # else the template's documentStyle.flipPageOrientation, else false.
   # Map.get/2 with `||` would treat an explicit `false` as absent, so this
   # uses Map.fetch/2 to tell "unset" from "set to false" apart.
-  defp template_flip(template_doc) do
+  defp template_flip?(template_doc) do
     section_style = first_section_style(template_doc)
     document_style = Map.get(template_doc, "documentStyle") || %{}
 
