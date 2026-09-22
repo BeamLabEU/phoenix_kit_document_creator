@@ -127,6 +127,71 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       # 841.89 - 72 - 72 (the flipped/landscape box), not 595.28 - 144.
       assert_in_delta width, 697.89, 0.01
     end
+
+    test "in a 2-section document, a slot in section 2 gets section 2's box, not section 1's" do
+      # Section 1: portrait, no flip. Section 2: landscape via its own
+      # sectionStyle.flipPageOrientation (doc-level flip stays false).
+      # The image tag's textRun starts EXACTLY at section 2's sectionBreak
+      # startIndex (3) — the boundary `box_for_index/2` has to get right:
+      # box1 is [0, 3), box2 is [3, 25). A `<` → `<=` mutation on
+      # box_for_index's end-index check would make box1 ALSO match index 3
+      # (and, since boxes are tried in order, win), picking the wrong
+      # (portrait) box — this test fails under that mutation (verified
+      # manually before committing).
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{
+          "content" => [
+            section_break(0),
+            %{
+              "startIndex" => 1,
+              "endIndex" => 3,
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "endIndex" => 3, "textRun" => %{"content" => "x\n"}}
+                ]
+              }
+            },
+            section_break(3, %{"flipPageOrientation" => true}),
+            %{
+              "startIndex" => 3,
+              "endIndex" => 25,
+              "paragraph" => %{
+                "elements" => [
+                  %{
+                    "startIndex" => 3,
+                    "endIndex" => 25,
+                    "textRun" => %{"content" => "{{ images: photos }}\n"}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      stub_doc_and_batch(doc)
+
+      sections = [
+        %{position: 0, variable_values: %{}, image_params: %{"photos" => image_list_slot(%{})}}
+      ]
+
+      ranges = %{0 => {1, 25}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, ranges)
+
+      [insert] = insert_inline_image_requests()
+      width = get_in(insert, [:insertInlineImage, :objectSize, :width, :magnitude])
+      height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
+
+      # Section 2's (landscape) box: 841.89 - 144 wide, 595.28 - 144 tall —
+      # NOT section 1's (portrait) 451.28 x 697.89. Height follows the
+      # slot's default media aspect (800x600 — see image_list_slot/1),
+      # scaled from the section-2 width; scale_height/3 rounds to an
+      # integer PT value, hence the wider delta.
+      assert_in_delta width, 697.89, 0.01
+      assert_in_delta height, 697.89 * 600 / 800, 1.0
+    end
   end
 
   describe "fit: \"page\" — scale = min(box_w / w_px, avail_h / h_px)" do

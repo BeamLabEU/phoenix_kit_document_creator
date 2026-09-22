@@ -144,5 +144,38 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientSectionBoxesTest do
       assert box2.start_index == 20
       assert box2.end_index == 100
     end
+
+    test "single-section document: box width matches content_width_pt/1 (with an explicit pageSize)" do
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{
+          "content" => [
+            section_break(0),
+            %{"startIndex" => 1, "endIndex" => 50, "paragraph" => %{}}
+          ]
+        }
+      }
+
+      [box] = GoogleDocsClient.section_boxes(doc)
+
+      assert box.width_pt == GoogleDocsClient.content_width_pt(doc)
+    end
+
+    test "single-section document: box width matches content_width_pt/1's fallback (no pageSize)" do
+      doc = %{
+        "documentStyle" => %{},
+        "body" => %{
+          "content" => [
+            section_break(0),
+            %{"startIndex" => 1, "endIndex" => 50, "paragraph" => %{}}
+          ]
+        }
+      }
+
+      [box] = GoogleDocsClient.section_boxes(doc)
+
+      assert box.width_pt == GoogleDocsClient.content_width_pt(doc)
+      assert box.width_pt == 468.0
+    end
   end
 end
