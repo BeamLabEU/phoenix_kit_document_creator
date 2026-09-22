@@ -230,4 +230,28 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModalTest do
       assert html =~ "selected"
     end
   end
+
+  describe "template tiles" do
+    test "a fixed portrait tile that fits a landscape page whole once loaded" do
+      html =
+        render_component(&CreateDocumentModal.modal/1,
+          open: true,
+          templates: [%{"id" => "tpl-1", "name" => "Landscape"}],
+          thumbnails: %{"tpl-1" => "data:image/png;base64,AA"},
+          step: "choose"
+        )
+
+      [tile] = Regex.run(~r/<div style="width:100px;height:141px;[^"]*">\s*<img[^>]*>/, html)
+      assert tile =~ ~s(src="data:image/png;base64,AA")
+      assert tile =~ "object-fit:cover;object-position:top"
+      assert tile =~ ~s(onload=")
+      assert tile =~ "naturalWidth&gt;this.naturalHeight"
+    end
+
+    test "landscape_fit_js/0 only changes the fit when the image is wider than tall" do
+      js = CreateDocumentModal.landscape_fit_js()
+      assert js =~ "if(this.naturalWidth>this.naturalHeight)"
+      assert js =~ "objectFit='contain'"
+    end
+  end
 end
