@@ -65,11 +65,13 @@ defmodule PhoenixKitDocumentCreator.Web.Components.CreateDocumentModal do
           phx-value-id={tpl["id"]}
           phx-value-name={tpl["name"]}
         >
-          <div style="width:100px;height:141px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <%!-- Width fixed, height from the image: a landscape template
+               (flipPageOrientation) shows whole instead of its middle strip. --%>
+          <div style="width:100px;overflow:hidden;border-radius:4px;background:#fff;border:1px solid oklch(var(--color-base-content) / 0.2);box-shadow:0 2px 8px rgba(0,0,0,0.08);">
             <%= if @thumbnails[tpl["id"]] do %>
-              <img src={@thumbnails[tpl["id"]]} style="width:100%;height:100%;object-fit:cover;object-position:top;" />
+              <img src={@thumbnails[tpl["id"]]} style="display:block;width:100%;height:auto;" />
             <% else %>
-              <div style="width:100%;height:100%;background:#fff;display:flex;align-items:center;justify-content:center;">
+              <div style="width:100%;height:141px;background:#fff;display:flex;align-items:center;justify-content:center;">
                 <span class="loading loading-spinner loading-sm text-base-300" />
               </div>
             <% end %>
