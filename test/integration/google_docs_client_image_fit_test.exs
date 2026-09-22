@@ -299,6 +299,62 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       expected_avail_h = 697.89 - (3 * 12.65 + 130.0)
       assert_in_delta height, expected_avail_h, 0.01
     end
+
+    test "two images in one fit=page slot: safety applies to BOTH, paragraphs-reserve only to the first" do
+      # One preceding paragraph (12.65pt) before the slot. First (topmost,
+      # rendered-order) image loses safety AND the paragraph reserve;
+      # second image loses only safety — see page_fit_image_list_inserts/4's
+      # doc. A regression to "safety only for the first image" (the
+      # pre-4ea345b behavior) would give the second image the full box
+      # height instead, failing the second assertion below (verified by
+      # hand against that mutation before committing).
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{
+          "content" => [
+            section_break(0),
+            para(1, "\n"),
+            para(2, "{{ images: photos }}\n")
+          ]
+        }
+      }
+
+      stub_doc_and_batch(doc)
+
+      # Extreme aspect ratio (both images) so the fit is unambiguously
+      # height-bound — the resulting height pins down each image's avail_h.
+      slot =
+        image_list_slot(%{
+          "fit" => "page",
+          "media" => [
+            %{"uri" => "a", "width_px" => 100, "height_px" => 1000},
+            %{"uri" => "b", "width_px" => 100, "height_px" => 1000}
+          ]
+        })
+
+      sections = [
+        %{position: 0, variable_values: %{}, image_params: %{"photos" => slot}}
+      ]
+
+      ranges = %{0 => {1, 24}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, ranges)
+
+      inserts = insert_inline_image_requests()
+      by_uri = Map.new(inserts, fn req -> {req.insertInlineImage.uri, req} end)
+
+      first_height = get_in(by_uri["a"], [:insertInlineImage, :objectSize, :height, :magnitude])
+      second_height = get_in(by_uri["b"], [:insertInlineImage, :objectSize, :height, :magnitude])
+
+      # First (uri "a"): box_h - safety - paragraphs_reserve.
+      expected_first = 697.89 - (130.0 + 12.65)
+      # Second (uri "b"): box_h - safety only — NOT the full box height.
+      expected_second = 697.89 - 130.0
+
+      assert_in_delta first_height, expected_first, 0.01
+      assert_in_delta second_height, expected_second, 0.01
+      assert second_height < 697.89
+    end
   end
 
   describe "fit=page scope guards — fall back to fit=width and warn" do
