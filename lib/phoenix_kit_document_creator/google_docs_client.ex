@@ -48,41 +48,64 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     (line-height rounding, the little Docs adds before flowing an image vs.
     plain text) — hence the much smaller default.
 
-    Calibrated live 2026-09-22 against Andi's landscape "Joonised
-    (tootmine)" template (A4 landscape, 72pt margins, a house header — 1x2
-    table with a logo — and a house footer — a rule + a details table —
-    both taller than their `marginHeader`/`marginFooter` of 36pt) — these are
-    the measurements the header/footer content estimator (`segment_extent_pt/2`
-    and friends) is built to reproduce from `doc["headers"]`/`doc["footers"]`
-    alone, without a live render:
+    Calibrated live 2026-09-22/23 against Andi's landscape "Joonised
+    (tootmine)" template and the composite Hinnapakkumine + Joonised +
+    Leping preview (A4 landscape, 72pt margins, the shared "house" header —
+    a 1x2 table with a logo — and house footer — a `horizontalRule` element,
+    two empty Calibri 9.5pt paragraphs, and a details table whose cells hold
+    soft (`\u000B`) line breaks — both taller than their
+    `marginHeader`/`marginFooter` of 36pt) — these are the measurements the
+    header/footer content estimator (`segment_extent_pt/2` and friends) is
+    built to reproduce from `doc["headers"]`/`doc["footers"]` alone, without
+    a live render:
 
     - text on a fresh page starts at 72pt (`marginTop`), but Docs starts an
       inline image's paragraph at ~111pt — it lays the image out under the
       header, which extends past its own margin (36pt + ~75pt of content);
       plain text is NOT pushed down the same way. `header_extent_pt/2` on
       this house header (a 1x2 table with a ~46pt-tall logo image) estimates
-      ≈77pt against the ≈75pt measured live — a few points over, never under.
-    - the footer extends ~68pt past its own margin: the last line of text
-      that still fits lands around y≈448pt against a nominal `marginBottom`
-      of 72pt (523pt). `footer_extent_pt/2` on the house footer (a rule plus
-      a 2-column details table) estimates ≈67-68pt from its content alone —
-      in line with that measurement.
+      ≈78pt against the ≈75pt measured live — a few points over, never under.
+    - the footer extends ~68pt past its own 72pt `marginBottom` (the last
+      line of text that still fits lands around y≈448pt against that
+      nominal margin's 523pt edge on a 596pt-tall page) — i.e. ~105-107pt
+      of TOTAL footer zone measured from the page bottom, against a nominal
+      `marginFooter` of 36pt. `footer_extent_pt/2` on the house footer
+      estimates ≈106.8pt from its content alone (a `horizontalRule` element
+      counts as one line on top of its paragraph's own text, two empty
+      Calibri 9.5pt paragraphs, and a 2-column details table whose right
+      cell's soft `\u000B` line breaks add lines within a single Docs
+      paragraph) — in line with that measurement.
+    - a line's true height runs ahead of the naive `fontSize ×
+      lineSpacing/100` product — measured live at ~14.55pt for Arial
+      11pt/115% (12.65 × ~1.15). `estimate_paragraph_height_pt/1` applies a
+      single `@font_leading` (1.22) constant to every line regardless of
+      font, the larger of the two real multipliers measured (Arial ~1.15,
+      the house footer's Calibri ~1.22) — safe-side for Arial, matching for
+      Calibri.
     - the section's terminal paragraph (present after the last image, when
-      the image slot ends its section) costs one more line, ~12.3pt — this
-      is `page_fit_image_list_inserts/4`'s `trailing_line_pt`, applied to
-      every image for simplicity rather than only the section's last one.
+      the image slot ends its section) costs one more default-style line,
+      ~15.4pt (`11 × 1.15 × 1.22`) — this is
+      `page_fit_image_list_inserts/4`'s `trailing_line_pt`, subtracted only
+      from the LAST image rendered in the slot (every other image is
+      immediately followed by another image, not the section's terminal
+      paragraph).
     - `header_extent_pt/2` / `footer_extent_pt/2` estimate a segment's
       content the same way `estimate_paragraph_height_pt/1` estimates a body
-      paragraph (`fontSize × lineSpacing/100 + spaceAbove + spaceBelow`, an
-      empty paragraph counting as one line), plus: a table is the sum of its
-      rows, a row is the tallest of its cells, and a cell is the sum of its
-      paragraphs' heights plus its own `tableCellStyle` padding (falling
+      paragraph (`lineCount × fontSize × lineSpacing/100 × @font_leading +
+      spaceAbove + spaceBelow + borderTop/borderBottom width+padding`, an
+      empty paragraph counting as one line, one more line per `\u000B` soft
+      break and per `horizontalRule` element), plus: a table is the sum of
+      its rows, a row is the tallest of its cells, and a cell is the sum of
+      its paragraphs' heights plus its own `tableCellStyle` padding (falling
       back to 5pt top/bottom — the Docs default when a table's cells don't
-      set it explicitly, as seen on the house header's own cells) — and a
-      paragraph holding an inline image is sized from that image's own
-      `inlineObjects[id].embeddedObject.size.height` plus its own
-      `marginTop`/`marginBottom` (falling back to 5pt each) instead of the
-      font formula, which would drastically undersize it.
+      set it explicitly, as seen on the house header's own cells) and
+      border widths — and a paragraph holding an inline image is sized from
+      that image's own `inlineObjects[id].embeddedObject.size.height` plus
+      its own `marginTop`/`marginBottom` (falling back to 5pt each) instead
+      of the font formula, which would drastically undersize it.
+    - live-verified (2026-09-23, commit `1137050`): a "Joonised (tootmine)"
+      preview with 2 and 3 `fit: "page"` images each landed one per page, no
+      blank pages, footer untouched — images sized to 311pt and 315pt.
   """
 
   require Logger
@@ -3707,17 +3730,23 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # page_fit_safety_pt/0` (see the moduledoc for how `body_top_pt` /
   # `body_bottom_pt` are derived from the section's header/footer content).
   # `trailing_line_pt` (one line of the section's terminal paragraph) is
-  # applied to every image, not just the section's last, for simplicity.
+  # subtracted ONLY for the media item that ends up LAST in the rendered
+  # document (the first one processed here, `i == 0` — inserts land ahead of
+  # what's already there, so processing order is reverse of render order):
+  # every other image is immediately followed by another image, not the
+  # section's terminal paragraph, which only ever sits after the true last
+  # one.
+  #
   # The media item that ends up FIRST in the rendered document (the last one
-  # processed here, since inserts land ahead of what's already there — see
-  # `inline_image_inserts_pt/3`'s sibling logic) starts at
-  # `max(body_top_pt, margin_top + paragraphs_reserve_pt)` — the estimated
-  # height of the section's own text ahead of it, when that pushes further
-  # down than the header already does; text is not pushed down by the
-  # header the way an image is (see `paragraphs_reserve_before_slot/3`'s
-  # doc), so the two reserves are combined with `max`, not summed. Every
-  # image after it starts a fresh page (the previous one filled its own), so
-  # it simply starts at `body_top_pt`.
+  # processed here, `i == last_idx` — see `inline_image_inserts_pt/3`'s
+  # sibling logic) starts at `max(body_top_pt, margin_top +
+  # paragraphs_reserve_pt)` — the estimated height of the section's own text
+  # ahead of it, when that pushes further down than the header already
+  # does; text is not pushed down by the header the way an image is (see
+  # `paragraphs_reserve_before_slot/3`'s doc), so the two reserves are
+  # combined with `max`, not summed. Every image after it starts a fresh
+  # page (the previous one filled its own), so it simply starts at
+  # `body_top_pt`.
   defp page_fit_image_list_inserts(fill, index, box, paragraphs_reserve_pt) do
     %{media: media, separator: sep} = fill
     reversed = Enum.reverse(media)
@@ -3734,7 +3763,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           box.body_top_pt
         end
 
-      avail_h = max(box.body_bottom_pt - start_pt - @page_fit_trailing_line_pt - safety_pt, 0.0)
+      trailing_pt = if i == 0, do: @page_fit_trailing_line_pt, else: 0.0
+      avail_h = max(box.body_bottom_pt - start_pt - trailing_pt - safety_pt, 0.0)
       img = page_fit_insert(m, index, box.width_pt, avail_h)
       if i < last_idx, do: [img, separator_request(sep, index)], else: [img]
     end)
