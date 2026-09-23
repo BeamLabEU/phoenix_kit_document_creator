@@ -2299,11 +2299,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   here rather than by widening the shared, narrow body builders — see
   `SegmentReplay.extra_paragraph_style_requests/2`'s doc):
 
-    * a fresh segment starts with one empty paragraph that inserting the
-      template's own text never removes; when the template's last block is
-      a plain paragraph, that pre-existing one is now a redundant trailing
-      extra and is deleted in the same skeleton batch
-      (`trailing_cleanup_requests/2`).
+    * a fresh segment starts with one empty paragraph, and the Docs API
+      refuses to delete a segment's own terminal newline; when the
+      template's last block is a plain paragraph, its own trailing newline
+      is never inserted — the pre-existing one serves as its terminator
+      instead, every style request still targeting that paragraph's
+      original (un-stripped) offset (`skeleton_insert_text/2`).
     * `insertTable` landing where a marker was always splits whatever
       paragraph absorbed it, leaving an empty phantom paragraph immediately
       ahead of the table — deleted (`remove_phantoms/3`, its own re-fetch)
@@ -2562,11 +2563,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp replay_segment_content(kind, ctx, segment_id, template_content) do
     synthetic = %{"body" => %{"content" => template_content}, "lists" => ctx.doc_lists}
     {text, tables, runs, paragraphs} = flatten_template_with_table_markers_and_styles(synthetic)
+    insert_text = skeleton_insert_text(template_content, text)
 
     skeleton =
-      (SegmentReplay.skeleton_requests(text, runs, paragraphs) ++
-         body_extra_style_requests(template_content, 0, runs, paragraphs) ++
-         trailing_cleanup_requests(template_content, text))
+      (SegmentReplay.skeleton_requests(insert_text, runs, paragraphs) ++
+         body_extra_style_requests(template_content, 0, runs, paragraphs))
       |> SegmentReplay.with_segment_id(segment_id)
 
     case maybe_batch(ctx.batch_fn, ctx.target_doc_id, skeleton) do
@@ -2576,29 +2577,35 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   # A fresh segment (from createHeader/createFooter) always starts with
-  # exactly one empty paragraph. Inserting the template's own flattened text
-  # ahead of it never removes it — when the template's LAST block is a
-  # plain paragraph (not a table), that paragraph's own trailing newline
-  # was already inserted as real content, so the segment's original one is
-  # now a redundant, unstyled extra trailing paragraph (Arial 11pt default —
-  # seen live 2026-09-23) sitting right after it. Deleting it here, in the
-  # SAME batch as the insert (its position — `utf16_units(text)` — is known
-  # analytically, no re-fetch needed), makes the segment's last paragraph
-  # exactly the template's own. When the template instead ends in a table,
-  # this pre-existing paragraph is left alone — the Docs API requires SOME
-  # paragraph after a table, and the template has nothing there to
-  # reproduce, so keeping the bare one already matches the model.
-  defp ends_in_plain_paragraph?(template_content) do
-    match?(%{"paragraph" => _}, List.last(template_content))
+  # exactly one empty paragraph, and the Docs API refuses to delete a
+  # segment's own terminal newline ("Invalid requests[N].deleteContentRange:
+  # The range cannot include the newline character at the end of the
+  # segment" — verified live 2026-09-23, failing the whole batch and
+  # leaving the append half-done). So when the template's LAST block is a
+  # plain paragraph (not a table), that paragraph's own trailing newline is
+  # never inserted — the segment's pre-existing terminal one serves as its
+  # terminator instead, the same way a table cell's pre-existing bare
+  # paragraph already supplies the newline `cell_fill_requests/4` skips
+  # inserting (see `strip_trailing_newline/1`'s callers). Every style
+  # request below still targets the paragraph's/run's ORIGINAL (un-stripped)
+  # offset from `flatten_template_with_table_markers_and_styles/1` — only
+  # the LAST character of `text` is ever dropped, shifting nothing before
+  # it, so the one-character gap left by not inserting it is exactly filled
+  # by the segment's own pre-existing newline landing at that same position.
+  # When the template instead ends in a table, nothing is stripped — the
+  # Docs API requires SOME paragraph after a table, and the template has
+  # nothing there to reproduce, so the untouched pre-existing one already
+  # matches the model.
+  defp skeleton_insert_text(template_content, text) do
+    if ends_in_plain_paragraph?(template_content) do
+      strip_trailing_newline(text)
+    else
+      text
+    end
   end
 
-  defp trailing_cleanup_requests(template_content, text) do
-    if text != "" and ends_in_plain_paragraph?(template_content) do
-      len = utf16_units(text)
-      [%{"deleteContentRange" => %{"range" => %{"startIndex" => len, "endIndex" => len + 1}}}]
-    else
-      []
-    end
+  defp ends_in_plain_paragraph?(template_content) do
+    match?(%{"paragraph" => _}, List.last(template_content))
   end
 
   # Extra paragraph/text style for a segment's own (non-table) body content

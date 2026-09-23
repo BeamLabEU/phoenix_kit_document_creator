@@ -20,6 +20,25 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
 
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
+  # Regression guard for a real Docs API rule (verified live 2026-09-23,
+  # fe631e3): a `deleteContentRange` reaching a segment's own terminal
+  # newline is rejected outright — "Invalid requests[N].deleteContentRange:
+  # The range cannot include the newline character at the end of the
+  # segment" — failing the WHOLE batch and leaving the append half-done.
+  # Mocks accept any range unconditionally, so nothing else here would
+  # catch a regression back to that shape. `terminal_index` is the
+  # segment's own known length at that point in the test's fixture (its
+  # length never changes here — nothing after this point inserts/deletes
+  # segment-scoped content in the batches this checks).
+  defp refute_terminal_newline_delete!(requests, terminal_index) do
+    refute Enum.any?(requests, fn
+             %{"deleteContentRange" => %{"range" => %{"endIndex" => ^terminal_index}}} -> true
+             _ -> false
+           end),
+           "deleteContentRange must never reach a segment's own terminal newline " <>
+             "(index #{terminal_index}) — the Docs API rejects it"
+  end
+
   defp text_paragraph(text),
     do: %{"paragraph" => %{"elements" => [%{"textRun" => %{"content" => text}}]}}
 
@@ -189,26 +208,30 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
                         }
                       ]}
 
-      assert_receive {:batch, [insert_req, para_req, text_req, cleanup_req]}
+      assert_receive {:batch, [insert_req, para_req, text_req]}
 
+      # "Hi\n"'s own trailing newline is stripped before insertion — the
+      # fresh segment's pre-existing one serves as its terminator instead
+      # (the Docs API refuses to delete a segment's terminal newline). The
+      # style requests still target the FULL, un-stripped span [0, 3) —
+      # covering "Hi" plus that pre-existing newline landing right after it.
       assert insert_req == %{
                "insertText" => %{
                  "location" => %{"index" => 0, "segmentId" => "kix.new_header"},
-                 "text" => "Hi\n"
+                 "text" => "Hi"
                }
              }
 
-      assert para_req["updateParagraphStyle"]["range"]["segmentId"] == "kix.new_header"
-      assert text_req["updateTextStyle"]["range"]["segmentId"] == "kix.new_header"
+      assert para_req["updateParagraphStyle"]["range"] == %{
+               "startIndex" => 0,
+               "endIndex" => 3,
+               "segmentId" => "kix.new_header"
+             }
 
-      # "Hi\n" is the template's only (and therefore last) block, and it's a
-      # plain paragraph — the fresh segment's own pre-existing paragraph
-      # (now sitting right after "Hi\n", at index 3) is a redundant,
-      # unstyled trailing paragraph and gets deleted in the same batch.
-      assert cleanup_req == %{
-               "deleteContentRange" => %{
-                 "range" => %{"startIndex" => 3, "endIndex" => 4, "segmentId" => "kix.new_header"}
-               }
+      assert text_req["updateTextStyle"]["range"] == %{
+               "startIndex" => 0,
+               "endIndex" => 3,
+               "segmentId" => "kix.new_header"
              }
 
       # no footer in the template — nothing else follows.
@@ -290,7 +313,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
       assert_receive {:batch,
                       [%{"createHeader" => %{"sectionBreakLocation" => %{"index" => 10}}}]}
 
-      assert_receive {:batch, [%{"insertText" => %{"text" => "Hi\n"}} | _]}
+      # "Hi\n"'s own trailing newline is stripped — the fresh segment's
+      # pre-existing one serves as its terminator (the Docs API refuses to
+      # delete a segment's terminal newline).
+      assert_receive {:batch, [%{"insertText" => %{"text" => "Hi"}} | _]}
       refute_receive {:batch, _}
     end
   end
@@ -546,10 +572,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
       assert_receive {:batch, skeleton_batch}
       refute_receive {:batch, _}
 
+      # "Link\n"'s own trailing newline is stripped — the fresh segment's
+      # pre-existing one serves as its terminator (the Docs API refuses to
+      # delete a segment's terminal newline).
       assert Enum.any?(
                skeleton_batch,
                &match?(
-                 %{"insertText" => %{"location" => %{"index" => 0}, "text" => "\nLink\n"}},
+                 %{"insertText" => %{"location" => %{"index" => 0}, "text" => "\nLink"}},
                  &1
                )
              )
@@ -590,24 +619,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
                "link" => %{"url" => "http://example.test"}
              }
 
-      # last block is a plain paragraph — the fresh segment's own
-      # pre-existing paragraph (now at index 6) is a redundant trailing
-      # extra and gets deleted in the same batch.
-      assert Enum.any?(
-               skeleton_batch,
-               &match?(
-                 %{
-                   "deleteContentRange" => %{
-                     "range" => %{
-                       "startIndex" => 6,
-                       "endIndex" => 7,
-                       "segmentId" => "kix.new_footer"
-                     }
-                   }
-                 },
-                 &1
-               )
-             )
+      # last block is a plain paragraph, and its own trailing newline was
+      # never inserted — the segment's own pre-existing terminal newline
+      # (now at index 6: 5 inserted chars + the 1 pre-existing) is never
+      # targeted by a delete.
+      refute_terminal_newline_delete!(skeleton_batch, 6)
     end
 
     test "a native horizontalRule replays as a forced 4pt/6pt-spaceBelow bordered paragraph" do

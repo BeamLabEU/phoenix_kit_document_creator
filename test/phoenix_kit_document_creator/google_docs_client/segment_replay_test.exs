@@ -378,6 +378,35 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplayTest do
       assert %{"updateTextStyle" => %{"range" => %{"startIndex" => 0, "endIndex" => 3}}} =
                text_style
     end
+
+    test "empty text skips insertText — the Docs API rejects an empty one, same as body's/a cell's" do
+      paragraphs = [
+        %{
+          start_offset: 0,
+          length: 1,
+          style: %{
+            alignment: nil,
+            line_spacing: nil,
+            space_above: nil,
+            space_below: nil,
+            named_style_type: "NORMAL_TEXT",
+            indent_start: nil,
+            indent_first_line: nil
+          },
+          bullet: nil
+        }
+      ]
+
+      # a fully-empty template (no captured runs at all — e.g. a single
+      # blank paragraph whose own trailing newline was stripped by the
+      # caller, see GoogleDocsClient.skeleton_insert_text/2) still gets its
+      # paragraph style applied, targeting the segment's own pre-existing
+      # newline at [0, 1).
+      assert [para_style] = SegmentReplay.skeleton_requests("", [], paragraphs)
+
+      assert %{"updateParagraphStyle" => %{"range" => %{"startIndex" => 0, "endIndex" => 1}}} =
+               para_style
+    end
   end
 
   describe "extra_paragraph_style_requests/2" do

@@ -228,13 +228,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
   Phase (б) of the replay: insert the flattened text (table markers
   included, see `GoogleDocsClient.flatten_template_with_table_markers_and_styles/1`)
   at the start of a fresh (empty) segment, then its paragraph and text
-  style. No `segmentId` yet — wrap the result with `with_segment_id/2`.
+  style. `text` already has its own final trailing newline stripped by the
+  caller when the template ends in a plain paragraph (the Docs API refuses
+  to delete a segment's terminal newline, so the segment's own pre-existing
+  one serves as that paragraph's terminator instead — see
+  `GoogleDocsClient.skeleton_insert_text/2`'s doc); an empty `text` (a
+  template that's a single, otherwise-empty paragraph) skips `insertText`
+  entirely — the API rejects an empty one, same as body's/a cell's, and the
+  paragraph/text style requests below still apply, targeting the segment's
+  own pre-existing newline. No `segmentId` yet — wrap the result with
+  `with_segment_id/2`.
   """
   @spec skeleton_requests(String.t(), [map()], [map()]) :: [map()]
   def skeleton_requests(text, runs, paragraphs) do
-    [%{"insertText" => %{"location" => %{"index" => 0}, "text" => text}}] ++
-      G.paragraph_then_text_style_requests(0, paragraphs, runs)
+    insert_request(text) ++ G.paragraph_then_text_style_requests(0, paragraphs, runs)
   end
+
+  defp insert_request(""), do: []
+
+  defp insert_request(text),
+    do: [%{"insertText" => %{"location" => %{"index" => 0}, "text" => text}}]
 
   # ---- extra style (fields the shared, narrow body builders don't cover) --
 
