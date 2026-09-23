@@ -521,47 +521,47 @@ msgid "Restore failed. Please try again."
 msgstr ""
 
 ## Errors module (atom → human-readable string)
-#: lib/phoenix_kit_document_creator/errors.ex:72
+#: lib/phoenix_kit_document_creator/errors.ex:74
 #, elixir-autogen
 msgid "Failed to copy the Google Doc"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:73
+#: lib/phoenix_kit_document_creator/errors.ex:75
 #, elixir-autogen
 msgid "Failed to create the Google Doc"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:74
+#: lib/phoenix_kit_document_creator/errors.ex:76
 #, elixir-autogen
 msgid "Failed to create the Drive folder"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:75
+#: lib/phoenix_kit_document_creator/errors.ex:77
 #, elixir-autogen
 msgid "Deleted folder not found"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:76
+#: lib/phoenix_kit_document_creator/errors.ex:78
 #, elixir-autogen
 msgid "Documents folder not found"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:79
+#: lib/phoenix_kit_document_creator/errors.ex:81
 #, elixir-autogen
 msgid "The document is too large for Google Drive to export as PDF"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:83
+#: lib/phoenix_kit_document_creator/errors.ex:85
 #, elixir-autogen
 msgid "The file is not available in Google Drive — it was deleted, or this Google connection cannot see it"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:89
+#: lib/phoenix_kit_document_creator/errors.ex:91
 #, elixir-autogen
 msgid "Google Drive refused access to the document (the connected Google account cannot read it)"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:94
+#: lib/phoenix_kit_document_creator/errors.ex:96
 #, elixir-autogen
 msgid "Google Drive rate limit reached, try again in a minute"
 msgstr ""
@@ -571,112 +571,112 @@ msgstr ""
 msgid "You can permanently delete this record."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:96
+#: lib/phoenix_kit_document_creator/errors.ex:98
 #, elixir-autogen
 msgid "File is in the Drive trash"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:97
+#: lib/phoenix_kit_document_creator/errors.ex:99
 #, elixir-autogen
 msgid "Folder not found"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:98
+#: lib/phoenix_kit_document_creator/errors.ex:100
 #, elixir-autogen
 msgid "Failed to search Drive for the folder"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:100
+#: lib/phoenix_kit_document_creator/errors.ex:102
 #, elixir-autogen
 msgid "Failed to read file parents from Drive"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:101
+#: lib/phoenix_kit_document_creator/errors.ex:103
 #, elixir-autogen
 msgid "Invalid action"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:102
+#: lib/phoenix_kit_document_creator/errors.ex:104
 #, elixir-autogen
 msgid "Invalid file ID"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:103
+#: lib/phoenix_kit_document_creator/errors.ex:105
 #, elixir-autogen
 msgid "Invalid Google Doc ID"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:104
+#: lib/phoenix_kit_document_creator/errors.ex:106
 #, elixir-autogen
 msgid "Invalid parent folder ID"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:105
+#: lib/phoenix_kit_document_creator/errors.ex:107
 #, elixir-autogen
 msgid "Failed to list Drive files"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:106
+#: lib/phoenix_kit_document_creator/errors.ex:108
 #, elixir-autogen
 msgid "Live folder not found"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:107
+#: lib/phoenix_kit_document_creator/errors.ex:109
 #, elixir-autogen
 msgid "Maximum folder depth exceeded"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:108
+#: lib/phoenix_kit_document_creator/errors.ex:110
 #, elixir-autogen
 msgid "Missing Google Doc ID"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:109
+#: lib/phoenix_kit_document_creator/errors.ex:111
 #, elixir-autogen
 msgid "Missing name"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:110
+#: lib/phoenix_kit_document_creator/errors.ex:112
 #, elixir-autogen
 msgid "Failed to move the Drive file"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:111
+#: lib/phoenix_kit_document_creator/errors.ex:113
 #, elixir-autogen
 msgid "No Google Doc ID set on this record"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:112
+#: lib/phoenix_kit_document_creator/errors.ex:114
 #, elixir-autogen
 msgid "No thumbnail available"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:113
+#: lib/phoenix_kit_document_creator/errors.ex:115
 #, elixir-autogen
 msgid "Not found"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:114
+#: lib/phoenix_kit_document_creator/errors.ex:116
 #, elixir-autogen
 msgid "Failed to export PDF from Drive"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:115
+#: lib/phoenix_kit_document_creator/errors.ex:117
 #, elixir-autogen
 msgid "Failed to sync from Google Drive"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:116
+#: lib/phoenix_kit_document_creator/errors.ex:118
 #, elixir-autogen
 msgid "Templates folder not found"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:117
+#: lib/phoenix_kit_document_creator/errors.ex:119
 #, elixir-autogen
 msgid "Failed to fetch the thumbnail"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:118
+#: lib/phoenix_kit_document_creator/errors.ex:120
 #, elixir-autogen
 msgid "Failed to read the thumbnail link from Drive"
 msgstr ""
@@ -825,7 +825,7 @@ msgstr ""
 msgid "Existing folders found at their current location."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:125
+#: lib/phoenix_kit_document_creator/errors.ex:127
 #, elixir-autogen, elixir-format
 msgid "Failed to insert images into document"
 msgstr ""
@@ -846,17 +846,17 @@ msgstr ""
 msgid "Folders moved to \"%{name}\""
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:123
+#: lib/phoenix_kit_document_creator/errors.ex:125
 #, elixir-autogen, elixir-format
 msgid "Image URL is not publicly accessible or exceeds 2 KB"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:120
+#: lib/phoenix_kit_document_creator/errors.ex:122
 #, elixir-autogen, elixir-format
 msgid "Image media not found"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:126
+#: lib/phoenix_kit_document_creator/errors.ex:128
 #, elixir-autogen, elixir-format
 msgid "Image placeholder tag not found in template"
 msgstr ""
@@ -1315,7 +1315,7 @@ msgstr ""
 msgid "Edit template (categories, groups, language)"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/errors.ex:99
+#: lib/phoenix_kit_document_creator/errors.ex:101
 #, elixir-autogen, elixir-format
 msgid "Failed to read the Google Doc"
 msgstr ""
@@ -1462,4 +1462,14 @@ msgstr ""
 #: lib/phoenix_kit_document_creator/web/components/variable_config_form.ex:104
 #, elixir-autogen, elixir-format
 msgid "Image size"
+msgstr ""
+
+#: lib/phoenix_kit_document_creator/errors.ex:134
+#, elixir-autogen, elixir-format
+msgid "A template's header or footer could not be copied into the document"
+msgstr ""
+
+#: lib/phoenix_kit_document_creator/errors.ex:131
+#, elixir-autogen, elixir-format
+msgid "Google Docs did not create the section's header or footer"
 msgstr ""

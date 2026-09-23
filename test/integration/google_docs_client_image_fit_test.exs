@@ -19,8 +19,9 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
   # A default-style (11pt / 115% lineSpacing) line's height, including the
   # @font_leading (1.22) multiplier `estimate_paragraph_height_pt/1` applies
   # — used both for a preceding body paragraph's reserve and for
-  # `page_fit_trailing_line_pt` (one such line, applied to every fit=page
-  # image — see `page_fit_image_list_inserts/4`'s doc).
+  # `page_fit_trailing_line_pt` (one such line, applied only to the image
+  # that renders last in a fit=page slot — see
+  # `page_fit_image_list_inserts/4`'s doc).
   @default_line_pt 11.0 * 1.15 * 1.22
 
   setup do
@@ -313,6 +314,46 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
 
       expected_avail_h = 769.89 - (72 + 3 * @default_line_pt) - @default_line_pt - 8.0
+      assert_in_delta height, expected_avail_h, 0.01
+    end
+
+    test "a table ahead of the slot counts toward the reserve at its estimated height" do
+      # A 2-row, 1-column table of empty cells: each row is one default line
+      # plus the 5pt default top and bottom cell padding.
+      cell = %{"content" => [para(2, "\n")]}
+
+      table = %{
+        "startIndex" => 1,
+        "endIndex" => 8,
+        "table" => %{
+          "tableRows" => [%{"tableCells" => [cell]}, %{"tableCells" => [cell]}]
+        }
+      }
+
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{
+          "content" => [section_break(0), table, para(8, "{{ images: photos }}\n")]
+        }
+      }
+
+      stub_doc_and_batch(doc)
+
+      slot =
+        image_list_slot(%{
+          "fit" => "page",
+          "media" => [%{"uri" => "u", "width_px" => 100, "height_px" => 1000}]
+        })
+
+      sections = [%{position: 0, variable_values: %{}, image_params: %{"photos" => slot}}]
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, %{0 => {1, 30}})
+
+      [insert] = insert_inline_image_requests()
+      height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
+
+      table_pt = 2 * (@default_line_pt + 10.0)
+      expected_avail_h = 769.89 - (72 + table_pt) - @default_line_pt - 8.0
       assert_in_delta height, expected_avail_h, 0.01
     end
 
@@ -648,6 +689,13 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       end)
 
       :ok
+    end
+
+    test "a non-numeric or negative override falls back to the 8.0 default" do
+      for bad <- ["12", nil, -5] do
+        Application.put_env(:phoenix_kit_document_creator, :page_fit_safety_pt, bad)
+        assert GoogleDocsClient.page_fit_safety_pt() == 8.0
+      end
     end
 
     test "an env override changes the reserve applied to a fit: \"page\" image" do

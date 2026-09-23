@@ -164,6 +164,12 @@ mix gettext.extract --merge priv/gettext
   `:phoenix_kit_document_creator`: `:docs_client` (Drive/Docs client),
   `:integrations_backend`, `:media_module`. Production defaults are the real
   modules.
+- **Host tunable: `:page_fit_safety_pt`.** A number of points under
+  `:phoenix_kit_document_creator` (default `8.0`), subtracted from every
+  `fit: "page"` image's available height on top of the header/footer and
+  preceding-content estimate. Read through
+  `GoogleDocsClient.page_fit_safety_pt/0`; a non-numeric or negative value
+  falls back to the default.
 - **Host hook: `:attachments_parent_folder`.** A `{Mod, :fun}` under
   `:phoenix_kit_document_creator`, resolved by `Attachments.scope_folder/2`
   when the template image picker opens (never in `mount/3`). It is called as

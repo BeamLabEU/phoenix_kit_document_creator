@@ -239,6 +239,54 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
     end
   end
 
+  describe "append_template/3 — template's footer differs but can't be replayed faithfully" do
+    @tag :capture_log
+    test "a page-number (autoText) footer keeps the inherited footer instead of a lossy copy" do
+      page_number_footer = [
+        %{
+          "paragraph" => %{
+            "elements" => [
+              %{"textRun" => %{"content" => "Page "}},
+              %{"autoText" => %{"type" => "PAGE_NUMBER"}},
+              %{"textRun" => %{"content" => "\n"}}
+            ]
+          }
+        }
+      ]
+
+      template_doc = %{
+        "documentStyle" => %{"defaultFooterId" => "kix.tpl_footer"},
+        "footers" => %{"kix.tpl_footer" => %{"content" => page_number_footer}},
+        "body" => %{"content" => [text_paragraph("Body\n")]}
+      }
+
+      current_doc = %{
+        "documentStyle" => %{"defaultFooterId" => "kix.cur_footer"},
+        "footers" => %{"kix.cur_footer" => %{"content" => [text_paragraph("Bye\n")]}},
+        "body" => target_body()
+      }
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template_doc}}
+        "target-id" -> {:ok, %{body: current_doc}}
+      end
+
+      batch_fn = fn "target-id", requests ->
+        send(self(), {:batch, requests})
+        {:ok, %{}}
+      end
+
+      assert {:ok, {11, _}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, [%{insertSectionBreak: %{}} | _]}
+      refute_receive {:batch, _}
+    end
+  end
+
   describe "append_template/3 — a section's own header shadows what its trailing section would otherwise chain-inherit" do
     test "the target's LAST section's own header wins over documentStyle's, even when the template matches documentStyle's" do
       # current_doc already has two sections (as if a prior append already
@@ -1079,7 +1127,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
           {:ok, %{}}
       end
 
-      assert {:error, {:segment_shape_mismatch, expected: 2, actual: 1}} =
+      assert {:error, :segment_shape_mismatch} =
                GoogleDocsClient.append_template("target-id", "template-id",
                  get_fn: get_fn,
                  batch_fn: batch_fn

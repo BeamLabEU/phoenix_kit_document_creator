@@ -1028,8 +1028,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @default_cell_padding_pt 5.0
   @inline_image_padding_pt 5.0
   # One default-style line's worth of the section's terminal paragraph,
-  # applied to every `fit: "page"` image for simplicity — see
-  # `page_fit_image_list_inserts/4`.
+  # subtracted only for the image that renders last in a `fit: "page"`
+  # slot — see `page_fit_image_list_inserts/4`.
   @page_fit_trailing_line_pt @default_paragraph_font_size_pt *
                                (@default_line_spacing_pct / 100.0) * @font_leading
 
@@ -1049,7 +1049,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  # proto3 JSON omits a zero-valued field, so a Dimension explicitly set to
+  # 0 arrives as `%{"unit" => "PT"}` with no `magnitude` — that is 0.0, not
+  # "unset" (a full-bleed margin or zero cell padding must not fall back to
+  # a default). Only an absent Dimension reads as `nil`.
   defp magnitude(%{"magnitude" => m}) when is_number(m), do: m * 1.0
+  defp magnitude(%{"unit" => _}), do: 0.0
   defp magnitude(_), do: nil
 
   @doc """
@@ -1294,8 +1299,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp segment_extent_pt(doc, elements) do
     elements
     |> List.wrap()
-    |> Enum.map(&element_extent_pt(doc, &1))
-    |> Enum.sum()
+    |> Enum.reduce(0.0, &(element_extent_pt(doc, &1) + &2))
   end
 
   defp element_extent_pt(doc, %{"paragraph" => paragraph}),
@@ -2556,8 +2560,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         if template_fp == inherited_fp do
           :ok
         else
-          create_and_replay_segment(kind, ctx, template_content)
+          replay_if_faithful(kind, ctx, template_content)
         end
+    end
+  end
+
+  # A template segment the replay can't rebuild faithfully (see
+  # `SegmentReplay.replayable?/2`) keeps the inherited one rather than
+  # getting a lossy copy — e.g. a page-number footer replayed without its
+  # numbers.
+  defp replay_if_faithful(kind, ctx, template_content) do
+    if SegmentReplay.replayable?(template_content, ctx.inline_objects) do
+      create_and_replay_segment(kind, ctx, template_content)
+    else
+      Logger.warning(
+        "append_template: template #{kind} holds content the Docs API can't " <>
+          "replay (page numbers, a floating or non-cell image, …); the appended " <>
+          "section keeps the #{kind} it inherits"
+      )
+
+      :ok
     end
   end
 
@@ -2567,7 +2589,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     case ctx.batch_fn.(ctx.target_doc_id, [create_request]) do
       {:ok, %{body: %{"replies" => replies}}} ->
         case SegmentReplay.segment_id_from_replies(kind, replies) do
-          nil -> {:error, {:segment_not_created, kind}}
+          nil -> {:error, :segment_not_created}
           segment_id -> replay_segment_content(kind, ctx, segment_id, template_content)
         end
 
@@ -2761,9 +2783,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # as a thin bordered paragraph regardless of what its OWN paragraphStyle
   # says (it typically says nothing — the line comes from the element type,
   # not from a border) — `@rule_border`/forced 6pt `spaceBelow`/4pt
-  # `fontSize` (the run side, see `text_extras/1`), matching
-  # `docs/superpowers/template-header-footer-backup-2026-09-21/house_header_footer.ex`'s
-  # own rule paragraph.
+  # `fontSize` (the run side, see `text_extras/1`), matching the rule
+  # paragraph of the header/footer rebuild script from 2026-09-21.
   @rule_border %{
     "color" => %{
       "color" => %{"rgbColor" => %{"red" => 0.4509804, "green" => 0.4509804, "blue" => 0.4509804}}
@@ -2829,11 +2850,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     %{
       weighted_font_family: Map.get(raw_style, "weightedFontFamily"),
       underline: Map.get(raw_style, "underline"),
-      link: Map.get(raw_style, "link"),
+      link: replayable_link(Map.get(raw_style, "link")),
       baseline_offset: Map.get(raw_style, "baselineOffset"),
       font_size: if(rule?, do: 4.0, else: nil)
     }
   end
+
+  # Only an external URL survives the copy: a `bookmarkId`/`headingId`/
+  # `tabId` link points into the TEMPLATE document and would be rejected (or
+  # dangle) in the target.
+  defp replayable_link(%{"url" => url}) when is_binary(url), do: %{"url" => url}
+  defp replayable_link(_), do: nil
 
   # Builds the reduced skeleton text (Phase 1 of the table-bearing path) and
   # inserts it alone — no style requests yet, see `table_bearing_skeleton_text/2`'s
@@ -3096,15 +3123,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # A mismatch means that bookkeeping (or a live Docs behavior it assumes)
   # was wrong for this specific shape — fail loudly rather than guess at a
   # partial pairing.
-  @spec match_segment_elements([map()], [map()]) ::
-          {:ok, [{map(), map()}]} | {:error, {:segment_shape_mismatch, keyword()}}
   defp match_segment_elements(template_content, segment_content) do
     if length(template_content) == length(segment_content) do
       {:ok, Enum.zip(template_content, segment_content)}
     else
-      {:error,
-       {:segment_shape_mismatch,
-        expected: length(template_content), actual: length(segment_content)}}
+      Logger.error(
+        "append_template: replayed header/footer has #{length(segment_content)} elements, " <>
+          "template has #{length(template_content)}"
+      )
+
+      {:error, :segment_shape_mismatch}
     end
   end
 
@@ -3205,6 +3233,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp table_info_to_entry(segment_table_el, info) do
     %{
       table_start: Map.get(segment_table_el, "startIndex", 0),
+      columns: info.columns,
       cells: extract_table_cells(segment_table_el),
       column_properties: Map.get(info, :column_properties, []),
       cell_styles: info.cell_styles,
@@ -4667,16 +4696,22 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
-  # Host-tunable RESIDUAL safety margin subtracted from a `fit: "page"`
-  # image's available height — on EVERY image of the slot, not just the
-  # section's first. Configure via `config :phoenix_kit_document_creator,
-  # :page_fit_safety_pt, N` (see the `Configuration` section of this
-  # module's `@moduledoc` — the top/bottom of the available area now comes
-  # from `section_boxes/1`'s `body_top_pt`/`body_bottom_pt`, so this only
-  # needs to cover what that estimate can't see).
+  @doc """
+  Host-tunable residual safety margin, in points, subtracted from a
+  `fit: "page"` image's available height — on every image of the slot, not
+  just the section's first. Configure via `config
+  :phoenix_kit_document_creator, :page_fit_safety_pt, N` (see the
+  `Configuration` section of the moduledoc: the top/bottom of the available
+  area comes from `section_boxes/1`'s `body_top_pt`/`body_bottom_pt`, so
+  this only covers what that estimate can't see). A non-numeric or
+  negative value falls back to the default `8.0`.
+  """
   @spec page_fit_safety_pt() :: float()
   def page_fit_safety_pt do
-    Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 8.0) * 1.0
+    case Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 8.0) do
+      pt when is_number(pt) and pt >= 0 -> pt * 1.0
+      _ -> 8.0
+    end
   end
 
   # Same last-first / separator dance as `inline_image_inserts_pt/3`, but
@@ -4761,21 +4796,27 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     {box_w, scaled_h}
   end
 
-  # Sum of estimated heights of every paragraph in `box`'s section that
-  # fully precedes `slot_start_index` (a paragraph containing the slot
-  # itself has `endIndex > slot_start_index` and is excluded). Combined
-  # with `page_fit_safety_pt/0` by the caller — see
-  # `page_fit_image_list_inserts/4`'s doc. See
-  # `estimate_paragraph_height_pt/1` for the per-paragraph estimate.
+  # Sum of estimated heights of every paragraph and table in `box`'s
+  # section that fully precedes `slot_start_index` (a paragraph containing
+  # the slot itself has `endIndex > slot_start_index` and is excluded).
+  # Sized with the same `element_extent_pt/2` the header/footer estimator
+  # uses, so a table or an inline-image paragraph ahead of the slot counts
+  # at its real height rather than as zero / one text line. Combined with
+  # `page_fit_safety_pt/0` by the caller — see
+  # `page_fit_image_list_inserts/4`'s doc.
+  #
+  # Known blind spots (it errs toward overflow): it assumes the section
+  # starts on a fresh page, so a CONTINUOUS section's text above it on the
+  # same page isn't counted, and an earlier image slot in the same section
+  # is measured as its placeholder text, not the image it becomes.
   defp paragraphs_reserve_before_slot(doc, box, slot_start_index) do
     (get_in(doc, ["body", "content"]) || [])
     |> Enum.filter(fn el ->
-      Map.has_key?(el, "paragraph") and
+      (Map.has_key?(el, "paragraph") or Map.has_key?(el, "table")) and
         Map.get(el, "startIndex", 0) >= box.start_index and
         Map.get(el, "endIndex", 0) <= slot_start_index
     end)
-    |> Enum.map(&estimate_paragraph_height_pt/1)
-    |> Enum.sum()
+    |> Enum.reduce(0.0, &(element_extent_pt(doc, &1) + &2))
   end
 
   # (lineCount × fontSize × lineSpacing/100 × @font_leading) + spaceAbove +

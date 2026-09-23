@@ -107,6 +107,31 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientSectionBoxesTest do
       assert box.margin_bottom == 36.0
     end
 
+    test "a zero margin (proto3 drops the magnitude) is 0pt, not the 72pt default" do
+      zero = %{"unit" => "PT"}
+
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{
+          "content" => [
+            section_break(0, %{
+              "marginTop" => zero,
+              "marginBottom" => zero,
+              "marginLeft" => zero,
+              "marginRight" => zero
+            }),
+            %{"startIndex" => 1, "endIndex" => 50, "paragraph" => %{}}
+          ]
+        }
+      }
+
+      [box] = GoogleDocsClient.section_boxes(doc)
+
+      assert_in_delta box.width_pt, 595.28, 0.001
+      assert_in_delta box.height_pt, 841.89, 0.001
+      assert box.margin_top == 0.0
+    end
+
     test "no pageSize → falls back like content_width_pt/1 (468pt width, Letter height 792-144)" do
       doc = %{
         "documentStyle" => %{},

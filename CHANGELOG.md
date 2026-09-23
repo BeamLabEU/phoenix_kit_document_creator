@@ -1,3 +1,38 @@
+## 0.9.10 - 2026-09-23
+
+### Added
+
+- `image_list` slots can fill the rest of their page. A new `fit: "page"`
+  config (a "Fit page" / "Fit width" select in the variable form) scales a
+  single-column slot's images to `min(box width, available height)`, and
+  the available height accounts for the section's header, footer, and the
+  content ahead of the slot. The residual margin can be tuned per host with
+  `config :phoenix_kit_document_creator, :page_fit_safety_pt, 8.0`.
+- New `GoogleDocsClient.section_boxes/1`, `header_extent_pt/2`, and
+  `footer_extent_pt/2`: each section's own page box and estimated
+  header/footer heights.
+- A composed document's appended sections keep their template's own header
+  and footer. When the template's differs from what the section would
+  inherit, a fresh header/footer is created for that section and the
+  template's content (text, rules, tables, cell images) is rebuilt in it.
+  Header/footer placeholders are filled from the section that owns the
+  segment.
+
+### Fixed
+
+- Image slots in a composed document are sized against their own section's
+  width, so images in a landscape section no longer get the portrait width.
+- A header/footer table with more than one row no longer fails the whole
+  compose; each cell's style is addressed at its real row and column.
+- A template header/footer the replay can't rebuild faithfully (page
+  numbers, a floating or non-cell image, a drawing) keeps the inherited one
+  instead of getting a lossy copy, with a warning logged. Only external
+  URL links are copied.
+- A zero margin or cell padding, which the Docs API sends without a
+  magnitude, is read as 0pt rather than falling back to the default.
+- Tables and inline images ahead of a `fit: "page"` slot count at their
+  estimated height.
+
 ## 0.9.9 - 2026-09-23
 
 ### Fixed

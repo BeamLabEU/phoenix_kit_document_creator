@@ -45,7 +45,7 @@ defmodule PhoenixKitDocumentCreator.Web.Components.VariableConfigForm do
     current_separator = if current, do: to_string(current), else: "newline"
 
     current_columns = to_string(config_value(assigns.variable.config, :columns, 1))
-    current_fit = config_value(assigns.variable.config, :fit, "width")
+    current_fit = to_string(config_value(assigns.variable.config, :fit, "width"))
 
     assigns =
       assign(assigns,

@@ -8,9 +8,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
 
   The Docs API has no "copy this header to that document" primitive — a
   template's header/footer is walked and rebuilt from scratch, the same
-  approach proven live 2026-09-21 for the house header/footer
-  (`docs/superpowers/template-header-footer-backup-2026-09-21/house_header_footer.ex`),
-  generalized here into the library: paragraphs (`insertText` + paragraph
+  approach proven live 2026-09-21 by a one-off script that rebuilt the
+  house header/footer (not shipped in this repo), generalized here into the library: paragraphs (`insertText` + paragraph
   style, then text style), tables (`insertTable` + column widths + cell
   style + cell fill), inline images (`insertInlineImage`, source size and
   URI verbatim — no rescale to the target's own column width; the 2026-09-23
@@ -71,6 +70,82 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
     content
     |> List.wrap()
     |> Enum.flat_map(&element_fingerprint(&1, inline_objects))
+  end
+
+  @doc """
+  Whether a header/footer segment's `content` can be rebuilt faithfully by
+  the replay. The replay rebuilds text runs, rule paragraphs, and one-row-
+  or-more tables whose cells hold text or a single inline image. Anything
+  else would be dropped silently or rejected by the API:
+
+    * `autoText` (page numbers / page counts) — the Docs API cannot insert
+      it, so a replayed "Page 1 of 3" footer would come out "Page  of ".
+    * an inline image outside a table cell, a cell with more than one image
+      or an image next to text, or an image with no `contentUri` (drawings,
+      charts) — only an image-only cell's single picture is re-inserted.
+    * positioned (floating) objects, nested tables, and any other element
+      kind (equations, footnote references, …).
+
+  `false` keeps the section on the header/footer it inherits instead of
+  replacing it with a lossy copy.
+  """
+  @spec replayable?([map()], map()) :: boolean()
+  def replayable?(content, inline_objects) when is_map(inline_objects) do
+    content
+    |> List.wrap()
+    |> Enum.all?(&replayable_element?(&1, inline_objects))
+  end
+
+  defp replayable_element?(%{"paragraph" => paragraph}, _inline_objects),
+    do: plain_paragraph?(paragraph, [])
+
+  defp replayable_element?(%{"table" => table}, inline_objects) do
+    table
+    |> Map.get("tableRows", [])
+    |> Enum.flat_map(&Map.get(&1, "tableCells", []))
+    |> Enum.all?(&replayable_cell?(Map.get(&1, "content", []), inline_objects))
+  end
+
+  defp replayable_element?(_other, _inline_objects), do: false
+
+  defp replayable_cell?(content, inline_objects) do
+    paragraphs = Enum.map(content, &Map.get(&1, "paragraph"))
+    elements = Enum.flat_map(paragraphs, &(&1 && Map.get(&1, "elements", [])))
+
+    image_ids =
+      Enum.flat_map(elements, &List.wrap(get_in(&1, ["inlineObjectElement", "inlineObjectId"])))
+
+    text =
+      elements |> Enum.map_join(&(get_in(&1, ["textRun", "content"]) || "")) |> String.trim()
+
+    Enum.all?(paragraphs, &(&1 && plain_paragraph?(&1, ["inlineObjectElement"]))) and
+      case image_ids do
+        [] -> true
+        [id] -> text == "" and image_uri?(inline_objects, id)
+        _ -> false
+      end
+  end
+
+  defp plain_paragraph?(paragraph, extra_kinds) do
+    kinds = ["textRun", "horizontalRule" | extra_kinds]
+
+    not Map.has_key?(paragraph, "positionedObjectIds") and
+      paragraph
+      |> Map.get("elements", [])
+      |> Enum.all?(fn element -> Enum.any?(kinds, &Map.has_key?(element, &1)) end)
+  end
+
+  defp image_uri?(inline_objects, id) do
+    uri =
+      get_in(inline_objects, [
+        id,
+        "inlineObjectProperties",
+        "embeddedObject",
+        "imageProperties",
+        "contentUri"
+      ])
+
+    is_binary(uri) and uri != ""
   end
 
   defp element_fingerprint(%{"paragraph" => paragraph}, inline_objects) do
@@ -366,7 +441,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
 
   `entries` — one map per table, built by the caller from a re-fetched
   document (`GoogleDocsClient.extract_table_cells/1`'s cells matched
-  against the captured template table): `%{table_start, cells,
+  against the captured template table): `%{table_start, columns, cells,
   column_properties, cell_styles, cell_texts, cell_runs, cell_paragraphs,
   cell_image_ids, cell_paragraph_extras, cell_run_extras}`. All the
   `cell_*` lists are row-major and index-aligned with each other (same
@@ -378,9 +453,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
   `{run, extras}` pairs in `extra_paragraph_style_requests/2`'s and
   `extra_text_style_requests/2`'s own shape — a cell's border/font-family/
   underline/link get the same separate-pass treatment as body content.
-  Only a single-row table (`rowIndex: 0`) is supported — every known home
-  header/footer table is one row, and the cell-style request below doesn't
-  vary the row index.
+  `columns` is the table's column count; each row-major `cell_styles`
+  entry is addressed at `{div(i, columns), rem(i, columns)}`, so a
+  multi-row table's second row lands on row 1 rather than on an
+  out-of-range column of row 0.
 
   No `segmentId` yet — wrap the result with `with_segment_id/2`.
   """
@@ -390,7 +466,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
       location = %{"index" => entry.table_start}
 
       G.table_column_width_requests(entry.table_start, entry.column_properties) ++
-        cell_style_requests(location, entry.cell_styles) ++
+        cell_style_requests(location, entry.columns, entry.cell_styles) ++
         cell_fill_and_image_requests(entry, inline_objects)
     end)
   end
@@ -401,13 +477,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
     "dashStyle" => "SOLID"
   }
 
-  defp cell_style_requests(table_start_location, cell_styles) do
+  defp cell_style_requests(table_start_location, columns, cell_styles) do
+    columns = max(columns, 1)
+
     cell_styles
     |> Enum.with_index()
-    |> Enum.map(fn {style, column} -> cell_style_request(table_start_location, column, style) end)
+    |> Enum.map(fn {style, i} ->
+      cell_style_request(table_start_location, div(i, columns), rem(i, columns), style)
+    end)
   end
 
-  defp cell_style_request(table_start_location, column, style) do
+  defp cell_style_request(table_start_location, row, column, style) do
     payload =
       %{
         "borderTop" => @none_border,
@@ -426,7 +506,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
         "tableRange" => %{
           "tableCellLocation" => %{
             "tableStartLocation" => table_start_location,
-            "rowIndex" => 0,
+            "rowIndex" => row,
             "columnIndex" => column
           },
           "rowSpan" => 1,

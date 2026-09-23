@@ -509,11 +509,71 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplayTest do
     end
   end
 
+  describe "replayable?/2" do
+    defp paragraph(elements, extra \\ %{}),
+      do: %{"paragraph" => Map.merge(%{"elements" => elements}, extra)}
+
+    defp text(content), do: %{"textRun" => %{"content" => content}}
+    defp image(id), do: %{"inlineObjectElement" => %{"inlineObjectId" => id}}
+
+    defp one_cell_table(cell_content),
+      do: %{"table" => %{"tableRows" => [%{"tableCells" => [%{"content" => cell_content}]}]}}
+
+    @logo %{
+      "kix.logo" => %{
+        "inlineObjectProperties" => %{
+          "embeddedObject" => %{
+            "imageProperties" => %{"contentUri" => "https://example.test/l.png"}
+          }
+        }
+      }
+    }
+
+    test "text, rule paragraphs, and an image-only table cell replay" do
+      content = [
+        paragraph([text("Reg\n")]),
+        paragraph([%{"horizontalRule" => %{}}, text("\n")]),
+        one_cell_table([paragraph([image("kix.logo"), text("\n")])])
+      ]
+
+      assert SegmentReplay.replayable?(content, @logo)
+    end
+
+    test "page numbers, a paragraph-level image, and a floating object don't" do
+      refute SegmentReplay.replayable?(
+               [paragraph([%{"autoText" => %{"type" => "PAGE_NUMBER"}}, text("\n")])],
+               %{}
+             )
+
+      refute SegmentReplay.replayable?([paragraph([image("kix.logo"), text("\n")])], @logo)
+
+      refute SegmentReplay.replayable?(
+               [paragraph([text("\n")], %{"positionedObjectIds" => ["kix.float"]})],
+               %{}
+             )
+    end
+
+    test "a cell image without a contentUri, next to text, or doubled doesn't" do
+      refute SegmentReplay.replayable?([one_cell_table([paragraph([image("kix.chart")])])], %{})
+
+      refute SegmentReplay.replayable?(
+               [one_cell_table([paragraph([image("kix.logo"), text("Acme\n")])])],
+               @logo
+             )
+
+      refute SegmentReplay.replayable?(
+               [one_cell_table([paragraph([image("kix.logo"), image("kix.logo")])])],
+               @logo
+             )
+    end
+  end
+
   describe "table_fill_requests/2" do
     defp base_entry(overrides) do
       Map.merge(
         %{
           table_start: 10,
+          columns: 2,
           cells: [%{insert_index: 11}, %{insert_index: 13}],
           column_properties: [],
           cell_styles: [
@@ -660,6 +720,41 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplayTest do
                  &1
                )
              )
+    end
+
+    test "a multi-row table's cell styles are addressed row-major, never past the last column" do
+      style = %{
+        content_alignment: nil,
+        padding_top: nil,
+        padding_bottom: nil,
+        padding_left: nil,
+        padding_right: nil
+      }
+
+      empty_paragraph = [%{start_offset: 0, length: 1, style: unset_style(), bullet: nil}]
+
+      entry =
+        base_entry(%{
+          cells: Enum.map([11, 13, 16, 18], &%{insert_index: &1}),
+          cell_styles: List.duplicate(style, 4),
+          cell_texts: List.duplicate("", 4),
+          cell_runs: List.duplicate([], 4),
+          cell_paragraphs: List.duplicate(empty_paragraph, 4),
+          cell_image_ids: List.duplicate(nil, 4),
+          cell_paragraph_extras: List.duplicate([], 4),
+          cell_run_extras: List.duplicate([], 4)
+        })
+
+      locations =
+        [entry]
+        |> SegmentReplay.table_fill_requests(%{})
+        |> Enum.filter(&Map.has_key?(&1, "updateTableCellStyle"))
+        |> Enum.map(fn request ->
+          location = request["updateTableCellStyle"]["tableRange"]["tableCellLocation"]
+          {location["rowIndex"], location["columnIndex"]}
+        end)
+
+      assert locations == [{0, 0}, {0, 1}, {1, 0}, {1, 1}]
     end
 
     test "cell fill/image requests are sorted descending by index across the table" do
