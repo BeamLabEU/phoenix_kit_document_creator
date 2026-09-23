@@ -221,11 +221,14 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       width = get_in(insert, [:insertInlineImage, :objectSize, :width, :magnitude])
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
 
-      # box_w = 451.28pt; avail_h = 697.89 - 130 (default safety, no preceding
-      # paragraphs) = 567.89pt. scale = min(451.28/1600, 567.89/900) → width wins.
+      # box_w = 451.28pt; no header/footer content → body_top_pt = marginTop
+      # (72), body_bottom_pt = pageH - marginBottom (841.89 - 72 = 769.89).
+      # avail_h = 769.89 - 72 - 12.3 (trailing line) - 8.0 (default safety,
+      # no preceding paragraphs) = 677.59pt.
+      # scale = min(451.28/1600, 677.59/900) → width wins.
       assert_in_delta width, 451.28, 0.01
       assert_in_delta height, 900 * (451.28 / 1600), 0.01
-      assert height < 567.89
+      assert height < 677.59
     end
 
     test "a vertical image is bound by height" do
@@ -253,7 +256,8 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       [insert] = insert_inline_image_requests()
       width = get_in(insert, [:insertInlineImage, :objectSize, :width, :magnitude])
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
-      avail_h = 697.89 - 130.0
+      # See the horizontal-image test above for the avail_h derivation.
+      avail_h = 769.89 - 72 - 12.3 - 8.0
 
       assert_in_delta height, avail_h, 0.01
       assert width < 451.28
@@ -261,7 +265,11 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
 
     test "reserve is the estimated height of the section's 3 preceding paragraphs, plus the safety margin" do
       # 3 empty (default-style) paragraphs before the slot: each contributes
-      # 11pt * 1.15 = 12.65pt → 37.95pt total, plus the default safety margin (130pt).
+      # 11pt * 1.15 = 12.65pt → 37.95pt total. No header content, so
+      # body_top_pt = marginTop (72); the paragraphs push the first image's
+      # start to marginTop + 37.95 = 109.95 (> body_top_pt, so it wins the
+      # `max`). avail_h = body_bottom_pt (769.89) - 109.95 - 12.3 (trailing
+      # line) - 8.0 (default safety).
       doc = %{
         "documentStyle" => doc_style(),
         "body" => %{
@@ -296,7 +304,7 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       [insert] = insert_inline_image_requests()
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
 
-      expected_avail_h = 697.89 - (3 * 12.65 + 130.0)
+      expected_avail_h = 769.89 - (72 + 3 * 12.65) - 12.3 - 8.0
       assert_in_delta height, expected_avail_h, 0.01
     end
 
@@ -346,14 +354,67 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       first_height = get_in(by_uri["a"], [:insertInlineImage, :objectSize, :height, :magnitude])
       second_height = get_in(by_uri["b"], [:insertInlineImage, :objectSize, :height, :magnitude])
 
-      # First (uri "a"): box_h - safety - paragraphs_reserve.
-      expected_first = 697.89 - (130.0 + 12.65)
-      # Second (uri "b"): box_h - safety only — NOT the full box height.
-      expected_second = 697.89 - 130.0
+      # First (uri "a", first rendered): body_bottom_pt - start - trailing -
+      # safety, start = max(body_top_pt=72, marginTop + reserve=72+12.65=84.65).
+      expected_first = 769.89 - 84.65 - 12.3 - 8.0
+      # Second (uri "b"): starts at body_top_pt (72) — NOT the full box height.
+      expected_second = 769.89 - 72 - 12.3 - 8.0
 
       assert_in_delta first_height, expected_first, 0.01
       assert_in_delta second_height, expected_second, 0.01
       assert second_height < 697.89
+    end
+
+    test "a header taller than its margin wins the max() against a small paragraphs-reserve — not their sum" do
+      # Header extent: 6 default-style lines (6 * 12.65 = 75.9) + marginHeader
+      # (36, default) = 111.9pt — comfortably over marginTop + the one
+      # preceding body paragraph's reserve (72 + 12.65 = 84.65). body_top_pt
+      # (111.9) should win the `max`. A `max` → `+` mutation on the first
+      # image's start would SUM body_top_pt and (marginTop + reserve) instead
+      # of taking the larger one, badly undersizing avail_h — this test fails
+      # under that mutation (verified by hand before committing).
+      header_lines =
+        for _ <- 1..6,
+            do: %{"paragraph" => %{"elements" => [%{"textRun" => %{"content" => "\n"}}]}}
+
+      doc = %{
+        "documentStyle" => Map.merge(doc_style(), %{"defaultHeaderId" => "h1"}),
+        "headers" => %{"h1" => %{"content" => header_lines}},
+        "body" => %{
+          "content" => [
+            section_break(0),
+            para(1, "\n"),
+            para(2, "{{ images: photos }}\n")
+          ]
+        }
+      }
+
+      stub_doc_and_batch(doc)
+
+      slot =
+        image_list_slot(%{
+          "fit" => "page",
+          "media" => [%{"uri" => "u", "width_px" => 100, "height_px" => 1000}]
+        })
+
+      sections = [
+        %{position: 0, variable_values: %{}, image_params: %{"photos" => slot}}
+      ]
+
+      ranges = %{0 => {1, 24}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, ranges)
+
+      [insert] = insert_inline_image_requests()
+      height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
+
+      # body_top_pt = max(72, 36 + 6*12.65) = max(72, 111.9) = 111.9.
+      # marginTop + paragraphs_reserve = 72 + 12.65 = 84.65 — smaller, loses
+      # the max(). start = 111.9 (NOT 111.9 + 84.65 = 196.55).
+      body_top_pt = 36.0 + 6 * 12.65
+      expected_avail_h = 769.89 - body_top_pt - 12.3 - 8.0
+
+      assert_in_delta height, expected_avail_h, 0.01
     end
   end
 
@@ -548,8 +609,9 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       [insert] = insert_inline_image_requests()
       height = get_in(insert, [:insertInlineImage, :objectSize, :height, :magnitude])
 
-      # avail_h = 697.89 - 200.0 (overridden safety, no preceding paragraphs).
-      assert_in_delta height, 697.89 - 200.0, 0.01
+      # avail_h = 769.89 (body_bottom_pt) - 72 (start) - 12.3 (trailing line)
+      # - 200.0 (overridden safety, no preceding paragraphs).
+      assert_in_delta height, 769.89 - 72 - 12.3 - 200.0, 0.01
     end
   end
 end

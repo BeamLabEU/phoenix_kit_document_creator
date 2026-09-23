@@ -31,39 +31,58 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   ## Configuration
 
-  - `:page_fit_safety_pt` (float, default `130.0`) — safety margin
-    subtracted from a `fit: "page"` image slot's available height on every
-    page it occupies. See `page_fit_safety_pt/0`.
+  - `:page_fit_safety_pt` (float, default `8.0`) — small residual safety
+    margin subtracted from a `fit: "page"` image slot's available height on
+    every page it occupies, on top of the header/footer-derived body box.
+    See `page_fit_safety_pt/0`.
 
-        config :phoenix_kit_document_creator, :page_fit_safety_pt, 130.0
+        config :phoenix_kit_document_creator, :page_fit_safety_pt, 8.0
+
+    Through 2026-09-22 this was a single flat constant (`130pt`) standing in
+    for the whole header/footer overhang, calibrated live against one
+    template. As of 2026-09-23 the top/bottom of the body is instead
+    *computed* from each section's own header/footer content
+    (`header_extent_pt/2`, `footer_extent_pt/2`, folded into `section_boxes/1`
+    as `body_top_pt`/`body_bottom_pt`) — see `page_fit_image_list_inserts/4`.
+    `page_fit_safety_pt/0` now only covers what that estimate can't see
+    (line-height rounding, the little Docs adds before flowing an image vs.
+    plain text) — hence the much smaller default.
 
     Calibrated live 2026-09-22 against Andi's landscape "Joonised
     (tootmine)" template (A4 landscape, 72pt margins, a house header — 1x2
     table with a logo — and a house footer — a rule + a details table —
-    both taller than their `marginHeader`/`marginFooter` of 36pt):
+    both taller than their `marginHeader`/`marginFooter` of 36pt) — these are
+    the measurements the header/footer content estimator (`segment_extent_pt/2`
+    and friends) is built to reproduce from `doc["headers"]`/`doc["footers"]`
+    alone, without a live render:
 
     - text on a fresh page starts at 72pt (`marginTop`), but Docs starts an
       inline image's paragraph at ~111pt — it lays the image out under the
       header, which extends past its own margin (36pt + ~75pt of content);
-      plain text is NOT pushed down the same way.
+      plain text is NOT pushed down the same way. `header_extent_pt/2` on
+      this house header (a 1x2 table with a ~46pt-tall logo image) estimates
+      ≈77pt against the ≈75pt measured live — a few points over, never under.
     - the footer extends ~68pt past its own margin: the last line of text
       that still fits lands around y≈448pt against a nominal `marginBottom`
-      of 72pt (523pt).
+      of 72pt (523pt). `footer_extent_pt/2` on the house footer (a rule plus
+      a 2-column details table) estimates ≈67-68pt from its content alone —
+      in line with that measurement.
     - the section's terminal paragraph (present after the last image, when
-      the image slot ends its section) costs one more line, ~12pt.
-    - total for an image sized to its own page: `451 - (39 + 68 + 12) ≈
-      332pt` of usable height out of ~451pt — a `126pt` safety margin
-      matched that live (2 and 3-image slots: one image per page, the
-      first sitting under the header, no blank pages); `130pt` is that
-      with a 4pt margin of error. At `60pt` and `100pt` the section's
-      trailing paragraph was pushed onto its own blank page; at the
-      original `24pt` guess the second image overran the footer.
-    - none of this reaches the first image's OWN reserve (the paragraphs
-      immediately before it): its real start is ~117pt (after 3 lines of
-      text), so `paragraphs_reserve_before_slot/3` + this safety margin
-      overshoot it by ~33pt there — a known v1 simplicity cost, not
-      something this constant alone can fix (it would need a per-position,
-      not per-document, correction).
+      the image slot ends its section) costs one more line, ~12.3pt — this
+      is `page_fit_image_list_inserts/4`'s `trailing_line_pt`, applied to
+      every image for simplicity rather than only the section's last one.
+    - `header_extent_pt/2` / `footer_extent_pt/2` estimate a segment's
+      content the same way `estimate_paragraph_height_pt/1` estimates a body
+      paragraph (`fontSize × lineSpacing/100 + spaceAbove + spaceBelow`, an
+      empty paragraph counting as one line), plus: a table is the sum of its
+      rows, a row is the tallest of its cells, and a cell is the sum of its
+      paragraphs' heights plus its own `tableCellStyle` padding (falling
+      back to 5pt top/bottom — the Docs default when a table's cells don't
+      set it explicitly, as seen on the house header's own cells) — and a
+      paragraph holding an inline image is sized from that image's own
+      `inlineObjects[id].embeddedObject.size.height` plus its own
+      `marginTop`/`marginBottom` (falling back to 5pt each) instead of the
+      font formula, which would drastically undersize it.
   """
 
   require Logger
@@ -971,9 +990,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @default_content_width_pt 468.0
   @default_content_height_pt 648.0
   @default_margin_pt 72.0
+  @default_header_footer_margin_pt 36.0
   @max_columns 4
   @default_paragraph_font_size_pt 11.0
   @default_line_spacing_pct 115.0
+  # Fallback padding used by the header/footer content estimator
+  # (`segment_extent_pt/2` and friends) when the API doesn't give us a more
+  # specific number — see the moduledoc's `Configuration` section.
+  @default_cell_padding_pt 5.0
+  @inline_image_padding_pt 5.0
+  # One line's worth of the section's terminal paragraph, applied to every
+  # `fit: "page"` image for simplicity — see `page_fit_image_list_inserts/4`.
+  @page_fit_trailing_line_pt 12.3
 
   @doc """
   Page content width in points = pageSize.width − marginLeft − marginRight.
@@ -1017,6 +1045,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   falls back to the same constants `content_width_pt/1` uses — 468pt width
   (documented as "Letter, 1in margins"), and 648pt height (Letter's 792pt
   minus the same 144pt of margin).
+
+  `body_top_pt` / `body_bottom_pt` are the top/bottom of the area a `fit:
+  "page"` image can actually use — computed from the section's header/footer
+  *content* (`header_extent_pt/2`, `footer_extent_pt/2`), not just its
+  `marginTop`/`marginBottom`: `body_top_pt = max(margin_top, margin_header +
+  header_extent)`, `body_bottom_pt = page_h_effective - max(margin_bottom,
+  margin_footer + footer_extent)`. A header/footer taller than its own
+  margin pushes the body down/up further than the nominal margin would; one
+  no taller than its margin leaves the nominal margin as-is. See the
+  moduledoc's `Configuration` section for the live measurement this
+  reproduces.
   """
   @spec section_boxes(map()) :: [
           %{
@@ -1025,7 +1064,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
             width_pt: float(),
             height_pt: float(),
             margin_top: float(),
-            margin_bottom: float()
+            margin_bottom: float(),
+            body_top_pt: float(),
+            body_bottom_pt: float()
           }
         ]
   def section_boxes(doc) when is_map(doc) do
@@ -1041,16 +1082,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
     case breaks do
       [] ->
-        [build_section_box(%{}, document_style, 0, doc_end)]
+        [build_section_box(doc, %{}, document_style, 0, doc_end)]
 
       breaks ->
         breaks
         |> Enum.with_index()
-        |> Enum.map(&section_box_for_break(&1, breaks, document_style, doc_end))
+        |> Enum.map(&section_box_for_break(&1, breaks, doc, document_style, doc_end))
     end
   end
 
-  defp section_box_for_break({sb, i}, breaks, document_style, doc_end) do
+  defp section_box_for_break({sb, i}, breaks, doc, document_style, doc_end) do
     style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
     start_index = Map.get(sb, "startIndex", 0)
 
@@ -1060,10 +1101,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         next -> Map.get(next, "startIndex", doc_end)
       end
 
-    build_section_box(style, document_style, start_index, end_index)
+    build_section_box(doc, style, document_style, start_index, end_index)
   end
 
-  defp build_section_box(section_style, document_style, start_index, end_index) do
+  defp build_section_box(doc, section_style, document_style, start_index, end_index) do
     flip = resolve_flip(section_style, document_style)
     page_size = Map.get(document_style, "pageSize") || %{}
     raw_w = magnitude(Map.get(page_size, "width"))
@@ -1074,6 +1115,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     margin_bottom = section_margin(section_style, document_style, "marginBottom")
     margin_left = section_margin(section_style, document_style, "marginLeft")
     margin_right = section_margin(section_style, document_style, "marginRight")
+    margin_header = header_footer_margin(section_style, document_style, "marginHeader")
+    margin_footer = header_footer_margin(section_style, document_style, "marginFooter")
 
     width_pt =
       if is_number(page_w),
@@ -1085,19 +1128,142 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         do: page_h - margin_top - margin_bottom,
         else: @default_content_height_pt
 
+    # Same fallback `content_width_pt/1`'s sibling above uses: when the API
+    # gives us no `pageSize` at all, assume the page is exactly margins +
+    # the default content box, so body_bottom_pt lines up with height_pt.
+    effective_page_h =
+      if is_number(page_h),
+        do: page_h,
+        else: margin_top + margin_bottom + @default_content_height_pt
+
+    header_extent = header_extent_pt(doc, section_style)
+    footer_extent = footer_extent_pt(doc, section_style)
+
     %{
       start_index: start_index,
       end_index: end_index,
       width_pt: width_pt,
       height_pt: height_pt,
       margin_top: margin_top,
-      margin_bottom: margin_bottom
+      margin_bottom: margin_bottom,
+      body_top_pt: max(margin_top, margin_header + header_extent),
+      body_bottom_pt: effective_page_h - max(margin_bottom, margin_footer + footer_extent)
     }
   end
 
   defp section_margin(section_style, document_style, field) do
     magnitude(Map.get(section_style, field) || Map.get(document_style, field)) ||
       @default_margin_pt
+  end
+
+  defp header_footer_margin(section_style, document_style, field) do
+    magnitude(Map.get(section_style, field) || Map.get(document_style, field)) ||
+      @default_header_footer_margin_pt
+  end
+
+  @doc """
+  Estimated height in points of the header that resolves for `section_style`
+  (its own `defaultHeaderId`, else the document's — same resolution Docs
+  itself uses for inheritance) — `0.0` when neither has one. See the
+  moduledoc's `Configuration` section for the estimator's rules and the live
+  measurement it's calibrated against.
+  """
+  @spec header_extent_pt(map(), map()) :: float()
+  def header_extent_pt(doc, section_style) when is_map(doc) and is_map(section_style) do
+    header_footer_extent_pt(doc, section_style, "headers", "defaultHeaderId")
+  end
+
+  @doc """
+  Same as `header_extent_pt/2`, for the footer that resolves for
+  `section_style`.
+  """
+  @spec footer_extent_pt(map(), map()) :: float()
+  def footer_extent_pt(doc, section_style) when is_map(doc) and is_map(section_style) do
+    header_footer_extent_pt(doc, section_style, "footers", "defaultFooterId")
+  end
+
+  defp header_footer_extent_pt(doc, section_style, container_key, id_key) do
+    document_style = Map.get(doc, "documentStyle") || %{}
+    id = Map.get(section_style, id_key) || Map.get(document_style, id_key)
+
+    case id && get_in(doc, [container_key, id, "content"]) do
+      nil -> 0.0
+      content -> segment_extent_pt(doc, content)
+    end
+  end
+
+  # Sum of estimated heights of the top-level structural elements
+  # (paragraphs, tables) of a header/footer segment, or of a table cell's
+  # own `content`.
+  defp segment_extent_pt(doc, elements) do
+    elements
+    |> List.wrap()
+    |> Enum.map(&element_extent_pt(doc, &1))
+    |> Enum.sum()
+  end
+
+  defp element_extent_pt(doc, %{"paragraph" => paragraph}),
+    do: paragraph_extent_pt(doc, paragraph)
+
+  defp element_extent_pt(doc, %{"table" => table}), do: table_extent_pt(doc, table)
+  defp element_extent_pt(_doc, _), do: 0.0
+
+  # A paragraph holding an inline image is sized from the image's own
+  # height (plus its own embeddedObject margins) rather than the font-size
+  # formula, which would badly undersize a header/footer logo row.
+  defp paragraph_extent_pt(doc, paragraph) do
+    image_heights =
+      paragraph
+      |> Map.get("elements", [])
+      |> Enum.map(&inline_image_extent_pt(doc, &1))
+      |> Enum.reject(&is_nil/1)
+
+    case image_heights do
+      [] -> estimate_paragraph_height_pt(%{"paragraph" => paragraph})
+      heights -> Enum.sum(heights)
+    end
+  end
+
+  defp inline_image_extent_pt(doc, %{"inlineObjectElement" => %{"inlineObjectId" => id}}) do
+    embedded =
+      get_in(doc, ["inlineObjects", id, "inlineObjectProperties", "embeddedObject"]) || %{}
+
+    case magnitude(get_in(embedded, ["size", "height"])) do
+      nil ->
+        nil
+
+      height ->
+        height + inline_image_padding(embedded, "marginTop") +
+          inline_image_padding(embedded, "marginBottom")
+    end
+  end
+
+  defp inline_image_extent_pt(_doc, _), do: nil
+
+  defp inline_image_padding(embedded, field) do
+    magnitude(Map.get(embedded, field)) || @inline_image_padding_pt
+  end
+
+  defp table_extent_pt(doc, table) do
+    table
+    |> Map.get("tableRows", [])
+    |> Enum.map(&table_row_extent_pt(doc, &1))
+    |> Enum.sum()
+  end
+
+  defp table_row_extent_pt(doc, row) do
+    case row |> Map.get("tableCells", []) |> Enum.map(&table_cell_extent_pt(doc, &1)) do
+      [] -> 0.0
+      heights -> Enum.max(heights)
+    end
+  end
+
+  defp table_cell_extent_pt(doc, cell) do
+    style = Map.get(cell, "tableCellStyle") || %{}
+    padding_top = magnitude(Map.get(style, "paddingTop")) || @default_cell_padding_pt
+    padding_bottom = magnitude(Map.get(style, "paddingBottom")) || @default_cell_padding_pt
+
+    segment_extent_pt(doc, Map.get(cell, "content", [])) + padding_top + padding_bottom
   end
 
   # Section value if the key is present (even `false`), else the document's,
@@ -3467,27 +3633,35 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
-  # Host-tunable safety margin subtracted from a `fit: "page"` image's
-  # available height — on EVERY image of the slot, not just the section's
-  # first. Configure via `config :phoenix_kit_document_creator,
+  # Host-tunable RESIDUAL safety margin subtracted from a `fit: "page"`
+  # image's available height — on EVERY image of the slot, not just the
+  # section's first. Configure via `config :phoenix_kit_document_creator,
   # :page_fit_safety_pt, N` (see the `Configuration` section of this
-  # module's `@moduledoc` for the live measurement the `130.0` default is
-  # calibrated against).
+  # module's `@moduledoc` — the top/bottom of the available area now comes
+  # from `section_boxes/1`'s `body_top_pt`/`body_bottom_pt`, so this only
+  # needs to cover what that estimate can't see).
   @spec page_fit_safety_pt() :: float()
   def page_fit_safety_pt do
-    Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 130.0) * 1.0
+    Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 8.0) * 1.0
   end
 
   # Same last-first / separator dance as `inline_image_inserts_pt/3`, but
   # sizes each image to fill the section's remaining page (`fit: "page"`).
-  # `page_fit_safety_pt/0` is subtracted from EVERY image's available
-  # height (see its doc); the media item that ends up FIRST in the
-  # rendered document (the last one processed here, since inserts land
-  # ahead of what's already there — see `inline_image_inserts_pt/3`'s
-  # sibling logic) additionally loses `paragraphs_reserve_pt`, the
-  # estimated height of the paragraphs the section's own text puts ahead
-  # of it. Every image after it starts a fresh page (the previous one
-  # filled its own), so only the safety margin applies.
+  # Available height is `body_bottom_pt - start - trailing_line -
+  # page_fit_safety_pt/0` (see the moduledoc for how `body_top_pt` /
+  # `body_bottom_pt` are derived from the section's header/footer content).
+  # `trailing_line_pt` (one line of the section's terminal paragraph) is
+  # applied to every image, not just the section's last, for simplicity.
+  # The media item that ends up FIRST in the rendered document (the last one
+  # processed here, since inserts land ahead of what's already there — see
+  # `inline_image_inserts_pt/3`'s sibling logic) starts at
+  # `max(body_top_pt, margin_top + paragraphs_reserve_pt)` — the estimated
+  # height of the section's own text ahead of it, when that pushes further
+  # down than the header already does; text is not pushed down by the
+  # header the way an image is (see `paragraphs_reserve_before_slot/3`'s
+  # doc), so the two reserves are combined with `max`, not summed. Every
+  # image after it starts a fresh page (the previous one filled its own), so
+  # it simply starts at `body_top_pt`.
   defp page_fit_image_list_inserts(fill, index, box, paragraphs_reserve_pt) do
     %{media: media, separator: sep} = fill
     reversed = Enum.reverse(media)
@@ -3497,8 +3671,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     reversed
     |> Enum.with_index()
     |> Enum.flat_map(fn {m, i} ->
-      reserve = safety_pt + if(i == last_idx, do: paragraphs_reserve_pt, else: 0.0)
-      avail_h = max(box.height_pt - reserve, 0.0)
+      start_pt =
+        if i == last_idx do
+          max(box.body_top_pt, box.margin_top + paragraphs_reserve_pt)
+        else
+          box.body_top_pt
+        end
+
+      avail_h = max(box.body_bottom_pt - start_pt - @page_fit_trailing_line_pt - safety_pt, 0.0)
       img = page_fit_insert(m, index, box.width_pt, avail_h)
       if i < last_idx, do: [img, separator_request(sep, index)], else: [img]
     end)

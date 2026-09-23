@@ -178,4 +178,100 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientSectionBoxesTest do
       assert box.width_pt == 468.0
     end
   end
+
+  describe "section_boxes/1 — body_top_pt / body_bottom_pt" do
+    defp header_paragraph(text) do
+      %{"paragraph" => %{"elements" => [%{"textRun" => %{"content" => text}}]}}
+    end
+
+    test "no header/footer content: body_top/bottom equal the nominal margins" do
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{
+          "content" => [
+            section_break(0),
+            %{"startIndex" => 1, "endIndex" => 50, "paragraph" => %{}}
+          ]
+        }
+      }
+
+      [box] = GoogleDocsClient.section_boxes(doc)
+
+      assert box.body_top_pt == 72.0
+      assert_in_delta box.body_bottom_pt, 841.89 - 72.0, 0.001
+    end
+
+    test "a header/footer shorter than its own margin: body_top/bottom still equal the margins" do
+      doc = %{
+        "documentStyle" =>
+          Map.merge(doc_style(), %{
+            "defaultHeaderId" => "h1",
+            "defaultFooterId" => "f1"
+          }),
+        "headers" => %{"h1" => %{"content" => [header_paragraph("\n")]}},
+        "footers" => %{"f1" => %{"content" => [header_paragraph("\n")]}},
+        "body" => %{
+          "content" => [
+            section_break(0),
+            %{"startIndex" => 1, "endIndex" => 50, "paragraph" => %{}}
+          ]
+        }
+      }
+
+      [box] = GoogleDocsClient.section_boxes(doc)
+
+      # header/footer extent (12.65pt, one default-style line) + marginHeader/
+      # Footer (36pt default) = 48.65pt, well under marginTop/Bottom (72pt) —
+      # the nominal margin wins the `max`.
+      assert box.body_top_pt == 72.0
+      assert_in_delta box.body_bottom_pt, 841.89 - 72.0, 0.001
+    end
+
+    test "a header/footer taller than its own margin pushes the body in" do
+      tall_content = [header_paragraph("one"), header_paragraph("two"), header_paragraph("three")]
+
+      doc = %{
+        "documentStyle" =>
+          Map.merge(doc_style(), %{
+            "defaultHeaderId" => "h1",
+            "defaultFooterId" => "f1"
+          }),
+        "headers" => %{"h1" => %{"content" => tall_content}},
+        "footers" => %{"f1" => %{"content" => tall_content}},
+        "body" => %{
+          "content" => [
+            section_break(0),
+            %{"startIndex" => 1, "endIndex" => 50, "paragraph" => %{}}
+          ]
+        }
+      }
+
+      [box] = GoogleDocsClient.section_boxes(doc)
+
+      # 3 default-style lines = 3 * 12.65 = 37.95pt; marginHeader/Footer (36) +
+      # 37.95 = 73.95pt — just over the nominal 72pt margin, so the
+      # header/footer content wins the `max`.
+      assert_in_delta box.body_top_pt, 36.0 + 37.95, 0.001
+      assert_in_delta box.body_bottom_pt, 841.89 - (36.0 + 37.95), 0.001
+    end
+
+    test "section-level header/footer margins are used when the section overrides them" do
+      doc = %{
+        "documentStyle" => Map.merge(doc_style(), %{"defaultHeaderId" => "h1"}),
+        "headers" => %{"h1" => %{"content" => [header_paragraph("\n")]}},
+        "body" => %{
+          "content" => [
+            section_break(0, %{"marginHeader" => %{"magnitude" => 0.0, "unit" => "PT"}}),
+            %{"startIndex" => 1, "endIndex" => 50, "paragraph" => %{}}
+          ]
+        }
+      }
+
+      [box] = GoogleDocsClient.section_boxes(doc)
+
+      # marginHeader override (0) + header extent (12.65) = 12.65, under
+      # marginTop (72) — nominal margin still wins.
+      assert box.body_top_pt == 72.0
+    end
+  end
 end
