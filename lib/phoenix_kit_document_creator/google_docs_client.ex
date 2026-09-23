@@ -112,6 +112,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   alias PhoenixKit.Settings
   alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
+  alias PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay
 
   @folder_settings_key "document_creator_folders"
   @settings_key "document_creator_settings"
@@ -1112,13 +1113,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         ]
   def section_boxes(doc) when is_map(doc) do
     document_style = Map.get(doc, "documentStyle") || %{}
-
-    breaks =
-      doc
-      |> get_in(["body", "content"])
-      |> List.wrap()
-      |> Enum.filter(&Map.has_key?(&1, "sectionBreak"))
-
+    breaks = section_breaks(doc)
     doc_end = document_end_index(doc)
 
     case breaks do
@@ -1126,35 +1121,60 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         [build_section_box(doc, %{}, document_style, 0, doc_end)]
 
       breaks ->
-        {boxes, _last_header_footer_ids} =
-          breaks
-          |> Enum.with_index()
-          |> Enum.map_reduce({nil, nil}, fn indexed_break, prev_header_footer_ids ->
-            section_box_for_break(
-              indexed_break,
-              breaks,
-              doc,
-              document_style,
-              doc_end,
-              prev_header_footer_ids
-            )
-          end)
+        ids = header_footer_id_chain(breaks)
 
-        boxes
+        breaks
+        |> Enum.with_index()
+        |> Enum.zip(ids)
+        |> Enum.map(fn {indexed_break, {header_id, footer_id}} ->
+          section_box_for_break(
+            indexed_break,
+            breaks,
+            doc,
+            document_style,
+            doc_end,
+            header_id,
+            footer_id
+          )
+        end)
     end
   end
 
-  # Builds one section's box and returns `{box, {header_id, footer_id}}` —
-  # the resolved header_id/footer_id feed the next section's inheritance
-  # (see `section_boxes/1`'s doc for the resolution rule).
-  defp section_box_for_break(
-         {sb, i},
-         breaks,
-         doc,
-         document_style,
-         doc_end,
-         {prev_header_id, prev_footer_id}
-       ) do
+  # Every `sectionBreak` StructuralElement in a document's body, in order.
+  # Shared by `section_boxes/1`, `header_footer_id_chain/1`'s callers, and
+  # `section_break_style/3` — all three need the same list to walk.
+  defp section_breaks(doc) do
+    doc
+    |> get_in(["body", "content"])
+    |> List.wrap()
+    |> Enum.filter(&Map.has_key?(&1, "sectionBreak"))
+  end
+
+  # Resolves each break's `{header_id, footer_id}` in document order: own
+  # explicit id, else the previous break's (already-resolved) id, else
+  # `nil` — deliberately NOT `documentStyle`'s id here (see
+  # `effective_trailing_header_footer/1`'s doc for why its caller adds that
+  # fallback itself instead). Per the Docs API reference: "If unset, the
+  # value inherits from the previous SectionBreak's SectionStyle. If the
+  # value is unset in the first SectionBreak, it inherits from
+  # DocumentStyle's defaultHeaderId."
+  defp header_footer_id_chain(breaks) do
+    {chain, _last} =
+      Enum.map_reduce(breaks, {nil, nil}, fn sb, {prev_header_id, prev_footer_id} ->
+        style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
+        header_id = Map.get(style, "defaultHeaderId") || prev_header_id
+        footer_id = Map.get(style, "defaultFooterId") || prev_footer_id
+        {{header_id, footer_id}, {header_id, footer_id}}
+      end)
+
+    chain
+  end
+
+  # Builds one section's box from its ALREADY-RESOLVED header_id/footer_id
+  # (see `section_boxes/1`'s doc for the resolution rule) — this function
+  # itself doesn't walk the chain, `header_footer_id_chain/1` does that once
+  # for every break up front.
+  defp section_box_for_break({sb, i}, breaks, doc, document_style, doc_end, header_id, footer_id) do
     style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
     start_index = Map.get(sb, "startIndex", 0)
 
@@ -1164,17 +1184,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         next -> Map.get(next, "startIndex", doc_end)
       end
 
-    header_id = Map.get(style, "defaultHeaderId") || prev_header_id
-    footer_id = Map.get(style, "defaultFooterId") || prev_footer_id
-
     effective_style =
       style
       |> put_resolved_id("defaultHeaderId", header_id)
       |> put_resolved_id("defaultFooterId", footer_id)
 
-    box = build_section_box(doc, effective_style, document_style, start_index, end_index)
-
-    {box, {header_id, footer_id}}
+    build_section_box(doc, effective_style, document_style, start_index, end_index)
   end
 
   defp put_resolved_id(style, _key, nil), do: style
@@ -2258,6 +2273,66 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   restored — `insertTable` creates a bare table beyond the column widths
   above. Nested tables (a table inside a table cell) are not supported.
 
+  After the section is in place, it gets its OWN header/footer when the
+  template has one and it would otherwise look different from what the
+  section inherits: `SectionStyle.defaultHeaderId`/`defaultFooterId` are
+  read-only and inherit from the PREVIOUS section (the very first section
+  inherits from `documentStyle`) — there is no request to point a section at
+  an *existing* header/footer, only `createHeader`/`createFooter` for a
+  brand new, empty one. So a template's own header/footer (`documentStyle`)
+  is compared, via `SegmentReplay.fingerprint/2`, against the header/footer
+  the new section would inherit (the target's own trailing section, walked
+  the same read-only-inheritance way); equal (or the template has none) —
+  nothing happens, matching every append before this; different — a fresh
+  segment is created via `SegmentReplay.create_segment_request/2`
+  (`sectionBreakLocation` pointing at this section's own break, `content_start
+  - 1`) and the template's segment content is replayed into it
+  (`SegmentReplay.skeleton_requests/3`, then, if it has tables,
+  `SegmentReplay.table_fill_requests/2` after a re-fetch — the same
+  marker/skeleton/fill shape `finish_append_template/6` uses for the body,
+  scoped to the new segment via `SegmentReplay.with_segment_id/2`). A
+  replay failure fails the append loudly, same as a body table mismatch.
+
+  Fidelity beyond the shared marker/skeleton/fill shape (live-verified
+  2026-09-23 against a real template whose element count came back wrong,
+  whose border/font-family/link were silently dropped, and whose paragraph/
+  table deletes the API rejected outright twice over — none fixed by
+  widening the shared, narrow body builders — see
+  `SegmentReplay.extra_paragraph_style_requests/2`'s doc):
+
+    * a fresh segment starts with one empty paragraph, and the Docs API
+      refuses to delete a segment's own terminal newline ("The range cannot
+      include the newline character at the end of the segment"). When the
+      template has no tables, its last plain paragraph's own trailing
+      newline is simply never inserted — the pre-existing one serves as its
+      terminator, every style request still targeting that paragraph's
+      original (un-stripped) offset (`replay_paragraphs_only/6`,
+      `skeleton_insert_text/2`).
+    * a table-bearing template is different: `insertTable` landing where a
+      marker was ALWAYS splits whatever paragraph absorbed the marker into
+      a "before" half and an "after" half, and the API refuses to delete
+      either one too ("Cannot delete the requested range"). So neither
+      half is ever explicitly created: the paragraph immediately before
+      EACH table (and the template's own last paragraph) never gets its
+      trailing newline inserted either — the split reintroduces it for
+      free, landing that paragraph exactly where the template had it, with
+      nothing to delete. Since a paragraph's real position next to a table
+      isn't knowable until the table exists, ALL style requests for a
+      table-bearing segment wait for a re-fetch, which is matched against
+      the template element-by-element (paragraph or table, in order —
+      `match_segment_elements/2`, failing loudly on a count mismatch
+      instead of guessing a pairing) and styled at each element's own real
+      index (`replay_with_tables/7`, `finish_segment_with_tables/7`,
+      `table_bearing_skeleton_text/2`).
+    * borders, `weightedFontFamily`, `underline`, and `link` aren't in the
+      shared body builders' capture at all; a separate pass
+      (`body_extra_style_requests/4`/`per_paragraph_bundles/3`, and
+      per-cell in `augment_table_info/2`) replays them from the template's
+      own raw JSON. A paragraph carrying a native `horizontalRule` (never
+      inserted through the API) replays as a thin bordered paragraph
+      instead, regardless of its own paragraphStyle (`paragraph_extras/1`,
+      `text_extras/1`).
+
   Options (used in tests):
     * `:get_fn` — overrides `get_document/1` (used for both the template
       fetch and every target-document re-fetch)
@@ -2294,11 +2369,45 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
       case batch_fn.(target_doc_id, requests) do
         {:ok, _} ->
-          finish_append_template(target_doc_id, content_start, text, tables, get_fn, batch_fn)
+          finish_and_replay_headers(
+            target_doc_id,
+            template_doc,
+            current_doc,
+            content_start,
+            text,
+            tables,
+            get_fn,
+            batch_fn
+          )
 
         {:error, _} = err ->
           err
       end
+    end
+  end
+
+  defp finish_and_replay_headers(
+         target_doc_id,
+         template_doc,
+         current_doc,
+         content_start,
+         text,
+         tables,
+         get_fn,
+         batch_fn
+       ) do
+    with {:ok, range} <-
+           finish_append_template(target_doc_id, content_start, text, tables, get_fn, batch_fn),
+         :ok <-
+           replay_headers_and_footers(
+             target_doc_id,
+             template_doc,
+             current_doc,
+             content_start,
+             get_fn,
+             batch_fn
+           ) do
+      {:ok, range}
     end
   end
 
@@ -2363,6 +2472,750 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @table_marker_regex ~r/ __PKDC_TABLE_(\d+)__ /
 
   defp table_marker(n), do: " __PKDC_TABLE_#{n}__ "
+
+  # ---- append_template/3's header/footer step (see its doc) -------------
+
+  # `template_doc`/`current_doc` are already-fetched documents (no extra
+  # get_fn call needed to decide whether anything must happen at all).
+  defp replay_headers_and_footers(
+         target_doc_id,
+         template_doc,
+         current_doc,
+         content_start,
+         get_fn,
+         batch_fn
+       ) do
+    ctx = %{
+      target_doc_id: target_doc_id,
+      break_index: content_start - 1,
+      document_style: Map.get(template_doc, "documentStyle") || %{},
+      inline_objects: Map.get(template_doc, "inlineObjects") || %{},
+      doc_lists: Map.get(template_doc, "lists") || %{},
+      get_fn: get_fn,
+      batch_fn: batch_fn
+    }
+
+    {inherited_header_id, inherited_footer_id} = effective_trailing_header_footer(current_doc)
+
+    with :ok <- maybe_replay_segment(:header, ctx, template_doc, current_doc, inherited_header_id) do
+      maybe_replay_segment(:footer, ctx, template_doc, current_doc, inherited_footer_id)
+    end
+  end
+
+  # Walks every sectionBreak in a document in order, returning the
+  # header/footer id its LAST section resolves to — the pair a section
+  # appended right after it would inherit. `defaultHeaderId`/`defaultFooterId`
+  # are read-only and inherit from the previous section (verified live
+  # 2026-09-23: a section that never set its own carries neither key at all,
+  # not a denormalized copy of what it resolves to) — so this folds forward
+  # from `documentStyle`, only overriding on a section that explicitly
+  # carries the key.
+  defp effective_trailing_header_footer(doc) do
+    document_style = Map.get(doc, "documentStyle") || %{}
+
+    {last_header_id, last_footer_id} =
+      doc
+      |> section_breaks()
+      |> header_footer_id_chain()
+      |> List.last({nil, nil})
+
+    {last_header_id || Map.get(document_style, "defaultHeaderId"),
+     last_footer_id || Map.get(document_style, "defaultFooterId")}
+  end
+
+  defp segment_container(:header), do: "headers"
+  defp segment_container(:footer), do: "footers"
+
+  defp segment_id_key(:header), do: "defaultHeaderId"
+  defp segment_id_key(:footer), do: "defaultFooterId"
+
+  # No request at all when the template has no header/footer of its own, or
+  # when it fingerprints the same as what the new section would inherit
+  # anyway (every home template composed today) — see
+  # `SegmentReplay.fingerprint/2`'s moduledoc for what "the same" tolerates.
+  defp maybe_replay_segment(kind, ctx, template_doc, current_doc, inherited_segment_id) do
+    container = segment_container(kind)
+
+    case Map.get(ctx.document_style, segment_id_key(kind)) do
+      nil ->
+        :ok
+
+      template_segment_id ->
+        template_content = get_in(template_doc, [container, template_segment_id, "content"]) || []
+
+        inherited_content =
+          case inherited_segment_id do
+            nil -> []
+            id -> get_in(current_doc, [container, id, "content"]) || []
+          end
+
+        inherited_inline_objects = Map.get(current_doc, "inlineObjects") || %{}
+        template_fp = SegmentReplay.fingerprint(template_content, ctx.inline_objects)
+        inherited_fp = SegmentReplay.fingerprint(inherited_content, inherited_inline_objects)
+
+        if template_fp == inherited_fp do
+          :ok
+        else
+          create_and_replay_segment(kind, ctx, template_content)
+        end
+    end
+  end
+
+  defp create_and_replay_segment(kind, ctx, template_content) do
+    create_request = SegmentReplay.create_segment_request(kind, ctx.break_index)
+
+    case ctx.batch_fn.(ctx.target_doc_id, [create_request]) do
+      {:ok, %{body: %{"replies" => replies}}} ->
+        case SegmentReplay.segment_id_from_replies(kind, replies) do
+          nil -> {:error, {:segment_not_created, kind}}
+          segment_id -> replay_segment_content(kind, ctx, segment_id, template_content)
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp replay_segment_content(kind, ctx, segment_id, template_content) do
+    synthetic = %{"body" => %{"content" => template_content}, "lists" => ctx.doc_lists}
+    {text, tables, runs, paragraphs} = flatten_template_with_table_markers_and_styles(synthetic)
+
+    if tables == [] do
+      replay_paragraphs_only(ctx, segment_id, template_content, text, runs, paragraphs)
+    else
+      replay_with_tables(kind, ctx, segment_id, template_content, tables, runs, paragraphs)
+    end
+  end
+
+  # No tables — the analytical offsets `flatten_template_with_table_markers_and_styles/1`
+  # computes are stable (nothing here ever inserts a table, so nothing ever
+  # gets implicitly split), so style requests are safe to send in the SAME
+  # batch as the insert, same as before Block C's live table-shape fixes.
+  defp replay_paragraphs_only(ctx, segment_id, template_content, text, runs, paragraphs) do
+    insert_text = skeleton_insert_text(template_content, text)
+
+    skeleton =
+      (SegmentReplay.skeleton_requests(insert_text, runs, paragraphs) ++
+         body_extra_style_requests(template_content, 0, runs, paragraphs))
+      |> SegmentReplay.with_segment_id(segment_id)
+
+    case maybe_batch(ctx.batch_fn, ctx.target_doc_id, skeleton) do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  # A fresh segment (from createHeader/createFooter) always starts with
+  # exactly one empty paragraph, and the Docs API refuses to delete a
+  # segment's own terminal newline ("Invalid requests[N].deleteContentRange:
+  # The range cannot include the newline character at the end of the
+  # segment" — verified live 2026-09-23, failing the whole batch and
+  # leaving the append half-done). So when the template's LAST block is a
+  # plain paragraph (not a table), that paragraph's own trailing newline is
+  # never inserted — the segment's pre-existing terminal one serves as its
+  # terminator instead, the same way a table cell's pre-existing bare
+  # paragraph already supplies the newline `cell_fill_requests/4` skips
+  # inserting (see `strip_trailing_newline/1`'s callers). Every style
+  # request below still targets the paragraph's/run's ORIGINAL (un-stripped)
+  # offset from `flatten_template_with_table_markers_and_styles/1` — only
+  # the LAST character of `text` is ever dropped, shifting nothing before
+  # it, so the one-character gap left by not inserting it is exactly filled
+  # by the segment's own pre-existing newline landing at that same position.
+  # When the template instead ends in a table, nothing is stripped — the
+  # Docs API requires SOME paragraph after a table, and the template has
+  # nothing there to reproduce, so the untouched pre-existing one already
+  # matches the model.
+  defp skeleton_insert_text(template_content, text) do
+    if ends_in_plain_paragraph?(template_content) do
+      strip_trailing_newline(text)
+    else
+      text
+    end
+  end
+
+  defp ends_in_plain_paragraph?(template_content) do
+    match?(%{"paragraph" => _}, List.last(template_content))
+  end
+
+  # Extra paragraph/text style for a segment's own (non-table) body content
+  # — see `SegmentReplay.extra_paragraph_style_requests/2`'s doc for why
+  # this is a separate pass rather than an extension of the shared, narrow
+  # `paragraph_style_requests/2`/`text_style_requests/2`. `raw_paragraph_blocks/1`
+  # and `raw_run_style_list/1` walk `template_content` the same way
+  # `flatten_template_with_table_markers_and_styles/1` accumulates
+  # `body_paragraphs`/`body_runs` (paragraph blocks in order, skipping
+  # tables; each paragraph's non-empty-content elements in order) — same
+  # traversal, same order, so they're index-aligned with `paragraphs`/`runs`
+  # by construction.
+  defp body_extra_style_requests(template_content, base_index, runs, paragraphs) do
+    paragraph_pairs =
+      paragraphs
+      |> Enum.zip(Enum.map(raw_paragraph_blocks(template_content), &paragraph_extras/1))
+
+    run_pairs = Enum.zip(runs, Enum.map(raw_run_style_list(template_content), &text_extras/1))
+
+    SegmentReplay.extra_paragraph_style_requests(base_index, paragraph_pairs) ++
+      SegmentReplay.extra_text_style_requests(base_index, run_pairs)
+  end
+
+  defp raw_paragraph_blocks(content) do
+    content
+    |> Enum.filter(&Map.has_key?(&1, "paragraph"))
+    |> Enum.map(&Map.fetch!(&1, "paragraph"))
+  end
+
+  defp raw_run_style_list(content) do
+    content
+    |> raw_paragraph_blocks()
+    |> Enum.flat_map(fn paragraph ->
+      rule? = has_horizontal_rule?(paragraph)
+
+      paragraph
+      |> Map.get("elements", [])
+      |> Enum.filter(fn el -> (get_in(el, ["textRun", "content"]) || "") != "" end)
+      |> Enum.map(fn el -> {get_in(el, ["textRun", "textStyle"]) || %{}, rule?} end)
+    end)
+  end
+
+  # Self-contained counterpart to `info.cell_runs`/`raw_run_style_list/1`
+  # for a cell's EXTRA style pass only — built independently instead of
+  # zipped against `info.cell_runs` because the two need to disagree on the
+  # cell's degenerate last run.
+  #
+  # `cell_style_runs/1` (which builds `info.cell_runs`, feeding `insertText`
+  # and the base run style) strips the trailing newline off the cell's last
+  # run and DROPS it entirely if that leaves no text — correct there, since
+  # a run with nothing left to insert needs no insert/base-style request.
+  # But a cell whose sole content is one empty paragraph that still carries
+  # styling (content exactly `"\n"`, e.g. a signature line's
+  # `weightedFontFamily` left over from text since deleted) has real style
+  # to replay even though there is no character worth inserting: the
+  # style's target is simply the cell's own pre-existing terminal newline,
+  # which is never deleted and always sits exactly where that run's text
+  # would have ended. So instead of dropping this run, its length is
+  # clamped to 1 (rather than the 0 a plain subtraction would give) so it
+  # still resolves to a valid, real one-character range — the same
+  # structural newline `cell_fill_and_image_requests/2`'s callers already
+  # rely on for the "empty cell" insert-text case (see `cell_requests/5`'s
+  # `""` clause) — instead of vanishing (verified live 2026-09-23: a
+  # Leping-style header's signature cell silently lost its Calibri
+  # `weightedFontFamily` without this).
+  #
+  # Offsets are threaded across the cell's own paragraphs the same way
+  # `cell_style_runs/1` computes them (one continuous run sequence starting
+  # at 0, never reset per paragraph) so they land at the same positions
+  # `cell_requests/5` inserts real text at; `rule?` stays paragraph-scoped
+  # like `raw_run_style_list/1`'s.
+  defp cell_run_extra_specs(content) do
+    {rev_specs, _offset} =
+      content
+      |> raw_paragraph_blocks()
+      |> Enum.reduce({[], 0}, &paragraph_run_extra_specs/2)
+
+    rev_specs
+    |> Enum.reverse()
+    |> shrink_trailing_newline_run()
+    |> Enum.map(fn spec ->
+      {%{start_offset: spec.start_offset, length: spec.length},
+       text_extras({spec.style, spec.rule?})}
+    end)
+  end
+
+  defp paragraph_run_extra_specs(paragraph, {specs, offset}) do
+    rule? = has_horizontal_rule?(paragraph)
+
+    paragraph
+    |> Map.get("elements", [])
+    |> Enum.reduce({specs, offset}, fn el, {acc, off} ->
+      element_run_extra_spec(el, rule?, acc, off)
+    end)
+  end
+
+  defp element_run_extra_spec(el, rule?, acc, off) do
+    text = get_in(el, ["textRun", "content"]) || ""
+
+    if text == "" do
+      {acc, off}
+    else
+      len = utf16_units(text)
+      style = get_in(el, ["textRun", "textStyle"]) || %{}
+      spec = %{start_offset: off, length: len, text: text, style: style, rule?: rule?}
+      {[spec | acc], off + len}
+    end
+  end
+
+  defp shrink_trailing_newline_run([]), do: []
+
+  defp shrink_trailing_newline_run(specs) do
+    {init, [last]} = Enum.split(specs, -1)
+
+    if String.ends_with?(last.text, "\n") do
+      init ++ [%{last | length: max(last.length - 1, 1)}]
+    else
+      init ++ [last]
+    end
+  end
+
+  # A paragraph carrying a native `horizontalRule` element (never inserted
+  # through the API, see `append_template/3`'s header/footer doc) replays
+  # as a thin bordered paragraph regardless of what its OWN paragraphStyle
+  # says (it typically says nothing — the line comes from the element type,
+  # not from a border) — `@rule_border`/forced 6pt `spaceBelow`/4pt
+  # `fontSize` (the run side, see `text_extras/1`), matching
+  # `docs/superpowers/template-header-footer-backup-2026-09-21/house_header_footer.ex`'s
+  # own rule paragraph.
+  @rule_border %{
+    "color" => %{
+      "color" => %{"rgbColor" => %{"red" => 0.4509804, "green" => 0.4509804, "blue" => 0.4509804}}
+    },
+    "width" => %{"magnitude" => 0.75, "unit" => "PT"},
+    "padding" => %{"magnitude" => 1.0, "unit" => "PT"},
+    "dashStyle" => "SOLID"
+  }
+
+  defp paragraph_extras(paragraph) do
+    if has_horizontal_rule?(paragraph) do
+      %{
+        border_top: nil,
+        border_bottom: @rule_border,
+        border_left: nil,
+        border_right: nil,
+        shading: nil,
+        space_below: 6.0
+      }
+    else
+      style = Map.get(paragraph, "paragraphStyle", %{})
+
+      %{
+        border_top: border_or_nil(style, "borderTop"),
+        border_bottom: border_or_nil(style, "borderBottom"),
+        border_left: border_or_nil(style, "borderLeft"),
+        border_right: border_or_nil(style, "borderRight"),
+        shading: Map.get(style, "shading"),
+        space_below: nil
+      }
+    end
+  end
+
+  defp has_horizontal_rule?(%{"elements" => elements}),
+    do: Enum.any?(elements, &Map.has_key?(&1, "horizontalRule"))
+
+  defp has_horizontal_rule?(_), do: false
+
+  # A border with no `width.magnitude` is the API's "explicit zero" spelling
+  # elsewhere (`dimension_or_nil/1`), but for a border specifically it means
+  # "no line at all" — sending it would draw a border Google renders as
+  # invisible-but-present, not the same as never asking for one, so it's
+  # skipped entirely rather than replayed.
+  defp border_or_nil(style, key) do
+    case get_in(style, [key, "width", "magnitude"]) do
+      m when is_number(m) -> Map.get(style, key)
+      _ -> nil
+    end
+  end
+
+  # A `horizontalRule` run's forced 4pt `font_size` here is NOT the only
+  # `updateTextStyle` targeting that run — the shared narrow pass
+  # (`text_style_requests/2`) already captured the run's own real
+  # `fontSize` (e.g. 9.5pt) into an EARLIER request over the same range.
+  # This only ends up correct because every caller that concatenates the
+  # two (`paragraph_element_requests/2`, `body_extra_style_requests/4`,
+  # `SegmentReplay.cell_fill_and_image_requests/2`) puts the narrow
+  # request BEFORE this extra one in the same `batchUpdate` — Docs applies
+  # `updateTextStyle` requests to overlapping ranges in request order, last
+  # write wins, so the forced 4pt overrides the real size. Reordering
+  # either concatenation would silently let the run's own size win instead.
+  defp text_extras({raw_style, rule?}) do
+    %{
+      weighted_font_family: Map.get(raw_style, "weightedFontFamily"),
+      underline: Map.get(raw_style, "underline"),
+      link: Map.get(raw_style, "link"),
+      baseline_offset: Map.get(raw_style, "baselineOffset"),
+      font_size: if(rule?, do: 4.0, else: nil)
+    }
+  end
+
+  # Builds the reduced skeleton text (Phase 1 of the table-bearing path) and
+  # inserts it alone — no style requests yet, see `table_bearing_skeleton_text/2`'s
+  # doc for why: every style request for a table-bearing segment waits until
+  # `finish_segment_with_tables/7` re-fetches, matches the FINAL segment
+  # structure against the template element-by-element, and targets the
+  # segment's own real, post-table indices.
+  defp replay_with_tables(kind, ctx, segment_id, template_content, tables, runs, paragraphs) do
+    insert_text = table_bearing_skeleton_text(template_content, tables)
+    skeleton = SegmentReplay.with_segment_id(insert_text_request(insert_text), segment_id)
+
+    case maybe_batch(ctx.batch_fn, ctx.target_doc_id, skeleton) do
+      {:ok, _} ->
+        finish_segment_with_tables(
+          kind,
+          ctx,
+          segment_id,
+          template_content,
+          tables,
+          runs,
+          paragraphs
+        )
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp insert_text_request(""), do: []
+
+  defp insert_text_request(text),
+    do: [%{"insertText" => %{"location" => %{"index" => 0}, "text" => text}}]
+
+  # `insertTable` landing where a marker was ALWAYS splits whatever paragraph
+  # absorbed the marker's own position into a "before" half and an "after"
+  # half — each freshly, structurally terminated by the split itself, even
+  # when a half has zero characters (an empty paragraph, which the Docs API
+  # then refuses to delete: "Cannot delete the requested range" — verified
+  # live 2026-09-23, in addition to the already-known refusal to delete a
+  # segment's own terminal newline). So a phantom is never created in the
+  # first place: the paragraph immediately before EACH table marker (if any)
+  # never gets its own trailing newline inserted — that character position
+  # lands exactly at the table's insertion point, and the split's "before"
+  # half reproduces it structurally for free, landing the paragraph EXACTLY
+  # where the template had it. The same applies to the template's own last
+  # paragraph when it isn't a table (unchanged rule, `skeleton_insert_text/2`'s
+  # sibling for the no-table path) — the fresh segment's pre-existing
+  # terminal newline plays the same role there.
+  #
+  # No paragraph/text style is attached here — a paragraph next to a table
+  # might end up AS the split's "before"/"after" half (a real one, or an
+  # empty phantom that IS that paragraph), so its real position isn't known
+  # until after the table exists; `finish_segment_with_tables/7` re-fetches
+  # and matches every element (paragraph or table) against the template
+  # one-for-one to style each at its own true index instead.
+  defp table_bearing_skeleton_text(template_content, tables) do
+    marker_by_index = table_markers_by_block_index(template_content, tables)
+    last_index = length(template_content) - 1
+
+    template_content
+    |> Enum.with_index()
+    |> Enum.map_join(fn
+      {%{"table" => _}, index} ->
+        Map.fetch!(marker_by_index, index)
+
+      {%{"paragraph" => paragraph}, index} ->
+        own_text = paragraph_own_text(paragraph)
+
+        if drop_trailing_newline_for_table_split?(template_content, index, last_index) do
+          strip_trailing_newline(own_text)
+        else
+          own_text
+        end
+    end)
+  end
+
+  defp table_markers_by_block_index(template_content, tables) do
+    table_block_indices =
+      template_content
+      |> Enum.with_index()
+      |> Enum.filter(fn {block, _index} -> Map.has_key?(block, "table") end)
+      |> Enum.map(fn {_block, index} -> index end)
+
+    Map.new(Enum.zip(table_block_indices, tables), fn {block_index, %{marker_index: n}} ->
+      {block_index, table_marker(n)}
+    end)
+  end
+
+  defp drop_trailing_newline_for_table_split?(template_content, index, last_index) do
+    next_is_table? = match?(%{"table" => _}, Enum.at(template_content, index + 1))
+    index == last_index or next_is_table?
+  end
+
+  defp paragraph_own_text(paragraph) do
+    paragraph
+    |> Map.get("elements", [])
+    |> Enum.map_join(fn el -> get_in(el, ["textRun", "content"]) || "" end)
+  end
+
+  # Adds the per-cell style/image/extra-style info the shared flatten pass
+  # doesn't capture (it's only needed for header/footer replay, not body
+  # tables): `cell_styles` (padding + contentAlignment, row-major, padded to
+  # `columns` the same way `normalize_row/3` already pads `cell_texts`),
+  # `cell_image_ids` (an `inlineObjects` key or `nil`, same padding), and
+  # `cell_paragraph_extras`/`cell_run_extras` (border/font-family/underline/
+  # link per cell, same padding). `cell_paragraph_extras`'s spans still
+  # index-align with `info.cell_paragraphs` (one entry per raw paragraph
+  # block, no filtering on either side); `cell_run_extras` is built by
+  # `cell_run_extra_specs/1` entirely on its own (see its doc for why it
+  # can't just zip against `info.cell_runs` like the paragraph one does).
+  defp augment_table_info(info, raw_table) do
+    rows = get_in(raw_table, ["table", "tableRows"]) || []
+    cell_styles = Enum.flat_map(rows, &normalize_row(row_cell_styles(&1), info.columns, %{}))
+
+    cell_image_ids =
+      Enum.flat_map(rows, &normalize_row(row_cell_image_ids(&1), info.columns, nil))
+
+    raw_cell_contents =
+      Enum.flat_map(rows, &normalize_row(row_cell_raw_contents(&1), info.columns, []))
+
+    cell_paragraph_extras =
+      Enum.zip(info.cell_paragraphs, raw_cell_contents)
+      |> Enum.map(fn {spans, raw_content} ->
+        Enum.zip(spans, Enum.map(raw_paragraph_blocks(raw_content), &paragraph_extras/1))
+      end)
+
+    cell_run_extras = Enum.map(raw_cell_contents, &cell_run_extra_specs/1)
+
+    info
+    |> Map.put(:cell_styles, cell_styles)
+    |> Map.put(:cell_image_ids, cell_image_ids)
+    |> Map.put(:cell_paragraph_extras, cell_paragraph_extras)
+    |> Map.put(:cell_run_extras, cell_run_extras)
+  end
+
+  defp row_cell_raw_contents(%{"tableCells" => cells}),
+    do: Enum.map(cells, &Map.get(&1, "content", []))
+
+  defp row_cell_raw_contents(_), do: []
+
+  defp row_cell_styles(%{"tableCells" => cells}), do: Enum.map(cells, &cell_style_essentials/1)
+  defp row_cell_styles(_), do: []
+
+  @empty_cell_style %{
+    content_alignment: nil,
+    padding_top: nil,
+    padding_bottom: nil,
+    padding_left: nil,
+    padding_right: nil
+  }
+
+  defp cell_style_essentials(%{"tableCellStyle" => style}) do
+    %{
+      content_alignment: Map.get(style, "contentAlignment"),
+      padding_top: dimension_payload(dimension_or_nil(Map.get(style, "paddingTop"))),
+      padding_bottom: dimension_payload(dimension_or_nil(Map.get(style, "paddingBottom"))),
+      padding_left: dimension_payload(dimension_or_nil(Map.get(style, "paddingLeft"))),
+      padding_right: dimension_payload(dimension_or_nil(Map.get(style, "paddingRight")))
+    }
+  end
+
+  defp cell_style_essentials(_), do: @empty_cell_style
+
+  defp row_cell_image_ids(%{"tableCells" => cells}), do: Enum.map(cells, &cell_image_id/1)
+  defp row_cell_image_ids(_), do: []
+
+  defp cell_image_id(%{"content" => content}) do
+    content
+    |> Enum.flat_map(fn el -> get_in(el, ["paragraph", "elements"]) || [] end)
+    |> Enum.find_value(&get_in(&1, ["inlineObjectElement", "inlineObjectId"]))
+  end
+
+  defp cell_image_id(_), do: nil
+
+  # Mirrors `finish_append_template/6`'s marker -> skeleton -> fill flow,
+  # scoped to one header/footer segment instead of the body: a fresh
+  # segment never has pre-existing tables, so `match_new_tables/3` always
+  # gets `[]` for that argument (unlike the body case). After the tables
+  # exist, the segment's FULL content (paragraphs and tables alike) is
+  # matched against the template one-for-one (`match_segment_elements/2` —
+  # `table_bearing_skeleton_text/2`'s whole point is making this an exact
+  # count match) and every element styled at its own real, just-discovered
+  # index — no analytical offsets survive a table's implicit paragraph
+  # split, so none are trusted here.
+  defp finish_segment_with_tables(
+         kind,
+         ctx,
+         segment_id,
+         template_content,
+         tables,
+         runs,
+         paragraphs
+       ) do
+    container = segment_container(kind)
+    raw_tables = Enum.filter(template_content, &Map.has_key?(&1, "table"))
+
+    tables_by_index =
+      Map.new(Enum.zip(tables, raw_tables), fn {info, raw} ->
+        {info.marker_index, augment_table_info(info, raw)}
+      end)
+
+    bundles = per_paragraph_bundles(template_content, paragraphs, runs)
+
+    with {:ok, %{body: doc1}} <- ctx.get_fn.(ctx.target_doc_id),
+         marker_ranges = segment_marker_ranges(doc1, container, segment_id),
+         :ok <- verify_marker_count(marker_ranges, tables),
+         skeleton_requests =
+           SegmentReplay.with_segment_id(
+             table_skeleton_requests(marker_ranges, tables_by_index),
+             segment_id
+           ),
+         {:ok, _} <- maybe_batch(ctx.batch_fn, ctx.target_doc_id, skeleton_requests),
+         {:ok, %{body: doc2}} <- ctx.get_fn.(ctx.target_doc_id),
+         segment_content = segment_content_list(doc2, container, segment_id),
+         {:ok, pairs} <- match_segment_elements(template_content, segment_content),
+         style_requests =
+           SegmentReplay.with_segment_id(
+             element_style_requests(pairs, bundles, tables_by_index, ctx.inline_objects),
+             segment_id
+           ),
+         {:ok, _} <- maybe_batch(ctx.batch_fn, ctx.target_doc_id, style_requests) do
+      :ok
+    else
+      {:error, _} = err -> err
+    end
+  end
+
+  # A fresh segment's own index space starts at 0 — unlike the body, where
+  # a real textRun's own `startIndex` is (in every document seen so far)
+  # never actually 0, so `find_table_marker_ranges/1`'s equivalent filter
+  # requiring the key to be PRESENT never had to notice this: proto3 JSON
+  # omits a zero-valued field, so the very first textRun in a segment
+  # carries no `startIndex` key at all (verified live 2026-09-23 — the
+  # re-fetched header's sole paragraph, marker text merged with the
+  # segment's own terminal newline, had neither the block's own nor its
+  # textRun's `startIndex`) — the old `Map.has_key?`-shaped filter silently
+  # dropped it, `table_marker_count_mismatch` on every single-paragraph
+  # segment before a table existed to even attempt creating. Filters on
+  # `textRun` alone and defaults a missing `startIndex` to 0 (`Map.put_new`,
+  # same convention as the module's own `Map.get(el, "startIndex", 0)`
+  # elsewhere) before handing off to `extract_marker_ranges/1`, which still
+  # requires the key present — this is the fix, not that shared function.
+  defp segment_marker_ranges(doc, container, segment_id) do
+    doc
+    |> get_in([container, segment_id, "content"])
+    |> List.wrap()
+    |> Enum.flat_map(&walk_block/1)
+    |> Enum.filter(&match?(%{"textRun" => _}, &1))
+    |> Enum.map(&Map.put_new(&1, "startIndex", 0))
+    |> Enum.flat_map(&extract_marker_ranges/1)
+  end
+
+  defp segment_content_list(doc, container, segment_id) do
+    doc |> get_in([container, segment_id, "content"]) |> List.wrap()
+  end
+
+  # The segment's final content (after tables replace their markers) must
+  # have EXACTLY as many top-level elements as the template — that's the
+  # whole point of `table_bearing_skeleton_text/2`'s newline bookkeeping.
+  # A mismatch means that bookkeeping (or a live Docs behavior it assumes)
+  # was wrong for this specific shape — fail loudly rather than guess at a
+  # partial pairing.
+  @spec match_segment_elements([map()], [map()]) ::
+          {:ok, [{map(), map()}]} | {:error, {:segment_shape_mismatch, keyword()}}
+  defp match_segment_elements(template_content, segment_content) do
+    if length(template_content) == length(segment_content) do
+      {:ok, Enum.zip(template_content, segment_content)}
+    else
+      {:error,
+       {:segment_shape_mismatch,
+        expected: length(template_content), actual: length(segment_content)}}
+    end
+  end
+
+  # One entry per non-table template paragraph, in order, each fully
+  # self-contained: `span` (its captured paragraph style, offset zeroed —
+  # it's applied at a REAL base index later, not this analytical one),
+  # `extras` (border/shading/etc, see `paragraph_extras/1`), and
+  # `runs_with_extras` (its own runs, offsets re-based to be relative to
+  # the PARAGRAPH's own start instead of the whole flattened text, each
+  # paired with its own extras — see `text_extras/1`). Mirrors how a table
+  # cell's own content already gets treated as its own self-contained unit
+  # (`augment_table_info/2`), just for a top-level paragraph instead of a
+  # cell.
+  defp per_paragraph_bundles(template_content, paragraphs, runs) do
+    raw_blocks = raw_paragraph_blocks(template_content)
+    run_extras = Enum.map(raw_run_style_list(template_content), &text_extras/1)
+    runs_with_extras = Enum.zip(runs, run_extras)
+
+    paragraphs
+    |> Enum.zip(raw_blocks)
+    |> Enum.map(fn {span, raw_block} -> paragraph_bundle(span, raw_block, runs_with_extras) end)
+  end
+
+  defp paragraph_bundle(span, raw_block, runs_with_extras) do
+    p_start = span.start_offset
+    p_end = span.start_offset + span.length
+
+    own_runs_with_extras =
+      runs_with_extras
+      |> Enum.filter(fn {run, _extras} ->
+        run.start_offset >= p_start and run.start_offset < p_end
+      end)
+      |> Enum.map(fn {run, extras} ->
+        {%{run | start_offset: run.start_offset - p_start}, extras}
+      end)
+
+    %{
+      span: %{span | start_offset: 0},
+      extras: paragraph_extras(raw_block),
+      runs_with_extras: own_runs_with_extras
+    }
+  end
+
+  # Tags each matched (template, segment) pair with its role and the
+  # already-computed data it needs (the i-th paragraph bundle or the j-th
+  # table's info), walking two independent counters since `pairs` interleaves
+  # both kinds in document order.
+  defp tag_segment_pairs(pairs, bundles, tables_by_index) do
+    {tagged, _p_idx, _t_idx} =
+      Enum.reduce(pairs, {[], 0, 0}, fn
+        {%{"paragraph" => _}, segment_el}, {acc, p_idx, t_idx} ->
+          {[{:paragraph, Enum.at(bundles, p_idx), segment_el} | acc], p_idx + 1, t_idx}
+
+        {%{"table" => _}, segment_el}, {acc, p_idx, t_idx} ->
+          info = Map.fetch!(tables_by_index, t_idx + 1)
+          {[{:table, info, segment_el} | acc], p_idx, t_idx + 1}
+      end)
+
+    Enum.reverse(tagged)
+  end
+
+  # Paragraph style requests never shift indices, so they're safe to send
+  # first, all targeting real (doc2) positions untouched by anything else
+  # in this batch. Table fills DO insert content (non-empty cells), so
+  # each table's own fill is built independently and the whole group
+  # ordered by table_start DESCENDING — same reasoning as every other
+  # index-shifting pass in this module: an earlier table's insert must
+  # never shift a later table's already-captured position.
+  defp element_style_requests(pairs, bundles, tables_by_index, inline_objects) do
+    tagged = tag_segment_pairs(pairs, bundles, tables_by_index)
+
+    paragraph_requests =
+      tagged
+      |> Enum.filter(&match?({:paragraph, _, _}, &1))
+      |> Enum.flat_map(fn {:paragraph, bundle, segment_el} ->
+        paragraph_element_requests(Map.get(segment_el, "startIndex", 0), bundle)
+      end)
+
+    table_requests =
+      tagged
+      |> Enum.filter(&match?({:table, _, _}, &1))
+      |> Enum.map(fn {:table, info, segment_el} -> table_info_to_entry(segment_el, info) end)
+      |> Enum.sort_by(& &1.table_start, :desc)
+      |> Enum.flat_map(&SegmentReplay.table_fill_requests([&1], inline_objects))
+
+    paragraph_requests ++ table_requests
+  end
+
+  defp paragraph_element_requests(base_index, bundle) do
+    runs = Enum.map(bundle.runs_with_extras, &elem(&1, 0))
+
+    paragraph_style_requests(base_index, [bundle.span]) ++
+      text_style_requests(base_index, runs) ++
+      SegmentReplay.extra_paragraph_style_requests(base_index, [{bundle.span, bundle.extras}]) ++
+      SegmentReplay.extra_text_style_requests(base_index, bundle.runs_with_extras)
+  end
+
+  defp table_info_to_entry(segment_table_el, info) do
+    %{
+      table_start: Map.get(segment_table_el, "startIndex", 0),
+      cells: extract_table_cells(segment_table_el),
+      column_properties: Map.get(info, :column_properties, []),
+      cell_styles: info.cell_styles,
+      cell_texts: info.cell_texts,
+      cell_runs: info.cell_runs,
+      cell_paragraphs: info.cell_paragraphs,
+      cell_image_ids: info.cell_image_ids,
+      cell_paragraph_extras: info.cell_paragraph_extras,
+      cell_run_extras: info.cell_run_extras
+    }
+  end
 
   @doc """
   Phase 0 of the append-with-tables pipeline (see `append_template/3`).
@@ -3422,12 +4275,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   markers against boundaries that reflect the edited document rather than the
   original one.
 
-  Headers and footers get their own pass. A composed document only ever
-  inherits the headers/footers of its first section (`copy_document/2` copies
-  them; `append_template/3` appends body content only), so a `{{key}}` found
-  there is resolved against whichever section has the lowest `position` —
-  never by range containment, since header/footer content has no body index
-  at all. Each header/footer segment has its own Docs index space (a Docs
+  Headers and footers get their own pass, never by range containment (a
+  header/footer has no body index at all). Each header/footer segment
+  resolves against the section that OWNS it — the section, in document
+  order, whose own or inherited `defaultHeaderId`/`defaultFooterId` first
+  introduces that particular segment id (`header_footer_owners/3`). Before
+  `append_template/3` could give a section its own header/footer, this was
+  always the whole document's single shared segment, owned by whichever
+  section has the lowest `position` — that's still exactly what this
+  resolves to when every section still shares the original segment, so a
+  composed document untouched by that feature substitutes exactly as
+  before. Each header/footer segment has its own Docs index space (a Docs
   `segmentId`), independent of the body's, so those replacements are excluded
   from `shift_ranges/2` and sent as their own `segmentId`-scoped requests.
   """
@@ -3482,10 +4340,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp collect_text_replacements(doc, sections, ranges) do
     all_keys = sections |> Enum.flat_map(&Map.keys(&1.variable_values)) |> Enum.uniq()
 
-    # A composed document only ever inherits the first section's headers/footers
-    # (see substitute_all_sections/3's doc), so that's the only section whose
-    # variable_values can resolve a header/footer placeholder.
-    header_footer_section = Enum.min_by(sections, & &1.position)
+    # Fallback for a segment id that owns nothing in `sections` (shouldn't
+    # happen — every section has a range entry — kept only as a defensive
+    # default matching the pre-Block-C behaviour).
+    default_section = Enum.min_by(sections, & &1.position)
+    segment_owners = header_footer_owners(doc, sections, ranges)
 
     body_replacements =
       doc
@@ -3503,9 +4362,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       doc
       |> header_footer_text_runs()
       |> Enum.flat_map(fn {segment_id, run} ->
+        section = Map.get(segment_owners, segment_id, default_section)
+
         run
         |> find_text_var_ranges(all_keys)
-        |> Enum.flat_map(&header_footer_replacement(&1, header_footer_section, segment_id))
+        |> Enum.flat_map(&header_footer_replacement(&1, section, segment_id))
       end)
       |> Enum.sort_by(fn {_, s, _, _, _} -> s end, :desc)
 
@@ -3517,6 +4378,89 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       [{key, s, e, resolved_value(section, key), segment_id}]
     else
       []
+    end
+  end
+
+  @doc false
+  # Maps every header/footer segment id reachable from `sections`/`ranges` to
+  # the section that OWNS it: walking sections in ascending `position` order
+  # (matching document order — `Composer.run_multi/5` always appends in
+  # position order), the first section whose OWN or inherited
+  # `defaultHeaderId`/`defaultFooterId` carries a given id owns it. Before a
+  # section could get its own header/footer (`append_template/3`'s
+  # `replay_headers_and_footers/6`), every section resolved to the SAME
+  # single, always-inherited id, whose only "first" section is the one with
+  # the lowest `position` — so this generalizes, rather than replaces, the
+  # pre-Block-C "lowest position" rule.
+  #
+  # Reuses `section_breaks/1`/`header_footer_id_chain/1` (the same
+  # own-then-previous-section walk `section_boxes/1` folds for its own
+  # purposes) rather than re-deriving the resolution here: each section's
+  # break is matched by position (`matching_break_index/3`), its resolved
+  # `{header_id, footer_id}` read off the chain, and — since the chain
+  # itself stops at `nil` rather than `documentStyle`'s id (see
+  # `header_footer_id_chain/1`'s doc) — that fallback is applied here, the
+  # same way `effective_trailing_header_footer/1` applies it for its own
+  # single "trailing section" lookup.
+  @spec header_footer_owners(map(), [map()], %{non_neg_integer() => {integer(), integer()}}) ::
+          %{String.t() => map()}
+  def header_footer_owners(doc, sections, ranges) do
+    document_style = Map.get(doc, "documentStyle") || %{}
+
+    default_ids =
+      {Map.get(document_style, "defaultHeaderId"), Map.get(document_style, "defaultFooterId")}
+
+    breaks = section_breaks(doc)
+    ids_by_break = header_footer_id_chain(breaks)
+    ordered = Enum.sort_by(sections, & &1.position)
+
+    Enum.reduce(ordered, %{}, fn section, owners ->
+      {header_id, footer_id} =
+        section_header_footer_ids(breaks, ids_by_break, ranges, section, default_ids)
+
+      owners
+      |> claim_owner(header_id, section)
+      |> claim_owner(footer_id, section)
+    end)
+  end
+
+  # `Map.put_new` means the first (lowest-position) section to resolve to a
+  # given id is always the one recorded as its owner, whether that id was
+  # just newly created (unique, so only this section will ever carry it) or
+  # is the original shared one every earlier section already inherited.
+  defp claim_owner(owners, nil, _section), do: owners
+  defp claim_owner(owners, id, section), do: Map.put_new(owners, id, section)
+
+  defp section_header_footer_ids(
+         breaks,
+         ids_by_break,
+         ranges,
+         section,
+         {default_header, default_footer}
+       ) do
+    case matching_break_index(breaks, ranges, section.position) do
+      nil ->
+        {default_header, default_footer}
+
+      index ->
+        {header_id, footer_id} = Enum.at(ids_by_break, index)
+        {header_id || default_header, footer_id || default_footer}
+    end
+  end
+
+  # The sectionBreak element that opens `position`'s range: append_template/3
+  # always lands body content two indices past the break it inserted (a
+  # newline, then the section's own fresh paragraph — see its doc), and
+  # section 0's range (`document_content_range/1`) starts at 1, one past the
+  # document's own implicit first break at index 0 — so a range's own
+  # start_index is always exactly its break's start_index + 1.
+  defp matching_break_index(breaks, ranges, position) do
+    case Map.get(ranges, position) do
+      {range_start, _range_end} ->
+        Enum.find_index(breaks, fn b -> Map.get(b, "startIndex", 0) == range_start - 1 end)
+
+      _ ->
+        nil
     end
   end
 
