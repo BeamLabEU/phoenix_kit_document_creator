@@ -21,14 +21,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientLiveFixtureExtentTest do
   `[75, 90]`; `footer_extent_pt/2 + page_fit_safety_pt()` should reach
   `>= 109.2` (so the estimated body bottom stays at/above the last
   confirmed-fit pixel, y≈450.85) while `footer_extent_pt/2` alone should stay
-  `<= 125` (not wildly over). After applying the `@font_leading` (1.22)
-  correction, `\\u000B` soft-line-break counting, and `tableCellStyle`
-  border widths, the header target is met; the footer estimate (see the test
-  below) is still short of the `>= 109.2` combined target — this fixture's
-  footer table declares no cell borders, and the shortfall doesn't appear to
-  come from anything else in the header/footer JSON this estimator reads
-  (see the block D report for the full trace). Flagged back rather than
-  padded further without evidence.
+  `<= 125` (not wildly over). Reaching this needed one more fix beyond
+  `@font_leading` and `\\u000B` soft-line-break counting: the footer's
+  horizontal-rule paragraph (a `horizontalRule` structural element sharing a
+  paragraph with a plain `textRun`) was being estimated as a single text
+  line instead of the rule PLUS that line — `paragraph_line_count/1` now
+  counts one extra line per `horizontalRule` element, and
+  `estimate_paragraph_height_pt/1` also adds a paragraph's own
+  `paragraphStyle.borderTop`/`borderBottom` (width + padding), for the other
+  templates that draw the same rule as a thin bordered paragraph instead of
+  a `horizontalRule` element.
   """
 
   use ExUnit.Case, async: true
@@ -64,8 +66,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientLiveFixtureExtentTest do
       assert extent <= 90.0
     end
 
-    test "footer_extent_pt/2 + page_fit_safety_pt/0 — currently short of the >= 109.2 target",
-         %{doc: doc} do
+    test "footer_extent_pt/2 + page_fit_safety_pt/0 reaches the calibrated >= 109.2 target", %{
+      doc: doc
+    } do
       [_section1, section2] = doc["body"]["content"]
       style = get_in(section2, ["sectionBreak", "sectionStyle"])
 
@@ -73,18 +76,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientLiveFixtureExtentTest do
       total = extent + GoogleDocsClient.page_fit_safety_pt()
 
       assert extent <= 125.0
-
-      # NOT met yet: the team lead's target is `total >= 109.2`. This
-      # fixture's footer table declares explicit 5pt/5pt cell padding and no
-      # cell borders, so neither the padding fallback nor the new border
-      # handling changes it — the ~93.5pt this estimator reaches from the
-      # footer's own paragraphs/table content (with @font_leading and
-      # \u000B-line counting applied) is the actual number, asserted here so
-      # a regression shows up; see the block D report for what was checked
-      # and ruled out.
-      assert_in_delta extent, 93.48, 0.5
-      assert_in_delta total, 101.48, 0.5
-      refute total >= 109.2
+      assert total >= 109.2
     end
 
     test "section_boxes/1 folds both extents into body_top_pt / body_bottom_pt", %{doc: doc} do

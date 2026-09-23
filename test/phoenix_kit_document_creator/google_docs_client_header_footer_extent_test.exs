@@ -112,6 +112,94 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterExtentTest do
       assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}), @default_line_pt * 2, 0.001
     end
 
+    test "a horizontalRule element counts as one extra line, sized like its sibling textRun" do
+      doc = %{
+        "documentStyle" => %{"defaultFooterId" => "f1"},
+        "footers" => %{
+          "f1" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{"horizontalRule" => %{"textStyle" => %{}}},
+                    %{"textRun" => %{"content" => "\n", "textStyle" => %{}}}
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      # 2 lines (the rule + the trailing textRun's own line) at the default
+      # font size (no fontSize on either element) — this is the shape of the
+      # house footer's rule paragraph.
+      assert_in_delta GoogleDocsClient.footer_extent_pt(doc, %{}), @default_line_pt * 2, 0.001
+    end
+
+    test "a horizontalRule element's own textStyle.fontSize is used when no textRun has one" do
+      doc = %{
+        "documentStyle" => %{"defaultFooterId" => "f1"},
+        "footers" => %{
+          "f1" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{
+                      "horizontalRule" => %{"textStyle" => %{"fontSize" => %{"magnitude" => 9.5}}}
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      # 2 lines (base + the rule) at 9.5pt / default 115% lineSpacing.
+      expected = 2 * 9.5 * 1.15 * 1.22
+      assert_in_delta GoogleDocsClient.footer_extent_pt(doc, %{}), expected, 0.001
+    end
+
+    test "paragraphStyle.borderTop/borderBottom (width + padding) are added to the paragraph" do
+      doc = %{
+        "documentStyle" => %{"defaultFooterId" => "f1"},
+        "footers" => %{
+          "f1" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{
+                      "textRun" => %{
+                        "content" => "\n",
+                        "textStyle" => %{"fontSize" => %{"magnitude" => 4.0}}
+                      }
+                    }
+                  ],
+                  "paragraphStyle" => %{
+                    "spaceBelow" => %{"magnitude" => 6.0},
+                    "borderBottom" => %{
+                      "width" => %{"magnitude" => 0.75, "unit" => "PT"},
+                      "padding" => %{"magnitude" => 1.0, "unit" => "PT"}
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      # Some OTHER templates draw the house footer's rule as a thin bordered
+      # paragraph instead of a `horizontalRule` element: 4pt font, 6pt
+      # spaceBelow, 0.75pt borderBottom width, 1pt padding — matches a live
+      # measurement of one such template (2026-09-23).
+      expected = 4.0 * 1.15 * 1.22 + 6.0 + 0.75 + 1.0
+      assert_in_delta GoogleDocsClient.footer_extent_pt(doc, %{}), expected, 0.001
+    end
+
     test "a table is the sum of its rows; a row is the tallest of its cells" do
       no_padding = %{
         "paddingTop" => %{"magnitude" => 0.0},

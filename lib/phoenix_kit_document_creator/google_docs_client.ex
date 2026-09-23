@@ -3747,9 +3747,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   # (lineCount × fontSize × lineSpacing/100 × @font_leading) + spaceAbove +
-  # spaceBelow, each falling back to Docs' own normal-text defaults (11pt /
-  # 115%) when absent — including an empty paragraph, which still occupies
-  # one line at the default size.
+  # spaceBelow + borderTop/borderBottom (width + padding), each falling back
+  # to Docs' own normal-text defaults (11pt / 115%, no border) when absent —
+  # including an empty paragraph, which still occupies one line at the
+  # default size.
   #
   # `@font_leading` (1.22): Docs lays out a line taller than the naive
   # fontSize × lineSpacing/100 product — measured live (2026-09-23, the same
@@ -3765,9 +3766,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # `paragraph_line_count/1` adds one line per `\u000B` "soft line break"
   # inside the paragraph's own text (seen live in the house footer's
   # details table cells, e.g. "Reg. kood 10827447\u000BKMKR nr ..." on one
-  # visual line's worth of Docs paragraph but two rendered lines) — a plain
+  # visual line's worth of Docs paragraph but two rendered lines — a plain
   # `\n` paragraph break is already its own structural element and isn't
-  # counted here.
+  # counted here) and one per `horizontalRule` element (the house footer's
+  # rule under its logo/details block — Docs stores it as its own paragraph
+  # element, sized like the sibling textRun it shares a paragraph with, and
+  # it occupies a rendered line on top of that paragraph's own text).
+  #
+  # `paragraphStyle.borderTop`/`borderBottom` (each `width` + `padding`,
+  # both Dimensions) are added directly — seen live on OTHER templates'
+  # equivalent rule, drawn as a thin bordered paragraph (e.g. 4pt font,
+  # 6pt spaceBelow, 0.75pt borderBottom width, 1pt padding) instead of a
+  # `horizontalRule` element.
   defp estimate_paragraph_height_pt(%{"paragraph" => paragraph}) do
     style = Map.get(paragraph, "paragraphStyle") || %{}
     line_spacing = numeric_or_nil(Map.get(style, "lineSpacing")) || @default_line_spacing_pct
@@ -3775,8 +3785,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     space_below = magnitude(Map.get(style, "spaceBelow")) || 0.0
     font_size = paragraph_font_size_pt(paragraph)
     lines = paragraph_line_count(paragraph)
+    border_pt = paragraph_border_pt(style)
 
-    lines * font_size * (line_spacing / 100.0) * @font_leading + space_above + space_below
+    lines * font_size * (line_spacing / 100.0) * @font_leading + space_above + space_below +
+      border_pt
   end
 
   defp estimate_paragraph_height_pt(_), do: 0.0
@@ -3784,23 +3796,41 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp paragraph_font_size_pt(paragraph) do
     paragraph
     |> Map.get("elements", [])
-    |> Enum.find_value(&get_in(&1, ["textRun", "textStyle", "fontSize", "magnitude"]))
+    |> Enum.find_value(&element_font_size_pt/1)
     |> case do
       fs when is_number(fs) -> fs * 1.0
       _ -> @default_paragraph_font_size_pt
     end
   end
 
+  defp element_font_size_pt(element) do
+    get_in(element, ["textRun", "textStyle", "fontSize", "magnitude"]) ||
+      get_in(element, ["horizontalRule", "textStyle", "fontSize", "magnitude"])
+  end
+
   defp paragraph_line_count(paragraph) do
+    elements = Map.get(paragraph, "elements", [])
+
     soft_breaks =
-      paragraph
-      |> Map.get("elements", [])
+      elements
       |> Enum.map_join(&(get_in(&1, ["textRun", "content"]) || ""))
       |> String.split("\u000B")
       |> length()
       |> Kernel.-(1)
 
-    1 + soft_breaks
+    horizontal_rules = Enum.count(elements, &Map.has_key?(&1, "horizontalRule"))
+
+    1 + soft_breaks + horizontal_rules
+  end
+
+  defp paragraph_border_pt(style) do
+    border_edge_pt(Map.get(style, "borderTop")) + border_edge_pt(Map.get(style, "borderBottom"))
+  end
+
+  defp border_edge_pt(nil), do: 0.0
+
+  defp border_edge_pt(border) do
+    (magnitude(Map.get(border, "width")) || 0.0) + (magnitude(Map.get(border, "padding")) || 0.0)
   end
 
   # Determines which `image_list`, `fit: "page"` slots actually get the
