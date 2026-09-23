@@ -112,6 +112,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   alias PhoenixKit.Settings
   alias PhoenixKitDocumentCreator.GoogleDocsClient.DriveWalker
+  alias PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay
 
   @folder_settings_key "document_creator_folders"
   @settings_key "document_creator_settings"
@@ -2258,6 +2259,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   restored — `insertTable` creates a bare table beyond the column widths
   above. Nested tables (a table inside a table cell) are not supported.
 
+  After the section is in place, it gets its OWN header/footer when the
+  template has one and it would otherwise look different from what the
+  section inherits: `SectionStyle.defaultHeaderId`/`defaultFooterId` are
+  read-only and inherit from the PREVIOUS section (the very first section
+  inherits from `documentStyle`) — there is no request to point a section at
+  an *existing* header/footer, only `createHeader`/`createFooter` for a
+  brand new, empty one. So a template's own header/footer (`documentStyle`)
+  is compared, via `SegmentReplay.fingerprint/2`, against the header/footer
+  the new section would inherit (the target's own trailing section, walked
+  the same read-only-inheritance way); equal (or the template has none) —
+  nothing happens, matching every append before this; different — a fresh
+  segment is created via `SegmentReplay.create_segment_request/2`
+  (`sectionBreakLocation` pointing at this section's own break, `content_start
+  - 1`) and the template's segment content is replayed into it
+  (`SegmentReplay.skeleton_requests/3`, then, if it has tables,
+  `SegmentReplay.table_fill_requests/2` after a re-fetch — the same
+  marker/skeleton/fill shape `finish_append_template/6` uses for the body,
+  scoped to the new segment via `SegmentReplay.with_segment_id/2`). A
+  replay failure fails the append loudly, same as a body table mismatch.
+
   Options (used in tests):
     * `:get_fn` — overrides `get_document/1` (used for both the template
       fetch and every target-document re-fetch)
@@ -2294,11 +2315,45 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
       case batch_fn.(target_doc_id, requests) do
         {:ok, _} ->
-          finish_append_template(target_doc_id, content_start, text, tables, get_fn, batch_fn)
+          finish_and_replay_headers(
+            target_doc_id,
+            template_doc,
+            current_doc,
+            content_start,
+            text,
+            tables,
+            get_fn,
+            batch_fn
+          )
 
         {:error, _} = err ->
           err
       end
+    end
+  end
+
+  defp finish_and_replay_headers(
+         target_doc_id,
+         template_doc,
+         current_doc,
+         content_start,
+         text,
+         tables,
+         get_fn,
+         batch_fn
+       ) do
+    with {:ok, range} <-
+           finish_append_template(target_doc_id, content_start, text, tables, get_fn, batch_fn),
+         :ok <-
+           replay_headers_and_footers(
+             target_doc_id,
+             template_doc,
+             current_doc,
+             content_start,
+             get_fn,
+             batch_fn
+           ) do
+      {:ok, range}
     end
   end
 
@@ -2363,6 +2418,266 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @table_marker_regex ~r/ __PKDC_TABLE_(\d+)__ /
 
   defp table_marker(n), do: " __PKDC_TABLE_#{n}__ "
+
+  # ---- append_template/3's header/footer step (see its doc) -------------
+
+  # `template_doc`/`current_doc` are already-fetched documents (no extra
+  # get_fn call needed to decide whether anything must happen at all).
+  defp replay_headers_and_footers(
+         target_doc_id,
+         template_doc,
+         current_doc,
+         content_start,
+         get_fn,
+         batch_fn
+       ) do
+    ctx = %{
+      target_doc_id: target_doc_id,
+      break_index: content_start - 1,
+      document_style: Map.get(template_doc, "documentStyle") || %{},
+      inline_objects: Map.get(template_doc, "inlineObjects") || %{},
+      doc_lists: Map.get(template_doc, "lists") || %{},
+      get_fn: get_fn,
+      batch_fn: batch_fn
+    }
+
+    {inherited_header_id, inherited_footer_id} = effective_trailing_header_footer(current_doc)
+
+    with :ok <- maybe_replay_segment(:header, ctx, template_doc, current_doc, inherited_header_id) do
+      maybe_replay_segment(:footer, ctx, template_doc, current_doc, inherited_footer_id)
+    end
+  end
+
+  # Walks every sectionBreak in a document in order, returning the
+  # header/footer id its LAST section resolves to — the pair a section
+  # appended right after it would inherit. `defaultHeaderId`/`defaultFooterId`
+  # are read-only and inherit from the previous section (verified live
+  # 2026-09-23: a section that never set its own carries neither key at all,
+  # not a denormalized copy of what it resolves to) — so this folds forward
+  # from `documentStyle`, only overriding on a section that explicitly
+  # carries the key.
+  defp effective_trailing_header_footer(doc) do
+    document_style = Map.get(doc, "documentStyle") || %{}
+
+    breaks =
+      doc
+      |> get_in(["body", "content"])
+      |> List.wrap()
+      |> Enum.filter(&Map.has_key?(&1, "sectionBreak"))
+
+    Enum.reduce(
+      breaks,
+      {Map.get(document_style, "defaultHeaderId"), Map.get(document_style, "defaultFooterId")},
+      fn sb, {h, f} ->
+        style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
+        {Map.get(style, "defaultHeaderId", h), Map.get(style, "defaultFooterId", f)}
+      end
+    )
+  end
+
+  defp segment_container(:header), do: "headers"
+  defp segment_container(:footer), do: "footers"
+
+  defp segment_id_key(:header), do: "defaultHeaderId"
+  defp segment_id_key(:footer), do: "defaultFooterId"
+
+  # No request at all when the template has no header/footer of its own, or
+  # when it fingerprints the same as what the new section would inherit
+  # anyway (every home template composed today) — see
+  # `SegmentReplay.fingerprint/2`'s moduledoc for what "the same" tolerates.
+  defp maybe_replay_segment(kind, ctx, template_doc, current_doc, inherited_segment_id) do
+    container = segment_container(kind)
+
+    case Map.get(ctx.document_style, segment_id_key(kind)) do
+      nil ->
+        :ok
+
+      template_segment_id ->
+        template_content = get_in(template_doc, [container, template_segment_id, "content"]) || []
+
+        inherited_content =
+          case inherited_segment_id do
+            nil -> []
+            id -> get_in(current_doc, [container, id, "content"]) || []
+          end
+
+        inherited_inline_objects = Map.get(current_doc, "inlineObjects") || %{}
+        template_fp = SegmentReplay.fingerprint(template_content, ctx.inline_objects)
+        inherited_fp = SegmentReplay.fingerprint(inherited_content, inherited_inline_objects)
+
+        if template_fp == inherited_fp do
+          :ok
+        else
+          create_and_replay_segment(kind, ctx, template_content)
+        end
+    end
+  end
+
+  defp create_and_replay_segment(kind, ctx, template_content) do
+    create_request = SegmentReplay.create_segment_request(kind, ctx.break_index)
+
+    case ctx.batch_fn.(ctx.target_doc_id, [create_request]) do
+      {:ok, %{body: %{"replies" => replies}}} ->
+        case SegmentReplay.segment_id_from_replies(kind, replies) do
+          nil -> {:error, {:segment_not_created, kind}}
+          segment_id -> replay_segment_content(kind, ctx, segment_id, template_content)
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp replay_segment_content(kind, ctx, segment_id, template_content) do
+    synthetic = %{"body" => %{"content" => template_content}, "lists" => ctx.doc_lists}
+    {text, tables, runs, paragraphs} = flatten_template_with_table_markers_and_styles(synthetic)
+
+    skeleton =
+      SegmentReplay.with_segment_id(
+        SegmentReplay.skeleton_requests(text, runs, paragraphs),
+        segment_id
+      )
+
+    case maybe_batch(ctx.batch_fn, ctx.target_doc_id, skeleton) do
+      {:ok, _} -> finish_segment_replay(kind, ctx, segment_id, template_content, tables)
+      {:error, _} = err -> err
+    end
+  end
+
+  defp finish_segment_replay(_kind, _ctx, _segment_id, _template_content, []), do: :ok
+
+  defp finish_segment_replay(kind, ctx, segment_id, template_content, tables) do
+    raw_tables = Enum.filter(template_content, &Map.has_key?(&1, "table"))
+
+    tables_by_index =
+      tables
+      |> Enum.zip(raw_tables)
+      |> Map.new(fn {info, raw} -> {info.marker_index, augment_table_info(info, raw)} end)
+
+    finish_segment_tables(kind, ctx, segment_id, tables_by_index)
+  end
+
+  # Adds the per-cell style/image info the shared flatten pass doesn't
+  # capture (it's only needed for header/footer replay, not body tables):
+  # `cell_styles` (padding + contentAlignment, row-major, padded to
+  # `columns` the same way `normalize_row/3` already pads `cell_texts`) and
+  # `cell_image_ids` (an `inlineObjects` key or `nil`, same padding).
+  defp augment_table_info(info, raw_table) do
+    rows = get_in(raw_table, ["table", "tableRows"]) || []
+    cell_styles = Enum.flat_map(rows, &normalize_row(row_cell_styles(&1), info.columns, %{}))
+
+    cell_image_ids =
+      Enum.flat_map(rows, &normalize_row(row_cell_image_ids(&1), info.columns, nil))
+
+    info
+    |> Map.put(:cell_styles, cell_styles)
+    |> Map.put(:cell_image_ids, cell_image_ids)
+  end
+
+  defp row_cell_styles(%{"tableCells" => cells}), do: Enum.map(cells, &cell_style_essentials/1)
+  defp row_cell_styles(_), do: []
+
+  @empty_cell_style %{
+    content_alignment: nil,
+    padding_top: nil,
+    padding_bottom: nil,
+    padding_left: nil,
+    padding_right: nil
+  }
+
+  defp cell_style_essentials(%{"tableCellStyle" => style}) do
+    %{
+      content_alignment: Map.get(style, "contentAlignment"),
+      padding_top: dimension_payload(dimension_or_nil(Map.get(style, "paddingTop"))),
+      padding_bottom: dimension_payload(dimension_or_nil(Map.get(style, "paddingBottom"))),
+      padding_left: dimension_payload(dimension_or_nil(Map.get(style, "paddingLeft"))),
+      padding_right: dimension_payload(dimension_or_nil(Map.get(style, "paddingRight")))
+    }
+  end
+
+  defp cell_style_essentials(_), do: @empty_cell_style
+
+  defp row_cell_image_ids(%{"tableCells" => cells}), do: Enum.map(cells, &cell_image_id/1)
+  defp row_cell_image_ids(_), do: []
+
+  defp cell_image_id(%{"content" => content}) do
+    content
+    |> Enum.flat_map(fn el -> get_in(el, ["paragraph", "elements"]) || [] end)
+    |> Enum.find_value(&get_in(&1, ["inlineObjectElement", "inlineObjectId"]))
+  end
+
+  defp cell_image_id(_), do: nil
+
+  # Mirrors `finish_append_template/6`'s marker -> skeleton -> fill flow,
+  # scoped to one header/footer segment instead of the body: a fresh
+  # segment never has pre-existing tables, so `match_new_tables/3` always
+  # gets `[]` for that argument (unlike the body case).
+  defp finish_segment_tables(kind, ctx, segment_id, tables_by_index) do
+    container = segment_container(kind)
+
+    with {:ok, %{body: doc1}} <- ctx.get_fn.(ctx.target_doc_id),
+         marker_ranges = segment_marker_ranges(doc1, container, segment_id),
+         :ok <- verify_marker_count(marker_ranges, Map.values(tables_by_index)),
+         skeleton_requests =
+           SegmentReplay.with_segment_id(
+             table_skeleton_requests(marker_ranges, tables_by_index),
+             segment_id
+           ),
+         {:ok, _} <- maybe_batch(ctx.batch_fn, ctx.target_doc_id, skeleton_requests),
+         {:ok, %{body: doc2}} <- ctx.get_fn.(ctx.target_doc_id),
+         slot_starts = marker_ranges |> Enum.map(& &1.start_index) |> Enum.sort(),
+         tables_asc =
+           doc2 |> segment_tables(container, segment_id) |> Enum.sort_by(& &1["startIndex"]),
+         {:ok, new_tables} <- match_new_tables(tables_asc, [], slot_starts),
+         entries = build_segment_fill_entries(marker_ranges, new_tables, tables_by_index),
+         fill_requests =
+           SegmentReplay.with_segment_id(
+             SegmentReplay.table_fill_requests(entries, ctx.inline_objects),
+             segment_id
+           ),
+         {:ok, _} <- maybe_batch(ctx.batch_fn, ctx.target_doc_id, fill_requests) do
+      :ok
+    else
+      :mismatch -> {:error, :segment_table_match_mismatch}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp build_segment_fill_entries(marker_ranges, new_tables, tables_by_index) do
+    marker_ranges
+    |> Enum.sort_by(& &1.start_index)
+    |> Enum.zip(new_tables)
+    |> Enum.map(fn {%{marker_index: idx}, table_el} ->
+      info = Map.fetch!(tables_by_index, idx)
+
+      %{
+        table_start: table_el["startIndex"],
+        cells: extract_table_cells(table_el),
+        column_properties: Map.get(info, :column_properties, []),
+        cell_styles: info.cell_styles,
+        cell_texts: info.cell_texts,
+        cell_runs: info.cell_runs,
+        cell_paragraphs: info.cell_paragraphs,
+        cell_image_ids: info.cell_image_ids
+      }
+    end)
+  end
+
+  defp segment_marker_ranges(doc, container, segment_id) do
+    doc
+    |> get_in([container, segment_id, "content"])
+    |> List.wrap()
+    |> Enum.flat_map(&walk_block/1)
+    |> Enum.filter(&match?(%{"textRun" => _, "startIndex" => _}, &1))
+    |> Enum.flat_map(&extract_marker_ranges/1)
+  end
+
+  defp segment_tables(doc, container, segment_id) do
+    doc
+    |> get_in([container, segment_id, "content"])
+    |> List.wrap()
+    |> Enum.filter(&Map.has_key?(&1, "table"))
+  end
 
   @doc """
   Phase 0 of the append-with-tables pipeline (see `append_template/3`).
@@ -3416,12 +3731,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   markers against boundaries that reflect the edited document rather than the
   original one.
 
-  Headers and footers get their own pass. A composed document only ever
-  inherits the headers/footers of its first section (`copy_document/2` copies
-  them; `append_template/3` appends body content only), so a `{{key}}` found
-  there is resolved against whichever section has the lowest `position` —
-  never by range containment, since header/footer content has no body index
-  at all. Each header/footer segment has its own Docs index space (a Docs
+  Headers and footers get their own pass, never by range containment (a
+  header/footer has no body index at all). Each header/footer segment
+  resolves against the section that OWNS it — the section, in document
+  order, whose own or inherited `defaultHeaderId`/`defaultFooterId` first
+  introduces that particular segment id (`header_footer_owners/3`). Before
+  `append_template/3` could give a section its own header/footer, this was
+  always the whole document's single shared segment, owned by whichever
+  section has the lowest `position` — that's still exactly what this
+  resolves to when every section still shares the original segment, so a
+  composed document untouched by that feature substitutes exactly as
+  before. Each header/footer segment has its own Docs index space (a Docs
   `segmentId`), independent of the body's, so those replacements are excluded
   from `shift_ranges/2` and sent as their own `segmentId`-scoped requests.
   """
@@ -3476,10 +3796,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp collect_text_replacements(doc, sections, ranges) do
     all_keys = sections |> Enum.flat_map(&Map.keys(&1.variable_values)) |> Enum.uniq()
 
-    # A composed document only ever inherits the first section's headers/footers
-    # (see substitute_all_sections/3's doc), so that's the only section whose
-    # variable_values can resolve a header/footer placeholder.
-    header_footer_section = Enum.min_by(sections, & &1.position)
+    # Fallback for a segment id that owns nothing in `sections` (shouldn't
+    # happen — every section has a range entry — kept only as a defensive
+    # default matching the pre-Block-C behaviour).
+    default_section = Enum.min_by(sections, & &1.position)
+    segment_owners = header_footer_owners(doc, sections, ranges)
 
     body_replacements =
       doc
@@ -3497,9 +3818,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       doc
       |> header_footer_text_runs()
       |> Enum.flat_map(fn {segment_id, run} ->
+        section = Map.get(segment_owners, segment_id, default_section)
+
         run
         |> find_text_var_ranges(all_keys)
-        |> Enum.flat_map(&header_footer_replacement(&1, header_footer_section, segment_id))
+        |> Enum.flat_map(&header_footer_replacement(&1, section, segment_id))
       end)
       |> Enum.sort_by(fn {_, s, _, _, _} -> s end, :desc)
 
@@ -3511,6 +3834,80 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       [{key, s, e, resolved_value(section, key), segment_id}]
     else
       []
+    end
+  end
+
+  @doc false
+  # Maps every header/footer segment id reachable from `sections`/`ranges` to
+  # the section that OWNS it: walking sections in ascending `position` order
+  # (matching document order — `Composer.run_multi/5` always appends in
+  # position order), the first section whose OWN or inherited
+  # `defaultHeaderId`/`defaultFooterId` carries a given id owns it. Before a
+  # section could get its own header/footer (`append_template/3`'s
+  # `replay_headers_and_footers/6`), every section resolved to the SAME
+  # single, always-inherited id, whose only "first" section is the one with
+  # the lowest `position` — so this generalizes, rather than replaces, the
+  # pre-Block-C "lowest position" rule.
+  @spec header_footer_owners(map(), [map()], %{non_neg_integer() => {integer(), integer()}}) ::
+          %{String.t() => map()}
+  def header_footer_owners(doc, sections, ranges) do
+    document_style = Map.get(doc, "documentStyle") || %{}
+    ordered = Enum.sort_by(sections, & &1.position)
+
+    {owners, _header_id, _footer_id} =
+      Enum.reduce(
+        ordered,
+        {%{}, Map.get(document_style, "defaultHeaderId"),
+         Map.get(document_style, "defaultFooterId")},
+        fn section, {owners, header_id, footer_id} ->
+          style = section_break_style(doc, ranges, section.position)
+
+          {header_id, owners} =
+            resolve_owner(style, "defaultHeaderId", header_id, section, owners)
+
+          {footer_id, owners} =
+            resolve_owner(style, "defaultFooterId", footer_id, section, owners)
+
+          {owners, header_id, footer_id}
+        end
+      )
+
+    owners
+  end
+
+  # `style` carries the key (even set to the same value as before) only when
+  # that section explicitly diverges — see `effective_trailing_header_footer/1`'s
+  # doc on why absence means inherit, not "resolves to nothing". `Map.put_new`
+  # means the first (lowest-position) section to resolve to a given id is
+  # always the one recorded as its owner, whether that id was just newly
+  # created (unique, so only this section will ever carry it) or is the
+  # original shared one every earlier section already inherited.
+  defp resolve_owner(style, id_key, prev_id, section, owners) do
+    case Map.fetch(style, id_key) do
+      {:ok, id} -> {id, Map.put_new(owners, id, section)}
+      :error when is_nil(prev_id) -> {prev_id, owners}
+      :error -> {prev_id, Map.put_new(owners, prev_id, section)}
+    end
+  end
+
+  # The sectionBreak element that opens `position`'s range: append_template/3
+  # always lands body content two indices past the break it inserted (a
+  # newline, then the section's own fresh paragraph — see its doc), and
+  # section 0's range (`document_content_range/1`) starts at 1, one past the
+  # document's own implicit first break at index 0 — so a range's own
+  # start_index is always exactly its break's start_index + 1.
+  defp section_break_style(doc, ranges, position) do
+    with {range_start, _range_end} <- Map.get(ranges, position),
+         breaks =
+           doc
+           |> get_in(["body", "content"])
+           |> List.wrap()
+           |> Enum.filter(&Map.has_key?(&1, "sectionBreak")),
+         break when not is_nil(break) <-
+           Enum.find(breaks, fn b -> Map.get(b, "startIndex", 0) == range_start - 1 end) do
+      get_in(break, ["sectionBreak", "sectionStyle"]) || %{}
+    else
+      _ -> %{}
     end
   end
 
