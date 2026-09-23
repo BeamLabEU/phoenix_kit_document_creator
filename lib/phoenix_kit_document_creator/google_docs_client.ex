@@ -4108,45 +4108,59 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # single, always-inherited id, whose only "first" section is the one with
   # the lowest `position` — so this generalizes, rather than replaces, the
   # pre-Block-C "lowest position" rule.
+  #
+  # Reuses `section_breaks/1`/`header_footer_id_chain/1` (the same
+  # own-then-previous-section walk `section_boxes/1` folds for its own
+  # purposes) rather than re-deriving the resolution here: each section's
+  # break is matched by position (`matching_break_index/3`), its resolved
+  # `{header_id, footer_id}` read off the chain, and — since the chain
+  # itself stops at `nil` rather than `documentStyle`'s id (see
+  # `header_footer_id_chain/1`'s doc) — that fallback is applied here, the
+  # same way `effective_trailing_header_footer/1` applies it for its own
+  # single "trailing section" lookup.
   @spec header_footer_owners(map(), [map()], %{non_neg_integer() => {integer(), integer()}}) ::
           %{String.t() => map()}
   def header_footer_owners(doc, sections, ranges) do
     document_style = Map.get(doc, "documentStyle") || %{}
+
+    default_ids =
+      {Map.get(document_style, "defaultHeaderId"), Map.get(document_style, "defaultFooterId")}
+
+    breaks = section_breaks(doc)
+    ids_by_break = header_footer_id_chain(breaks)
     ordered = Enum.sort_by(sections, & &1.position)
 
-    {owners, _header_id, _footer_id} =
-      Enum.reduce(
-        ordered,
-        {%{}, Map.get(document_style, "defaultHeaderId"),
-         Map.get(document_style, "defaultFooterId")},
-        fn section, {owners, header_id, footer_id} ->
-          style = section_break_style(doc, ranges, section.position)
+    Enum.reduce(ordered, %{}, fn section, owners ->
+      {header_id, footer_id} =
+        section_header_footer_ids(breaks, ids_by_break, ranges, section, default_ids)
 
-          {header_id, owners} =
-            resolve_owner(style, "defaultHeaderId", header_id, section, owners)
-
-          {footer_id, owners} =
-            resolve_owner(style, "defaultFooterId", footer_id, section, owners)
-
-          {owners, header_id, footer_id}
-        end
-      )
-
-    owners
+      owners
+      |> claim_owner(header_id, section)
+      |> claim_owner(footer_id, section)
+    end)
   end
 
-  # `style` carries the key (even set to the same value as before) only when
-  # that section explicitly diverges — see `effective_trailing_header_footer/1`'s
-  # doc on why absence means inherit, not "resolves to nothing". `Map.put_new`
-  # means the first (lowest-position) section to resolve to a given id is
-  # always the one recorded as its owner, whether that id was just newly
-  # created (unique, so only this section will ever carry it) or is the
-  # original shared one every earlier section already inherited.
-  defp resolve_owner(style, id_key, prev_id, section, owners) do
-    case Map.fetch(style, id_key) do
-      {:ok, id} -> {id, Map.put_new(owners, id, section)}
-      :error when is_nil(prev_id) -> {prev_id, owners}
-      :error -> {prev_id, Map.put_new(owners, prev_id, section)}
+  # `Map.put_new` means the first (lowest-position) section to resolve to a
+  # given id is always the one recorded as its owner, whether that id was
+  # just newly created (unique, so only this section will ever carry it) or
+  # is the original shared one every earlier section already inherited.
+  defp claim_owner(owners, nil, _section), do: owners
+  defp claim_owner(owners, id, section), do: Map.put_new(owners, id, section)
+
+  defp section_header_footer_ids(
+         breaks,
+         ids_by_break,
+         ranges,
+         section,
+         {default_header, default_footer}
+       ) do
+    case matching_break_index(breaks, ranges, section.position) do
+      nil ->
+        {default_header, default_footer}
+
+      index ->
+        {header_id, footer_id} = Enum.at(ids_by_break, index)
+        {header_id || default_header, footer_id || default_footer}
     end
   end
 
@@ -4156,15 +4170,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # section 0's range (`document_content_range/1`) starts at 1, one past the
   # document's own implicit first break at index 0 — so a range's own
   # start_index is always exactly its break's start_index + 1.
-  defp section_break_style(doc, ranges, position) do
-    with {range_start, _range_end} <- Map.get(ranges, position),
-         break when not is_nil(break) <-
-           Enum.find(section_breaks(doc), fn b ->
-             Map.get(b, "startIndex", 0) == range_start - 1
-           end) do
-      get_in(break, ["sectionBreak", "sectionStyle"]) || %{}
-    else
-      _ -> %{}
+  defp matching_break_index(breaks, ranges, position) do
+    case Map.get(ranges, position) do
+      {range_start, _range_end} ->
+        Enum.find_index(breaks, fn b -> Map.get(b, "startIndex", 0) == range_start - 1 end)
+
+      _ ->
+        nil
     end
   end
 
