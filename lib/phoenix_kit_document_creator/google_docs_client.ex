@@ -1810,14 +1810,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   Each appended template becomes its own document SECTION: the content is
   preceded by `insertSectionBreak` (`NEXT_PAGE`, so it still starts on a new
   page) rather than a page break, and the section then gets the template's
-  own page margins via `updateSectionStyle` (`section_margin_requests/2`).
-  Margins are a document-level setting otherwise, so a contract laid out
-  for 72pt margins used to be poured into whatever the first template's
-  were. The margins ride in the same atomic batch as the content, on
-  purpose: a composed document with the wrong margins is the very defect
-  this exists to prevent, so a margin request Google rejects fails the
-  append (and the compose) loudly rather than leaving a quietly mis-laid-out
-  document behind. Traps (the first two verified live 2026-09-21):
+  own page margins AND orientation via `updateSectionStyle`
+  (`section_layout_requests/3`). Margins are a document-level setting
+  otherwise, so a contract laid out for 72pt margins used to be poured into
+  whatever the first template's were. The margins ride in the same atomic
+  batch as the content, on purpose: a composed document with the wrong
+  margins is the very defect this exists to prevent, so a margin request
+  Google rejects fails the append (and the compose) loudly rather than
+  leaving a quietly mis-laid-out document behind. Traps (the first two
+  verified live 2026-09-21):
 
     * A section break inserts a newline ahead of itself, so the appended
       content starts at `insert_index + 2` — in a fresh, empty paragraph of
@@ -1833,7 +1834,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     * `updateDocumentStyle` on margins overwrites the margins of EVERY
       section, silently. Nothing here sends it; anything that ever does must
       run before the section margins are set.
-    * Page size is document-wide in the API — a section cannot have its own.
+    * Page SIZE is document-wide; page ORIENTATION is per section via
+      `flipPageOrientation`, relative to the document's `pageSize` — hence
+      the XOR against the target's page shape in `section_layout_requests/3`.
+      `flipPageOrientation` must always carry a concrete boolean when it's
+      sent — the API requires "setting a concrete value"; unsetting it
+      results in a 400 — so every appended section states it explicitly,
+      including `false`, or it silently inherits the previous section's
+      flip.
 
   Known limitations: cell shading, borders, and merged cells are not
   restored — `insertTable` creates a bare table beyond the column widths
@@ -1871,7 +1879,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           paragraph_then_text_style_requests(content_start, body_paragraphs, body_runs) ++
           clear_inherited_bullets(content_start, text) ++
           paragraph_bullet_requests(content_start, body_paragraphs) ++
-          section_margin_requests(content_start, template_doc)
+          section_layout_requests(content_start, template_doc, current_doc)
 
       case batch_fn.(target_doc_id, requests) do
         {:ok, _} ->
@@ -2498,14 +2506,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   def section_margin_requests(section_index, template_doc) do
     document_style = Map.get(template_doc, "documentStyle") || %{}
     section_style = first_section_style(template_doc)
-
-    margins =
-      Enum.flat_map(@section_margin_fields, fn field ->
-        case dimension_or_nil(Map.get(section_style, field) || Map.get(document_style, field)) do
-          nil -> []
-          dimension -> [{field, dimension_payload(dimension)}]
-        end
-      end)
+    margins = margin_fields(section_style, document_style)
 
     case margins do
       [] ->
@@ -2523,6 +2524,102 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         ]
     end
   end
+
+  @doc """
+  Builds the single `updateSectionStyle` request that gives an appended
+  section both its template's own page margins (same resolution as
+  `section_margin_requests/2`, which this reuses) and its page ORIENTATION,
+  relative to the target document's page size. `target_doc` is the
+  already-fetched target document (`append_template/3`'s `current_doc`).
+
+  Google Docs stores page SIZE document-wide — a section cannot have its own
+  `pageSize` — but page ORIENTATION is per section, via
+  `SectionStyle.flipPageOrientation`, always resolved relative to
+  `DocumentStyle.pageSize`. A template's own "true" orientation is therefore
+  derived, not read off a single field: Google records landscape either as a
+  literally wide `pageSize` (width > height) or as a portrait-shaped
+  `pageSize` plus `flipPageOrientation: true` (section-level if the template
+  itself is a composed document, else document-level) — `landscape_shaped?`
+  XOR the resolved flip covers both. The section this function builds a
+  request for then gets the flip that makes it look, against the TARGET
+  document's own (unflipped) page shape, the way the template actually looks:
+  `template_landscape? XOR target_landscape_shaped?`.
+
+  `flipPageOrientation` is ALWAYS in the request with a concrete boolean —
+  never omitted, including `false` — in the same `updateSectionStyle` and
+  mask as the margins. The API requires "setting a concrete value" for this
+  field; unsetting it results in a 400, and omitting the request entirely
+  would let the section silently inherit whatever flip the previous section
+  (or the document) carries — the exact defect this exists to prevent when a
+  portrait template follows a landscape one.
+  """
+  @spec section_layout_requests(non_neg_integer(), map(), map()) :: [map()]
+  def section_layout_requests(section_index, template_doc, target_doc) do
+    document_style = Map.get(template_doc, "documentStyle") || %{}
+    section_style = first_section_style(template_doc)
+    margins = margin_fields(section_style, document_style)
+    flip = section_flip?(template_doc, target_doc)
+
+    style = margins |> Map.new() |> Map.put("flipPageOrientation", flip)
+    fields = Enum.map_join(margins ++ [{"flipPageOrientation", flip}], ",", &elem(&1, 0))
+
+    [
+      %{
+        "updateSectionStyle" => %{
+          "range" => %{"startIndex" => section_index, "endIndex" => section_index + 1},
+          "sectionStyle" => style,
+          "fields" => fields
+        }
+      }
+    ]
+  end
+
+  defp margin_fields(section_style, document_style) do
+    Enum.flat_map(@section_margin_fields, fn field ->
+      case dimension_or_nil(Map.get(section_style, field) || Map.get(document_style, field)) do
+        nil -> []
+        dimension -> [{field, dimension_payload(dimension)}]
+      end
+    end)
+  end
+
+  # section_flip = template_landscape? XOR target_landscape_shaped? — see
+  # section_layout_requests/3's doc. Booleans, so XOR is plain `!=`.
+  defp section_flip?(template_doc, target_doc) do
+    template_page_size = get_in(template_doc, ["documentStyle", "pageSize"])
+    target_page_size = get_in(target_doc, ["documentStyle", "pageSize"])
+
+    template_landscape? = landscape_shaped?(template_page_size) != template_flip?(template_doc)
+    target_landscape_shaped? = landscape_shaped?(target_page_size)
+
+    template_landscape? != target_landscape_shaped?
+  end
+
+  # first_section_style's flipPageOrientation, if explicitly present (even
+  # `false` — a composed template's own section can override its document),
+  # else the template's documentStyle.flipPageOrientation, else false.
+  # Map.get/2 with `||` would treat an explicit `false` as absent, so this
+  # uses Map.fetch/2 to tell "unset" from "set to false" apart.
+  defp template_flip?(template_doc) do
+    section_style = first_section_style(template_doc)
+    document_style = Map.get(template_doc, "documentStyle") || %{}
+
+    case Map.fetch(section_style, "flipPageOrientation") do
+      {:ok, flip} when is_boolean(flip) -> flip
+      _ -> Map.get(document_style, "flipPageOrientation", false)
+    end
+  end
+
+  # width > height; no pageSize (or a pageSize missing a dimension) is never
+  # landscape.
+  defp landscape_shaped?(page_size) when is_map(page_size) do
+    width = magnitude(Map.get(page_size, "width"))
+    height = magnitude(Map.get(page_size, "height"))
+
+    is_number(width) and is_number(height) and width > height
+  end
+
+  defp landscape_shaped?(_), do: false
 
   # A body's first structural element is always the section break that
   # opens its first section.
