@@ -408,4 +408,171 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientPhaseTest do
       assert uris == ["a.jpg", "b.jpg"]
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # grid_border_requests/1 + build_phase2_requests/5 — borderless image grids
+  # ---------------------------------------------------------------------------
+
+  describe "grid_border_requests/1" do
+    test "spans the whole table with the table's own row/column count" do
+      table_el = %{
+        "startIndex" => 42,
+        "table" => %{"rows" => 2, "columns" => 3, "tableRows" => []}
+      }
+
+      [req] = GoogleDocsClient.grid_border_requests(table_el)
+
+      range = get_in(req, ["updateTableCellStyle", "tableRange"])
+      assert range["rowSpan"] == 2
+      assert range["columnSpan"] == 3
+
+      location = get_in(range, ["tableCellLocation"])
+      assert get_in(location, ["tableStartLocation", "index"]) == 42
+      assert location["rowIndex"] == 0
+      assert location["columnIndex"] == 0
+    end
+
+    test "zeroes all four borders and touches nothing else (padding untouched)" do
+      table_el = %{
+        "startIndex" => 1,
+        "table" => %{"rows" => 1, "columns" => 2, "tableRows" => []}
+      }
+
+      [req] = GoogleDocsClient.grid_border_requests(table_el)
+
+      style = get_in(req, ["updateTableCellStyle", "tableCellStyle"])
+
+      for side <- ~w(borderTop borderBottom borderLeft borderRight) do
+        assert get_in(style, [side, "width", "magnitude"]) == 0
+      end
+
+      refute Map.has_key?(style, "paddingTop")
+
+      assert get_in(req, ["updateTableCellStyle", "fields"]) ==
+               "borderTop,borderBottom,borderLeft,borderRight"
+    end
+
+    test "a table block missing startIndex (proto3 omission) defaults to 0" do
+      table_el = %{"table" => %{"rows" => 1, "columns" => 2, "tableRows" => []}}
+      [req] = GoogleDocsClient.grid_border_requests(table_el)
+
+      assert get_in(req, [
+               "updateTableCellStyle",
+               "tableRange",
+               "tableCellLocation",
+               "tableStartLocation",
+               "index"
+             ]) == 0
+    end
+  end
+
+  describe "build_phase2_requests/5" do
+    # A grid table with `rows * columns` cells, laid out left-to-right,
+    # top-to-bottom, each cell's startIndex spaced out like a real Docs
+    # table.
+    defp grid_table_el(start_index, rows, columns) do
+      cell_starts =
+        for r <- 0..(rows - 1), c <- 0..(columns - 1) do
+          start_index + 10 + (r * columns + c) * 20
+        end
+
+      table_rows =
+        cell_starts
+        |> Enum.chunk_every(columns)
+        |> Enum.map(fn row_starts ->
+          %{"tableCells" => Enum.map(row_starts, &%{"startIndex" => &1, "content" => []})}
+        end)
+
+      %{
+        "startIndex" => start_index,
+        "table" => %{"rows" => rows, "columns" => columns, "tableRows" => table_rows}
+      }
+    end
+
+    test "one grid table: its border request precedes every image insert" do
+      slot = %{name: "grid", start_index: 50, end_index: 70}
+      table_el = grid_table_el(110, 2, 2)
+      fill = %{kind: :image_list, columns: 2, media: [%{uri: "a"}, %{uri: "b"}, %{uri: "c"}]}
+
+      requests =
+        GoogleDocsClient.build_phase2_requests([slot], [table_el], %{"grid" => fill}, %{}, [])
+
+      kinds = Enum.map(requests, fn r -> r |> Map.keys() |> hd() end)
+
+      assert kinds == [
+               "updateTableCellStyle",
+               "insertInlineImage",
+               "insertInlineImage",
+               "insertInlineImage"
+             ]
+
+      range = get_in(hd(requests), ["updateTableCellStyle", "tableRange"])
+      assert range["rowSpan"] == 2
+      assert range["columnSpan"] == 2
+    end
+
+    test "two grid tables: each keeps its own tableStartLocation, both borders precede every insert" do
+      slot_a = %{name: "a", start_index: 50, end_index: 70}
+      slot_b = %{name: "b", start_index: 200, end_index: 220}
+      table_a = grid_table_el(110, 1, 2)
+      table_b = grid_table_el(260, 1, 2)
+
+      fills = %{
+        "a" => %{kind: :image_list, columns: 2, media: [%{uri: "a1"}, %{uri: "a2"}]},
+        "b" => %{kind: :image_list, columns: 2, media: [%{uri: "b1"}, %{uri: "b2"}]}
+      }
+
+      requests =
+        GoogleDocsClient.build_phase2_requests(
+          [slot_a, slot_b],
+          [table_a, table_b],
+          fills,
+          %{},
+          []
+        )
+
+      border_reqs = Enum.filter(requests, &Map.has_key?(&1, "updateTableCellStyle"))
+      assert length(border_reqs) == 2
+
+      starts =
+        Enum.map(border_reqs, fn r ->
+          get_in(r, [
+            "updateTableCellStyle",
+            "tableRange",
+            "tableCellLocation",
+            "tableStartLocation",
+            "index"
+          ])
+        end)
+
+      assert Enum.sort(starts) == [110, 260]
+
+      border_positions =
+        for {r, i} <- Enum.with_index(requests), Map.has_key?(r, "updateTableCellStyle"), do: i
+
+      insert_positions =
+        for {r, i} <- Enum.with_index(requests), Map.has_key?(r, "insertInlineImage"), do: i
+
+      assert Enum.max(border_positions) < Enum.min(insert_positions),
+             "every border request must precede every image insert"
+    end
+
+    test "columns: 1 slot gets no border request (regression)" do
+      slot = %{name: "single_col", start_index: 50, end_index: 70}
+      table_el = grid_table_el(110, 2, 1)
+      fill = %{kind: :image_list, columns: 1, media: [%{uri: "a"}, %{uri: "b"}]}
+
+      requests =
+        GoogleDocsClient.build_phase2_requests(
+          [slot],
+          [table_el],
+          %{"single_col" => fill},
+          %{},
+          []
+        )
+
+      refute Enum.any?(requests, &Map.has_key?(&1, "updateTableCellStyle"))
+      assert Enum.count(requests, &Map.has_key?(&1, "insertInlineImage")) == 2
+    end
+  end
 end

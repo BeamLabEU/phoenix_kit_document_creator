@@ -1016,6 +1016,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @default_margin_pt 72.0
   @default_header_footer_margin_pt 36.0
   @max_columns 4
+  # `insertTable` draws Docs' default black 1pt cell border; a grid slot
+  # (image_list, columns >= 2) wants a borderless layout, so every side is
+  # reset to an explicit zero-width line rather than left unset (an unset
+  # border keeps the default, it does not clear it).
+  @grid_border_none %{
+    "width" => %{"magnitude" => 0, "unit" => "PT"},
+    "dashStyle" => "SOLID",
+    "color" => %{"color" => %{"rgbColor" => %{}}}
+  }
   @default_paragraph_font_size_pt 11.0
   @default_line_spacing_pct 115.0
   # A line's true height runs ahead of the naive fontSize × lineSpacing/100
@@ -5011,10 +5020,43 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # matched tables, paired with their slots in document order. Each table's
   # width comes from its own section's box, same as the inline path.
   defp fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, doc2, boxes) do
-    phase2_requests =
-      table_slots_asc
-      |> Enum.zip(new_tables)
-      |> Enum.flat_map(fn {%{name: name, start_index: s}, table_el} ->
+    phase2_requests = build_phase2_requests(table_slots_asc, new_tables, fills_map, doc2, boxes)
+
+    case maybe_batch(&batch_update/2, doc_id, phase2_requests) do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
+  Builds the Phase 2 batch: for every matched table, an
+  `updateTableCellStyle` clearing its default cell borders when its slot is
+  a grid (`columns >= 2`), followed by one `insertInlineImage` per cell.
+
+  All border requests come first, across every table, before any cell fill —
+  `insertInlineImage` shifts the indices of tables that come later in the
+  document, but `updateTableCellStyle` (addressed by `tableStartLocation`,
+  not a text index range) does not, so ordering border-then-fill within one
+  table would still corrupt a later table's `startIndex` were the two kinds
+  interleaved per table instead of grouped by kind.
+  """
+  @spec build_phase2_requests([map()], [map()], map(), map(), [map()]) :: [map()]
+  def build_phase2_requests(table_slots_asc, new_tables, fills_map, doc2, boxes) do
+    slots_and_tables = Enum.zip(table_slots_asc, new_tables)
+
+    border_requests =
+      Enum.flat_map(slots_and_tables, fn {%{name: name}, table_el} ->
+        fill = Map.fetch!(fills_map, name)
+
+        if Map.get(fill, :columns, 1) >= 2 do
+          grid_border_requests(table_el)
+        else
+          []
+        end
+      end)
+
+    fill_requests =
+      Enum.flat_map(slots_and_tables, fn {%{name: name, start_index: s}, table_el} ->
         fill = Map.fetch!(fills_map, name)
         cols = Map.get(fill, :columns, 1)
         box = box_for_index(boxes, s)
@@ -5024,10 +5066,48 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         fill_table_cells(cells, fill.media, %{image_width_pt: image_width_pt})
       end)
 
-    case maybe_batch(&batch_update/2, doc_id, phase2_requests) do
-      {:ok, _} -> :ok
-      {:error, _} = err -> err
-    end
+    border_requests ++ fill_requests
+  end
+
+  @doc """
+  One `updateTableCellStyle` spanning a whole table, zeroing all four cell
+  borders (padding untouched). `table_el` is a block as returned by
+  `collect_tables/1` (`%{"startIndex" => _, "table" => %{...}}`); its
+  `rowSpan`/`columnSpan` come from the table's own dimensions
+  (`table_dimensions/1`), not from the slot config, so a partially-filled
+  last row is still covered.
+
+  A table block missing `"startIndex"` (proto3 omits an explicit zero) is
+  defaulted to 0 defensively — real document content never starts before
+  index 1, so this branch is never expected to fire.
+  """
+  @spec grid_border_requests(map()) :: [map()]
+  def grid_border_requests(%{"table" => table} = table_el) do
+    {rows, columns} = table_dimensions(table)
+    start_index = Map.get(table_el, "startIndex") || 0
+
+    [
+      %{
+        "updateTableCellStyle" => %{
+          "tableRange" => %{
+            "tableCellLocation" => %{
+              "tableStartLocation" => %{"index" => start_index},
+              "rowIndex" => 0,
+              "columnIndex" => 0
+            },
+            "rowSpan" => rows,
+            "columnSpan" => columns
+          },
+          "tableCellStyle" => %{
+            "borderTop" => @grid_border_none,
+            "borderBottom" => @grid_border_none,
+            "borderLeft" => @grid_border_none,
+            "borderRight" => @grid_border_none
+          },
+          "fields" => "borderTop,borderBottom,borderLeft,borderRight"
+        }
+      }
+    ]
   end
 
   # Walk doc body content and collect all table StructuralElements, in
