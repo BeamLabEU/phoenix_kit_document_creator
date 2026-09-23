@@ -770,6 +770,220 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
              }
     end
 
+    test "replays a segment with two tables ([P, TABLE, P, TABLE, P])" do
+      # Every other table test here has exactly one table; the whole
+      # table-bearing pipeline (`table_bearing_skeleton_text/2`'s
+      # newline-stripping, `table_skeleton_requests/2`'s per-marker
+      # delete+insertTable, `match_segment_elements/2`'s pairing) is
+      # generic over N tables but had never actually been run with N=2
+      # even at the mock level (review recommendation, 2026-09-23).
+      one_cell_table = fn cell_text ->
+        %{
+          "table" => %{
+            "rows" => 1,
+            "columns" => 1,
+            "tableRows" => [
+              %{
+                "tableCells" => [
+                  %{
+                    "content" => [
+                      %{
+                        "paragraph" => %{
+                          "elements" => [%{"textRun" => %{"content" => cell_text}}]
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      end
+
+      template_header_content = [
+        text_paragraph("a\n"),
+        one_cell_table.("X\n"),
+        text_paragraph("b\n"),
+        one_cell_table.("Y\n"),
+        text_paragraph("c\n")
+      ]
+
+      template_doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.tpl_header"},
+        "headers" => %{"kix.tpl_header" => %{"content" => template_header_content}},
+        "body" => %{"content" => [text_paragraph("Body\n")]}
+      }
+
+      current_doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.cur_header"},
+        "headers" => %{"kix.cur_header" => %{"content" => [text_paragraph("Plain\n")]}},
+        "body" => target_body()
+      }
+
+      # Derived by hand from `table_bearing_skeleton_text/2`'s own rule: a
+      # paragraph immediately before a table marker (or the template's
+      # last block) never gets its own trailing "\n" inserted — "a\n" and
+      # "b\n" both precede a table marker, "c\n" is the last block — so
+      # all three strip to their bare letter and the markers (18 chars
+      # each, single-digit marker index) are the only thing separating
+      # them.
+      expected_skeleton_text = "a __PKDC_TABLE_1__ b __PKDC_TABLE_2__ c"
+
+      doc_after_skeleton = %{
+        "headers" => %{
+          "kix.new_header" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [%{"textRun" => %{"content" => expected_skeleton_text}}]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      # Freely chosen, self-consistent positions: `table_start`/paragraph
+      # `startIndex` are read directly off each segment element here
+      # (`table_info_to_entry/2`, `paragraph_element_requests/2`'s
+      # `base_index`), not derived analytically from the skeleton batch —
+      # any non-overlapping ascending set exercises the same code a real
+      # re-fetch would.
+      doc_after_table_skeleton = %{
+        "headers" => %{
+          "kix.new_header" => %{
+            "content" => [
+              %{
+                "startIndex" => 0,
+                "paragraph" => %{
+                  "elements" => [%{"startIndex" => 0, "textRun" => %{"content" => "a\n"}}]
+                }
+              },
+              %{
+                "startIndex" => 2,
+                "table" => %{
+                  "tableRows" => [%{"tableCells" => [%{"startIndex" => 3, "content" => []}]}]
+                }
+              },
+              %{
+                "startIndex" => 6,
+                "paragraph" => %{
+                  "elements" => [%{"startIndex" => 6, "textRun" => %{"content" => "b\n"}}]
+                }
+              },
+              %{
+                "startIndex" => 8,
+                "table" => %{
+                  "tableRows" => [%{"tableCells" => [%{"startIndex" => 9, "content" => []}]}]
+                }
+              },
+              %{
+                "startIndex" => 12,
+                "paragraph" => %{
+                  "elements" => [%{"startIndex" => 12, "textRun" => %{"content" => "c\n"}}]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      target_docs = :counters.new(1, [])
+
+      get_fn = fn
+        "template-id" ->
+          {:ok, %{body: template_doc}}
+
+        "target-id" ->
+          call = :counters.get(target_docs, 1)
+          :counters.add(target_docs, 1, 1)
+
+          case call do
+            0 -> {:ok, %{body: current_doc}}
+            1 -> {:ok, %{body: doc_after_skeleton}}
+            2 -> {:ok, %{body: doc_after_table_skeleton}}
+          end
+      end
+
+      batch_fn = fn
+        "target-id", [%{"createHeader" => _}] = requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{body: %{"replies" => [%{"createHeader" => %{"headerId" => "kix.new_header"}}]}}}
+
+        "target-id", requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{}}
+      end
+
+      assert {:ok, {11, _}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, [%{insertSectionBreak: %{}} | _]}
+      assert_receive {:batch, [%{"createHeader" => _}]}
+
+      assert_receive {:batch,
+                      [
+                        %{
+                          "insertText" => %{
+                            "location" => %{"segmentId" => "kix.new_header"},
+                            "text" => ^expected_skeleton_text
+                          }
+                        }
+                      ]}
+
+      assert_receive {:batch, table_skeleton_batch}
+
+      insert_tables = Enum.filter(table_skeleton_batch, &Map.has_key?(&1, "insertTable"))
+      assert length(insert_tables) == 2
+
+      assert Enum.all?(table_skeleton_batch, fn
+               %{"deleteContentRange" => %{"range" => range}} ->
+                 range["segmentId"] == "kix.new_header"
+
+               %{"insertTable" => %{"location" => loc}} ->
+                 loc["segmentId"] == "kix.new_header"
+             end)
+
+      assert_receive {:batch, style_batch}
+      refute_receive {:batch, _}
+
+      paragraph_style_ranges =
+        style_batch
+        |> Enum.filter(&Map.has_key?(&1, "updateParagraphStyle"))
+        |> Enum.map(& &1["updateParagraphStyle"]["range"])
+        |> Enum.uniq()
+
+      # all three paragraphs styled at their own real post-split index —
+      # never an analytical shift.
+      assert %{"startIndex" => 0, "endIndex" => 2, "segmentId" => "kix.new_header"} in paragraph_style_ranges
+
+      assert %{"startIndex" => 6, "endIndex" => 8, "segmentId" => "kix.new_header"} in paragraph_style_ranges
+
+      assert %{"startIndex" => 12, "endIndex" => 14, "segmentId" => "kix.new_header"} in paragraph_style_ranges
+
+      table_starts =
+        style_batch
+        |> Enum.filter(&Map.has_key?(&1, "updateTableCellStyle"))
+        |> Enum.map(fn req ->
+          get_in(req, [
+            "updateTableCellStyle",
+            "tableRange",
+            "tableCellLocation",
+            "tableStartLocation",
+            "index"
+          ])
+        end)
+        |> Enum.uniq()
+
+      # both tables got their own fill/style requests, at their own real
+      # (not the other table's) startIndex.
+      assert Enum.sort(table_starts) == [2, 8]
+    end
+
     test "a segment element count mismatch fails loudly instead of guessing a pairing" do
       template_header_content = [text_paragraph("\n")] ++ table_header_content()
 
@@ -985,6 +1199,94 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
       # (now at index 6: 5 inserted chars + the 1 pre-existing) is never
       # targeted by a delete.
       refute_terminal_newline_delete!(skeleton_batch, 6)
+    end
+
+    test "a border with no explicit width magnitude is never sent (explicit-zero, not \"no border\")" do
+      # `border_or_nil/2`'s own convention: a border whose `width` carries
+      # no `magnitude` at all is the API's spelling for "explicitly no
+      # line" (elsewhere a bare missing key means "unset", but not here —
+      # sending it back verbatim would draw a border Google renders as
+      # invisible-but-present). Mutating `border_or_nil/2` to send ANY
+      # border regardless of magnitude passed every other test in this
+      # file — this one pins the negative case specifically. `borderTop`
+      # carries a real width on the SAME paragraph so the extra-style pass
+      # is proven to still run, not just accidentally emit nothing.
+      real_border = %{
+        "color" => %{"color" => %{"rgbColor" => %{"red" => 0.2}}},
+        "width" => %{"magnitude" => 1.0, "unit" => "PT"},
+        "dashStyle" => "SOLID"
+      }
+
+      template_footer_content = [
+        %{
+          "paragraph" => %{
+            "elements" => [%{"textRun" => %{"content" => "Text\n"}}],
+            "paragraphStyle" => %{
+              "borderTop" => real_border,
+              "borderBottom" => %{"width" => %{"unit" => "PT"}}
+            }
+          }
+        }
+      ]
+
+      template_doc = %{
+        "documentStyle" => %{"defaultFooterId" => "kix.tpl_footer"},
+        "footers" => %{"kix.tpl_footer" => %{"content" => template_footer_content}},
+        "body" => %{"content" => [text_paragraph("Body\n")]}
+      }
+
+      current_doc = %{
+        "documentStyle" => %{"defaultFooterId" => "kix.cur_footer"},
+        "footers" => %{"kix.cur_footer" => %{"content" => [text_paragraph("Plain\n")]}},
+        "body" => target_body()
+      }
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template_doc}}
+        "target-id" -> {:ok, %{body: current_doc}}
+      end
+
+      batch_fn = fn
+        "target-id", [%{"createFooter" => _}] = requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{body: %{"replies" => [%{"createFooter" => %{"footerId" => "kix.new_footer"}}]}}}
+
+        "target-id", requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{}}
+      end
+
+      assert {:ok, {11, _}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, [%{insertSectionBreak: %{}} | _]}
+      assert_receive {:batch, [%{"createFooter" => _}]}
+      assert_receive {:batch, skeleton_batch}
+      refute_receive {:batch, _}
+
+      border_request =
+        Enum.find(skeleton_batch, fn
+          %{"updateParagraphStyle" => %{"fields" => fields}} ->
+            String.contains?(fields, "border")
+
+          _ ->
+            false
+        end)
+
+      assert border_request, "expected an extra-style border request for borderTop"
+      assert border_request["updateParagraphStyle"]["fields"] == "borderTop"
+
+      assert border_request["updateParagraphStyle"]["paragraphStyle"] == %{
+               "borderTop" => real_border
+             }
+
+      refute Map.has_key?(
+               border_request["updateParagraphStyle"]["paragraphStyle"],
+               "borderBottom"
+             )
     end
 
     test "a native horizontalRule replays as a forced 4pt/6pt-spaceBelow bordered paragraph" do

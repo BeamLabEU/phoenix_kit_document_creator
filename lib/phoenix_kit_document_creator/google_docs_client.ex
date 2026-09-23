@@ -2814,6 +2814,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  # A `horizontalRule` run's forced 4pt `font_size` here is NOT the only
+  # `updateTextStyle` targeting that run — the shared narrow pass
+  # (`text_style_requests/2`) already captured the run's own real
+  # `fontSize` (e.g. 9.5pt) into an EARLIER request over the same range.
+  # This only ends up correct because every caller that concatenates the
+  # two (`paragraph_element_requests/2`, `body_extra_style_requests/4`,
+  # `SegmentReplay.cell_fill_and_image_requests/2`) puts the narrow
+  # request BEFORE this extra one in the same `batchUpdate` — Docs applies
+  # `updateTextStyle` requests to overlapping ranges in request order, last
+  # write wins, so the forced 4pt overrides the real size. Reordering
+  # either concatenation would silently let the run's own size win instead.
   defp text_extras({raw_style, rule?}) do
     %{
       weighted_font_family: Map.get(raw_style, "weightedFontFamily"),
