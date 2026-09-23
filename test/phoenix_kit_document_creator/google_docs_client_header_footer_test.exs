@@ -619,6 +619,157 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
                )
     end
 
+    test "keeps a cell's font-family style even when its only content is an empty, but styled, run" do
+      # Verified live 2026-09-23 (segment_compare.exs structural diff): a
+      # Leping-style header's signature cell holds one paragraph whose
+      # sole textRun content is exactly "\n" — no visible text, since it's
+      # left over after real text was once typed and then deleted — but
+      # still carries `weightedFontFamily: Calibri`. `info.cell_runs` (fed
+      # to `insertText`/base style) correctly drops this run: there's
+      # nothing to insert. But the extra-style pass was zipping its raw
+      # style list against that SAME (now empty) run list, so the style
+      # silently vanished instead of landing on the cell's own
+      # pre-existing terminal newline (`cell_run_extra_specs/1` fixes
+      # this).
+      styled_empty_cell_content = [
+        %{
+          "paragraph" => %{
+            "elements" => [
+              %{
+                "textRun" => %{
+                  "content" => "\n",
+                  "textStyle" => %{
+                    "weightedFontFamily" => %{"fontFamily" => "Calibri", "weight" => 400}
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+
+      template_header_content = [
+        %{
+          "table" => %{
+            "rows" => 1,
+            "columns" => 1,
+            "tableRows" => [
+              %{"tableCells" => [%{"content" => styled_empty_cell_content}]}
+            ]
+          }
+        }
+      ]
+
+      template_doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.tpl_header"},
+        "headers" => %{"kix.tpl_header" => %{"content" => template_header_content}},
+        "body" => %{"content" => [text_paragraph("Body\n")]}
+      }
+
+      current_doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.cur_header"},
+        "headers" => %{"kix.cur_header" => %{"content" => [text_paragraph("Plain\n")]}},
+        "body" => target_body()
+      }
+
+      {marker_text, _tables} =
+        GoogleDocsClient.flatten_template_with_table_markers(%{
+          "body" => %{"content" => template_header_content}
+        })
+
+      doc_after_skeleton = %{
+        "headers" => %{
+          "kix.new_header" => %{
+            "content" => [
+              %{"paragraph" => %{"elements" => [%{"textRun" => %{"content" => marker_text}}]}}
+            ]
+          }
+        }
+      }
+
+      # The cell stays empty (nothing to insert — the styled run reduces
+      # to nothing but its own pre-existing terminal newline), so its
+      # bare startIndex/content (no endIndex needed — `extract_table_cells/1`
+      # only reads startIndex) is enough.
+      doc_after_table_skeleton = %{
+        "headers" => %{
+          "kix.new_header" => %{
+            "content" => [
+              %{
+                "table" => %{
+                  "tableRows" => [%{"tableCells" => [%{"startIndex" => 1, "content" => []}]}]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      target_docs = :counters.new(1, [])
+
+      get_fn = fn
+        "template-id" ->
+          {:ok, %{body: template_doc}}
+
+        "target-id" ->
+          call = :counters.get(target_docs, 1)
+          :counters.add(target_docs, 1, 1)
+
+          case call do
+            0 -> {:ok, %{body: current_doc}}
+            1 -> {:ok, %{body: doc_after_skeleton}}
+            2 -> {:ok, %{body: doc_after_table_skeleton}}
+          end
+      end
+
+      batch_fn = fn
+        "target-id", [%{"createHeader" => _}] = requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{body: %{"replies" => [%{"createHeader" => %{"headerId" => "kix.new_header"}}]}}}
+
+        "target-id", requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{}}
+      end
+
+      assert {:ok, {11, _}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, [%{insertSectionBreak: %{}} | _]}
+      assert_receive {:batch, [%{"createHeader" => _}]}
+      assert_receive {:batch, _skeleton_insert_batch}
+      assert_receive {:batch, _table_skeleton_batch}
+      assert_receive {:batch, style_batch}
+      refute_receive {:batch, _}
+
+      font_family_request =
+        Enum.find(style_batch, fn
+          %{"updateTextStyle" => %{"textStyle" => %{"weightedFontFamily" => _}}} -> true
+          _ -> false
+        end)
+
+      assert font_family_request,
+             "expected a weightedFontFamily updateTextStyle request for the cell's " <>
+               "empty-but-styled run, got: #{inspect(style_batch)}"
+
+      # The cell's real insert_index is startIndex(1) + 1 = 2 — the range
+      # covers exactly the cell's own pre-existing terminal newline (a
+      # real 1-character range, never zero-width or analytically shifted).
+      assert font_family_request["updateTextStyle"]["range"] == %{
+               "startIndex" => 2,
+               "endIndex" => 3,
+               "segmentId" => "kix.new_header"
+             }
+
+      assert font_family_request["updateTextStyle"]["textStyle"]["weightedFontFamily"] == %{
+               "fontFamily" => "Calibri",
+               "weight" => 400
+             }
+    end
+
     test "a segment element count mismatch fails loudly instead of guessing a pairing" do
       template_header_content = [text_paragraph("\n")] ++ table_header_content()
 

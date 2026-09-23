@@ -2677,6 +2677,85 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end)
   end
 
+  # Self-contained counterpart to `info.cell_runs`/`raw_run_style_list/1`
+  # for a cell's EXTRA style pass only — built independently instead of
+  # zipped against `info.cell_runs` because the two need to disagree on the
+  # cell's degenerate last run.
+  #
+  # `cell_style_runs/1` (which builds `info.cell_runs`, feeding `insertText`
+  # and the base run style) strips the trailing newline off the cell's last
+  # run and DROPS it entirely if that leaves no text — correct there, since
+  # a run with nothing left to insert needs no insert/base-style request.
+  # But a cell whose sole content is one empty paragraph that still carries
+  # styling (content exactly `"\n"`, e.g. a signature line's
+  # `weightedFontFamily` left over from text since deleted) has real style
+  # to replay even though there is no character worth inserting: the
+  # style's target is simply the cell's own pre-existing terminal newline,
+  # which is never deleted and always sits exactly where that run's text
+  # would have ended. So instead of dropping this run, its length is
+  # clamped to 1 (rather than the 0 a plain subtraction would give) so it
+  # still resolves to a valid, real one-character range — the same
+  # structural newline `cell_fill_and_image_requests/2`'s callers already
+  # rely on for the "empty cell" insert-text case (see `cell_requests/5`'s
+  # `""` clause) — instead of vanishing (verified live 2026-09-23: a
+  # Leping-style header's signature cell silently lost its Calibri
+  # `weightedFontFamily` without this).
+  #
+  # Offsets are threaded across the cell's own paragraphs the same way
+  # `cell_style_runs/1` computes them (one continuous run sequence starting
+  # at 0, never reset per paragraph) so they land at the same positions
+  # `cell_requests/5` inserts real text at; `rule?` stays paragraph-scoped
+  # like `raw_run_style_list/1`'s.
+  defp cell_run_extra_specs(content) do
+    {rev_specs, _offset} =
+      content
+      |> raw_paragraph_blocks()
+      |> Enum.reduce({[], 0}, &paragraph_run_extra_specs/2)
+
+    rev_specs
+    |> Enum.reverse()
+    |> shrink_trailing_newline_run()
+    |> Enum.map(fn spec ->
+      {%{start_offset: spec.start_offset, length: spec.length},
+       text_extras({spec.style, spec.rule?})}
+    end)
+  end
+
+  defp paragraph_run_extra_specs(paragraph, {specs, offset}) do
+    rule? = has_horizontal_rule?(paragraph)
+
+    paragraph
+    |> Map.get("elements", [])
+    |> Enum.reduce({specs, offset}, fn el, {acc, off} ->
+      element_run_extra_spec(el, rule?, acc, off)
+    end)
+  end
+
+  defp element_run_extra_spec(el, rule?, acc, off) do
+    text = get_in(el, ["textRun", "content"]) || ""
+
+    if text == "" do
+      {acc, off}
+    else
+      len = utf16_units(text)
+      style = get_in(el, ["textRun", "textStyle"]) || %{}
+      spec = %{start_offset: off, length: len, text: text, style: style, rule?: rule?}
+      {[spec | acc], off + len}
+    end
+  end
+
+  defp shrink_trailing_newline_run([]), do: []
+
+  defp shrink_trailing_newline_run(specs) do
+    {init, [last]} = Enum.split(specs, -1)
+
+    if String.ends_with?(last.text, "\n") do
+      init ++ [%{last | length: max(last.length - 1, 1)}]
+    else
+      init ++ [last]
+    end
+  end
+
   # A paragraph carrying a native `horizontalRule` element (never inserted
   # through the API, see `append_template/3`'s header/footer doc) replays
   # as a thin bordered paragraph regardless of what its OWN paragraphStyle
@@ -2849,9 +2928,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # `columns` the same way `normalize_row/3` already pads `cell_texts`),
   # `cell_image_ids` (an `inlineObjects` key or `nil`, same padding), and
   # `cell_paragraph_extras`/`cell_run_extras` (border/font-family/underline/
-  # link per cell, same padding — a cell's own content list is walked the
-  # same way `body_extra_style_requests/4` walks the body, so each cell's
-  # entry index-aligns with that cell's own `cell_paragraphs`/`cell_runs`).
+  # link per cell, same padding). `cell_paragraph_extras`'s spans still
+  # index-align with `info.cell_paragraphs` (one entry per raw paragraph
+  # block, no filtering on either side); `cell_run_extras` is built by
+  # `cell_run_extra_specs/1` entirely on its own (see its doc for why it
+  # can't just zip against `info.cell_runs` like the paragraph one does).
   defp augment_table_info(info, raw_table) do
     rows = get_in(raw_table, ["table", "tableRows"]) || []
     cell_styles = Enum.flat_map(rows, &normalize_row(row_cell_styles(&1), info.columns, %{}))
@@ -2868,11 +2949,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         Enum.zip(spans, Enum.map(raw_paragraph_blocks(raw_content), &paragraph_extras/1))
       end)
 
-    cell_run_extras =
-      Enum.zip(info.cell_runs, raw_cell_contents)
-      |> Enum.map(fn {cell_runs, raw_content} ->
-        Enum.zip(cell_runs, Enum.map(raw_run_style_list(raw_content), &text_extras/1))
-      end)
+    cell_run_extras = Enum.map(raw_cell_contents, &cell_run_extra_specs/1)
 
     info
     |> Map.put(:cell_styles, cell_styles)
