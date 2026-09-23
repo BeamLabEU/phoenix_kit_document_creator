@@ -380,6 +380,106 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplayTest do
     end
   end
 
+  describe "extra_paragraph_style_requests/2" do
+    defp span(start_offset, length), do: %{start_offset: start_offset, length: length}
+
+    defp no_paragraph_extras do
+      %{
+        border_top: nil,
+        border_bottom: nil,
+        border_left: nil,
+        border_right: nil,
+        shading: nil,
+        space_below: nil
+      }
+    end
+
+    test "one request per span carrying at least one extra field, none for a span with none" do
+      border = %{"width" => %{"magnitude" => 0.75, "unit" => "PT"}}
+
+      spans_with_extras = [
+        {span(0, 1), %{no_paragraph_extras() | border_bottom: border}},
+        {span(1, 3), no_paragraph_extras()}
+      ]
+
+      assert [request] = SegmentReplay.extra_paragraph_style_requests(10, spans_with_extras)
+
+      assert request == %{
+               "updateParagraphStyle" => %{
+                 "range" => %{"startIndex" => 10, "endIndex" => 11},
+                 "paragraphStyle" => %{"borderBottom" => border},
+                 "fields" => "borderBottom"
+               }
+             }
+    end
+
+    test "forced spaceBelow (the horizontalRule stand-in) is included when present" do
+      extras = %{no_paragraph_extras() | space_below: 6.0}
+
+      assert [request] = SegmentReplay.extra_paragraph_style_requests(0, [{span(0, 1), extras}])
+
+      assert request["updateParagraphStyle"]["paragraphStyle"]["spaceBelow"] ==
+               %{"magnitude" => 6.0, "unit" => "PT"}
+    end
+
+    test "a zero-length span never gets a request" do
+      extras = %{no_paragraph_extras() | shading: %{"backgroundColor" => %{}}}
+      assert SegmentReplay.extra_paragraph_style_requests(0, [{span(0, 0), extras}]) == []
+    end
+  end
+
+  describe "extra_text_style_requests/2" do
+    defp run_span(start_offset, length), do: %{start_offset: start_offset, length: length}
+
+    defp no_text_extras do
+      %{
+        weighted_font_family: nil,
+        underline: nil,
+        link: nil,
+        baseline_offset: nil,
+        font_size: nil
+      }
+    end
+
+    test "one request per run carrying at least one extra field, none for a run with none" do
+      family = %{"fontFamily" => "Calibri", "weight" => 400}
+      link = %{"url" => "http://example.test"}
+
+      runs_with_extras = [
+        {run_span(0, 5),
+         %{no_text_extras() | weighted_font_family: family, underline: true, link: link}},
+        {run_span(5, 2), no_text_extras()}
+      ]
+
+      assert [request] = SegmentReplay.extra_text_style_requests(100, runs_with_extras)
+      style = request["updateTextStyle"]
+
+      assert style["range"] == %{"startIndex" => 100, "endIndex" => 105}
+
+      assert style["textStyle"] == %{
+               "weightedFontFamily" => family,
+               "underline" => true,
+               "link" => link
+             }
+
+      # `fields` lists the same keys as `textStyle` — order isn't part of the
+      # contract (plain map key order isn't specified).
+      assert MapSet.new(String.split(style["fields"], ",")) ==
+               MapSet.new(Map.keys(style["textStyle"]))
+    end
+
+    test "a forced font_size (the horizontalRule stand-in) becomes a fontSize dimension" do
+      extras = %{no_text_extras() | font_size: 4.0}
+
+      assert [request] = SegmentReplay.extra_text_style_requests(0, [{run_span(0, 1), extras}])
+
+      assert request["updateTextStyle"]["textStyle"]["fontSize"] == %{
+               "magnitude" => 4.0,
+               "unit" => "PT"
+             }
+    end
+  end
+
   describe "table_fill_requests/2" do
     defp base_entry(overrides) do
       Map.merge(
@@ -422,7 +522,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplayTest do
             [%{start_offset: 0, length: 1, style: unset_style(), bullet: nil}],
             [%{start_offset: 0, length: 3, style: unset_style(), bullet: nil}]
           ],
-          cell_image_ids: [nil, nil]
+          cell_image_ids: [nil, nil],
+          cell_paragraph_extras: [[], []],
+          cell_run_extras: [[], []]
         },
         overrides
       )
@@ -546,6 +648,57 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplayTest do
         |> Enum.map(& &1["insertText"]["location"]["index"])
 
       assert insert_indices == Enum.sort(insert_indices, :desc)
+    end
+
+    test "a cell's extra paragraph/run style (border, font-family/link) is applied at that cell's own index" do
+      family = %{"fontFamily" => "Calibri", "weight" => 400}
+      link = %{"url" => "https://example.test"}
+
+      entry =
+        base_entry(%{
+          cell_texts: ["", "Hi\n"],
+          cell_paragraph_extras: [
+            [],
+            [
+              {%{start_offset: 0, length: 3},
+               %{
+                 border_top: nil,
+                 border_bottom: nil,
+                 border_left: nil,
+                 border_right: nil,
+                 shading: nil
+               }}
+            ]
+          ],
+          cell_run_extras: [
+            [],
+            [
+              {%{start_offset: 0, length: 3},
+               %{
+                 weighted_font_family: family,
+                 underline: nil,
+                 link: link,
+                 baseline_offset: nil,
+                 font_size: nil
+               }}
+            ]
+          ]
+        })
+
+      requests = SegmentReplay.table_fill_requests([entry], %{})
+
+      link_request =
+        Enum.find(requests, fn
+          %{"updateTextStyle" => %{"textStyle" => %{"link" => _}}} -> true
+          _ -> false
+        end)
+
+      assert link_request["updateTextStyle"]["range"] == %{"startIndex" => 13, "endIndex" => 16}
+
+      assert link_request["updateTextStyle"]["textStyle"] == %{
+               "weightedFontFamily" => family,
+               "link" => link
+             }
     end
   end
 end

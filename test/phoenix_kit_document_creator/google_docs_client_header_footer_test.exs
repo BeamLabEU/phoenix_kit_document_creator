@@ -189,7 +189,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
                         }
                       ]}
 
-      assert_receive {:batch, [insert_req, para_req, text_req]}
+      assert_receive {:batch, [insert_req, para_req, text_req, cleanup_req]}
 
       assert insert_req == %{
                "insertText" => %{
@@ -200,6 +200,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
 
       assert para_req["updateParagraphStyle"]["range"]["segmentId"] == "kix.new_header"
       assert text_req["updateTextStyle"]["range"]["segmentId"] == "kix.new_header"
+
+      # "Hi\n" is the template's only (and therefore last) block, and it's a
+      # plain paragraph — the fresh segment's own pre-existing paragraph
+      # (now sitting right after "Hi\n", at index 3) is a redundant,
+      # unstyled trailing paragraph and gets deleted in the same batch.
+      assert cleanup_req == %{
+               "deleteContentRange" => %{
+                 "range" => %{"startIndex" => 3, "endIndex" => 4, "segmentId" => "kix.new_header"}
+               }
+             }
 
       # no footer in the template — nothing else follows.
       refute_receive {:batch, _}
@@ -323,8 +333,37 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
       }
 
       # State after the table-skeleton batch: the marker is gone, replaced
-      # by a bare 1x1 table.
+      # by a bare 1x1 table — but `insertTable` landing where the marker
+      # was also split the paragraph that absorbed it, leaving an empty,
+      # unstyled phantom paragraph immediately ahead of the table (seen
+      # live 2026-09-23 — see `finish_segment_tables/4`'s doc).
       doc_after_table_skeleton = %{
+        "headers" => %{
+          "kix.new_header" => %{
+            "content" => [
+              %{
+                "startIndex" => 0,
+                "endIndex" => 1,
+                "paragraph" => %{
+                  "elements" => [
+                    %{"startIndex" => 0, "endIndex" => 1, "textRun" => %{"content" => "\n"}}
+                  ]
+                }
+              },
+              %{
+                "startIndex" => 1,
+                "table" => %{
+                  "tableRows" => [%{"tableCells" => [%{"startIndex" => 2, "content" => []}]}]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      # State after the phantom is deleted: the table's index shifts back
+      # by the phantom's one character.
+      doc_after_phantom_removal = %{
         "headers" => %{
           "kix.new_header" => %{
             "content" => [
@@ -353,6 +392,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
             0 -> {:ok, %{body: current_doc}}
             1 -> {:ok, %{body: doc_after_skeleton}}
             2 -> {:ok, %{body: doc_after_table_skeleton}}
+            3 -> {:ok, %{body: doc_after_phantom_removal}}
           end
       end
 
@@ -400,6 +440,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
                  loc["segmentId"] == "kix.new_header"
              end)
 
+      assert_receive {:batch,
+                      [
+                        %{
+                          "deleteContentRange" => %{
+                            "range" => %{
+                              "startIndex" => 0,
+                              "endIndex" => 1,
+                              "segmentId" => "kix.new_header"
+                            }
+                          }
+                        }
+                      ]}
+
       assert_receive {:batch, fill_batch}
       insert_text = Enum.find(fill_batch, &Map.has_key?(&1, "insertText"))
       # trailing newline stripped — the target's own pre-existing bare cell
@@ -417,6 +470,228 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
                %{"index" => 0, "segmentId" => "kix.new_header"}
 
       refute_receive {:batch, _}
+    end
+  end
+
+  describe "append_template/3 — extra style pass (border/font-family/underline/link)" do
+    test "reproduces a rebuilt rule paragraph's border and a link run's font-family/underline/link" do
+      rule_border = %{
+        "color" => %{"color" => %{"rgbColor" => %{"red" => 0.45}}},
+        "dashStyle" => "SOLID",
+        "padding" => %{"magnitude" => 1, "unit" => "PT"},
+        "width" => %{"magnitude" => 0.75, "unit" => "PT"}
+      }
+
+      template_footer_content = [
+        %{
+          "paragraph" => %{
+            "elements" => [%{"textRun" => %{"content" => "\n"}}],
+            "paragraphStyle" => %{"borderBottom" => rule_border}
+          }
+        },
+        %{
+          "paragraph" => %{
+            "elements" => [
+              %{
+                "textRun" => %{
+                  "content" => "Link\n",
+                  "textStyle" => %{
+                    "weightedFontFamily" => %{"fontFamily" => "Calibri", "weight" => 400},
+                    "underline" => true,
+                    "link" => %{"url" => "http://example.test"}
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+
+      template_doc = %{
+        "documentStyle" => %{"defaultFooterId" => "kix.tpl_footer"},
+        "headers" => %{},
+        "footers" => %{"kix.tpl_footer" => %{"content" => template_footer_content}},
+        "body" => %{"content" => [text_paragraph("Body\n")]}
+      }
+
+      current_doc = %{
+        "documentStyle" => %{"defaultFooterId" => "kix.cur_footer"},
+        "footers" => %{"kix.cur_footer" => %{"content" => [text_paragraph("Plain\n")]}},
+        "body" => target_body()
+      }
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template_doc}}
+        "target-id" -> {:ok, %{body: current_doc}}
+      end
+
+      batch_fn = fn
+        "target-id", [%{"createFooter" => _}] = requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{body: %{"replies" => [%{"createFooter" => %{"footerId" => "kix.new_footer"}}]}}}
+
+        "target-id", requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{}}
+      end
+
+      assert {:ok, {11, _}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, [%{insertSectionBreak: %{}} | _]}
+      assert_receive {:batch, [%{"createFooter" => _}]}
+      assert_receive {:batch, skeleton_batch}
+      refute_receive {:batch, _}
+
+      assert Enum.any?(
+               skeleton_batch,
+               &match?(
+                 %{"insertText" => %{"location" => %{"index" => 0}, "text" => "\nLink\n"}},
+                 &1
+               )
+             )
+
+      border_request =
+        Enum.find(skeleton_batch, fn
+          %{"updateParagraphStyle" => %{"paragraphStyle" => %{"borderBottom" => _}}} -> true
+          _ -> false
+        end)
+
+      assert border_request["updateParagraphStyle"]["range"] == %{
+               "startIndex" => 0,
+               "endIndex" => 1,
+               "segmentId" => "kix.new_footer"
+             }
+
+      assert border_request["updateParagraphStyle"]["paragraphStyle"] == %{
+               "borderBottom" => rule_border
+             }
+
+      assert border_request["updateParagraphStyle"]["fields"] == "borderBottom"
+
+      link_request =
+        Enum.find(skeleton_batch, fn
+          %{"updateTextStyle" => %{"textStyle" => %{"link" => _}}} -> true
+          _ -> false
+        end)
+
+      assert link_request["updateTextStyle"]["range"] == %{
+               "startIndex" => 1,
+               "endIndex" => 6,
+               "segmentId" => "kix.new_footer"
+             }
+
+      assert link_request["updateTextStyle"]["textStyle"] == %{
+               "weightedFontFamily" => %{"fontFamily" => "Calibri", "weight" => 400},
+               "underline" => true,
+               "link" => %{"url" => "http://example.test"}
+             }
+
+      # last block is a plain paragraph — the fresh segment's own
+      # pre-existing paragraph (now at index 6) is a redundant trailing
+      # extra and gets deleted in the same batch.
+      assert Enum.any?(
+               skeleton_batch,
+               &match?(
+                 %{
+                   "deleteContentRange" => %{
+                     "range" => %{
+                       "startIndex" => 6,
+                       "endIndex" => 7,
+                       "segmentId" => "kix.new_footer"
+                     }
+                   }
+                 },
+                 &1
+               )
+             )
+    end
+
+    test "a native horizontalRule replays as a forced 4pt/6pt-spaceBelow bordered paragraph" do
+      template_footer_content = [
+        %{
+          "paragraph" => %{
+            "elements" => [
+              %{
+                "horizontalRule" => %{
+                  "textStyle" => %{"fontSize" => %{"magnitude" => 9.5, "unit" => "PT"}}
+                }
+              },
+              %{
+                "textRun" => %{
+                  "content" => "\n",
+                  "textStyle" => %{"fontSize" => %{"magnitude" => 9.5, "unit" => "PT"}}
+                }
+              }
+            ]
+          }
+        }
+      ]
+
+      template_doc = %{
+        "documentStyle" => %{"defaultFooterId" => "kix.tpl_footer"},
+        "footers" => %{"kix.tpl_footer" => %{"content" => template_footer_content}},
+        "body" => %{"content" => [text_paragraph("Body\n")]}
+      }
+
+      current_doc = %{
+        "documentStyle" => %{"defaultFooterId" => "kix.cur_footer"},
+        "footers" => %{"kix.cur_footer" => %{"content" => [text_paragraph("Plain\n")]}},
+        "body" => target_body()
+      }
+
+      get_fn = fn
+        "template-id" -> {:ok, %{body: template_doc}}
+        "target-id" -> {:ok, %{body: current_doc}}
+      end
+
+      batch_fn = fn
+        "target-id", [%{"createFooter" => _}] = requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{body: %{"replies" => [%{"createFooter" => %{"footerId" => "kix.new_footer"}}]}}}
+
+        "target-id", requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{}}
+      end
+
+      assert {:ok, {11, _}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, [%{insertSectionBreak: %{}} | _]}
+      assert_receive {:batch, [%{"createFooter" => _}]}
+      assert_receive {:batch, skeleton_batch}
+      refute_receive {:batch, _}
+
+      border_request =
+        Enum.find(skeleton_batch, fn
+          %{"updateParagraphStyle" => %{"paragraphStyle" => %{"borderBottom" => _}}} -> true
+          _ -> false
+        end)
+
+      assert border_request["updateParagraphStyle"]["paragraphStyle"]["borderBottom"]["width"] ==
+               %{"magnitude" => 0.75, "unit" => "PT"}
+
+      assert border_request["updateParagraphStyle"]["paragraphStyle"]["spaceBelow"] ==
+               %{"magnitude" => 6.0, "unit" => "PT"}
+
+      font_size_requests =
+        Enum.filter(skeleton_batch, fn
+          %{"updateTextStyle" => %{"textStyle" => %{"fontSize" => _}}} -> true
+          _ -> false
+        end)
+
+      # the run's own fontSize is ALSO captured by the shared narrow pass
+      # (9.5pt, its own request earlier in the batch) — the extra pass's
+      # own request, LAST in the batch, overrides it to the forced 4pt.
+      assert List.last(font_size_requests)["updateTextStyle"]["textStyle"]["fontSize"] ==
+               %{"magnitude" => 4.0, "unit" => "PT"}
     end
   end
 

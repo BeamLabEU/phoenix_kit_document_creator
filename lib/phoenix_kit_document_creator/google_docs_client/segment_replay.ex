@@ -236,6 +236,113 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
       G.paragraph_then_text_style_requests(0, paragraphs, runs)
   end
 
+  # ---- extra style (fields the shared, narrow body builders don't cover) --
+
+  @doc """
+  `updateParagraphStyle` requests for fields
+  `GoogleDocsClient.paragraph_style_requests/2` deliberately doesn't
+  capture (borders, shading) — a header/footer replay's own pass, kept
+  separate from the shared, narrow body builder (which is covered by exact
+  batch-content tests body appends rely on) rather than widening it. One
+  request per span that has at least one such field; a span with none gets
+  none — no anti-inheritance mask needed here, since every field is on a
+  brand new, isolated segment with nothing adjacent to inherit from.
+
+  `spans_with_extras` — `[{span, extras}]`, `span` shaped like
+  `GoogleDocsClient.paragraph_style_requests/2`'s (`start_offset`,
+  `length`), `extras` a map with `border_top`/`border_bottom`/
+  `border_left`/`border_right` (each the source's own raw Docs `Border`
+  object, or `nil`), `shading` (raw `Shading` object or `nil`), and
+  `space_below` (a bare point value or `nil` — the `horizontalRule`
+  stand-in's forced 6pt gap, see `paragraph_extras/1`'s caller).
+  """
+  @spec extra_paragraph_style_requests(integer(), [{map(), map()}]) :: [map()]
+  def extra_paragraph_style_requests(base_index, spans_with_extras) do
+    spans_with_extras
+    |> Enum.filter(fn {span, _extras} -> span.length > 0 end)
+    |> Enum.flat_map(fn {span, extras} -> paragraph_extras_request(base_index, span, extras) end)
+  end
+
+  defp paragraph_extras_request(base_index, span, extras) do
+    payload =
+      %{}
+      |> maybe_put("borderTop", extras.border_top)
+      |> maybe_put("borderBottom", extras.border_bottom)
+      |> maybe_put("borderLeft", extras.border_left)
+      |> maybe_put("borderRight", extras.border_right)
+      |> maybe_put("shading", extras.shading)
+      |> maybe_put("spaceBelow", dimension_pt(extras[:space_below]))
+
+    if payload == %{} do
+      []
+    else
+      [
+        %{
+          "updateParagraphStyle" => %{
+            "range" => %{
+              "startIndex" => base_index + span.start_offset,
+              "endIndex" => base_index + span.start_offset + span.length
+            },
+            "paragraphStyle" => payload,
+            "fields" => payload |> Map.keys() |> Enum.join(",")
+          }
+        }
+      ]
+    end
+  end
+
+  @doc """
+  `updateTextStyle` requests for fields
+  `GoogleDocsClient.text_style_requests/2` deliberately doesn't capture
+  (`weightedFontFamily`, `underline`, `link`, `baselineOffset`), same
+  separate-pass reasoning as `extra_paragraph_style_requests/2`.
+
+  `runs_with_extras` — `[{run, extras}]`, `run` shaped like
+  `GoogleDocsClient.text_style_requests/2`'s (`start_offset`, `length`),
+  `extras` a map with `weighted_font_family`/`underline`/`link`/
+  `baseline_offset` (each the source's own raw value, or `nil`) and
+  `font_size` (a bare point value, or `nil` — the `horizontalRule`
+  stand-in's forced 4pt, see `text_extras/1`'s caller; NOT the same as the
+  shared builder's own captured `font_size`, which this leaves alone
+  unless a rule forces an override).
+  """
+  @spec extra_text_style_requests(integer(), [{map(), map()}]) :: [map()]
+  def extra_text_style_requests(base_index, runs_with_extras) do
+    runs_with_extras
+    |> Enum.filter(fn {run, _extras} -> run.length > 0 end)
+    |> Enum.flat_map(fn {run, extras} -> text_extras_request(base_index, run, extras) end)
+  end
+
+  defp text_extras_request(base_index, run, extras) do
+    payload =
+      %{}
+      |> maybe_put("weightedFontFamily", extras.weighted_font_family)
+      |> maybe_put("underline", extras.underline)
+      |> maybe_put("link", extras.link)
+      |> maybe_put("baselineOffset", extras.baseline_offset)
+      |> maybe_put("fontSize", dimension_pt(extras[:font_size]))
+
+    if payload == %{} do
+      []
+    else
+      [
+        %{
+          "updateTextStyle" => %{
+            "range" => %{
+              "startIndex" => base_index + run.start_offset,
+              "endIndex" => base_index + run.start_offset + run.length
+            },
+            "textStyle" => payload,
+            "fields" => payload |> Map.keys() |> Enum.join(",")
+          }
+        }
+      ]
+    end
+  end
+
+  defp dimension_pt(nil), do: nil
+  defp dimension_pt(magnitude), do: %{"magnitude" => magnitude * 1.0, "unit" => "PT"}
+
   # ---- table fill ---------------------------------------------------------
 
   @doc """
@@ -248,12 +355,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
   document (`GoogleDocsClient.extract_table_cells/1`'s cells matched
   against the captured template table): `%{table_start, cells,
   column_properties, cell_styles, cell_texts, cell_runs, cell_paragraphs,
-  cell_image_ids}`. `cell_styles`/`cell_image_ids` are row-major and
-  index-aligned with `cell_texts`/`cell_runs`/`cell_paragraphs` (same
-  padding-to-column-count as those — see
+  cell_image_ids, cell_paragraph_extras, cell_run_extras}`. All the
+  `cell_*` lists are row-major and index-aligned with each other (same
+  padding-to-column-count — see
   `flatten_template_with_table_markers_and_styles/1`'s `normalize_row/3`).
-  `cell_image_ids` entries are `nil` or an `inlineObjects` key; only a
-  single-row table (`rowIndex: 0`) is supported — every known home
+  `cell_image_ids` entries are `nil` or an `inlineObjects` key.
+  `cell_paragraph_extras`/`cell_run_extras` are themselves lists (one per
+  cell, parallel to `cell_paragraphs`/`cell_runs`) of `{span, extras}` /
+  `{run, extras}` pairs in `extra_paragraph_style_requests/2`'s and
+  `extra_text_style_requests/2`'s own shape — a cell's border/font-family/
+  underline/link get the same separate-pass treatment as body content.
+  Only a single-row table (`rowIndex: 0`) is supported — every known home
   header/footer table is one row, and the cell-style request below doesn't
   vary the row index.
 
@@ -326,10 +438,24 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplay do
   # `GoogleDocsClient`'s body table fill): an earlier cell's insert must not
   # shift a later cell's captured index.
   defp cell_fill_and_image_requests(entry, inline_objects) do
-    [entry.cells, entry.cell_texts, entry.cell_runs, entry.cell_paragraphs, entry.cell_image_ids]
+    [
+      entry.cells,
+      entry.cell_texts,
+      entry.cell_runs,
+      entry.cell_paragraphs,
+      entry.cell_image_ids,
+      entry.cell_paragraph_extras,
+      entry.cell_run_extras
+    ]
     |> Enum.zip()
-    |> Enum.map(fn {%{insert_index: idx}, text, runs, paragraphs, image_id} ->
-      {idx, cell_requests(idx, text, runs, paragraphs, image_id, inline_objects)}
+    |> Enum.map(fn {%{insert_index: idx}, text, runs, paragraphs, image_id, para_extras,
+                    run_extras} ->
+      requests =
+        cell_requests(idx, text, runs, paragraphs, image_id, inline_objects) ++
+          extra_paragraph_style_requests(idx, para_extras) ++
+          extra_text_style_requests(idx, run_extras)
+
+      {idx, requests}
     end)
     |> Enum.sort_by(fn {idx, _requests} -> idx end, :desc)
     |> Enum.flat_map(fn {_idx, requests} -> requests end)

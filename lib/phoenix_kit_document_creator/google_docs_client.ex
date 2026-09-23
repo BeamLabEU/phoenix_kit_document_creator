@@ -2293,6 +2293,29 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   scoped to the new segment via `SegmentReplay.with_segment_id/2`). A
   replay failure fails the append loudly, same as a body table mismatch.
 
+  Fidelity beyond the shared marker/skeleton/fill shape (live-verified
+  2026-09-23 against a real template whose element count came back wrong
+  and whose border/font-family/link were silently dropped, both fixed
+  here rather than by widening the shared, narrow body builders — see
+  `SegmentReplay.extra_paragraph_style_requests/2`'s doc):
+
+    * a fresh segment starts with one empty paragraph that inserting the
+      template's own text never removes; when the template's last block is
+      a plain paragraph, that pre-existing one is now a redundant trailing
+      extra and is deleted in the same skeleton batch
+      (`trailing_cleanup_requests/2`).
+    * `insertTable` landing where a marker was always splits whatever
+      paragraph absorbed it, leaving an empty phantom paragraph immediately
+      ahead of the table — deleted (`remove_phantoms/3`, its own re-fetch)
+      before the fill phase reads the tables' final positions.
+    * borders, `weightedFontFamily`, `underline`, and `link` aren't in the
+      shared body builders' capture at all; a separate pass
+      (`body_extra_style_requests/4`, and per-cell in `augment_table_info/2`)
+      replays them from the template's own raw JSON. A paragraph carrying a
+      native `horizontalRule` (never inserted through the API) replays as a
+      thin bordered paragraph instead, regardless of its own paragraphStyle
+      (`paragraph_extras/1`, `text_extras/1`).
+
   Options (used in tests):
     * `:get_fn` — overrides `get_document/1` (used for both the template
       fetch and every target-document re-fetch)
@@ -2541,15 +2564,149 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     {text, tables, runs, paragraphs} = flatten_template_with_table_markers_and_styles(synthetic)
 
     skeleton =
-      SegmentReplay.with_segment_id(
-        SegmentReplay.skeleton_requests(text, runs, paragraphs),
-        segment_id
-      )
+      (SegmentReplay.skeleton_requests(text, runs, paragraphs) ++
+         body_extra_style_requests(template_content, 0, runs, paragraphs) ++
+         trailing_cleanup_requests(template_content, text))
+      |> SegmentReplay.with_segment_id(segment_id)
 
     case maybe_batch(ctx.batch_fn, ctx.target_doc_id, skeleton) do
       {:ok, _} -> finish_segment_replay(kind, ctx, segment_id, template_content, tables)
       {:error, _} = err -> err
     end
+  end
+
+  # A fresh segment (from createHeader/createFooter) always starts with
+  # exactly one empty paragraph. Inserting the template's own flattened text
+  # ahead of it never removes it — when the template's LAST block is a
+  # plain paragraph (not a table), that paragraph's own trailing newline
+  # was already inserted as real content, so the segment's original one is
+  # now a redundant, unstyled extra trailing paragraph (Arial 11pt default —
+  # seen live 2026-09-23) sitting right after it. Deleting it here, in the
+  # SAME batch as the insert (its position — `utf16_units(text)` — is known
+  # analytically, no re-fetch needed), makes the segment's last paragraph
+  # exactly the template's own. When the template instead ends in a table,
+  # this pre-existing paragraph is left alone — the Docs API requires SOME
+  # paragraph after a table, and the template has nothing there to
+  # reproduce, so keeping the bare one already matches the model.
+  defp ends_in_plain_paragraph?(template_content) do
+    match?(%{"paragraph" => _}, List.last(template_content))
+  end
+
+  defp trailing_cleanup_requests(template_content, text) do
+    if text != "" and ends_in_plain_paragraph?(template_content) do
+      len = utf16_units(text)
+      [%{"deleteContentRange" => %{"range" => %{"startIndex" => len, "endIndex" => len + 1}}}]
+    else
+      []
+    end
+  end
+
+  # Extra paragraph/text style for a segment's own (non-table) body content
+  # — see `SegmentReplay.extra_paragraph_style_requests/2`'s doc for why
+  # this is a separate pass rather than an extension of the shared, narrow
+  # `paragraph_style_requests/2`/`text_style_requests/2`. `raw_paragraph_blocks/1`
+  # and `raw_run_style_list/1` walk `template_content` the same way
+  # `flatten_template_with_table_markers_and_styles/1` accumulates
+  # `body_paragraphs`/`body_runs` (paragraph blocks in order, skipping
+  # tables; each paragraph's non-empty-content elements in order) — same
+  # traversal, same order, so they're index-aligned with `paragraphs`/`runs`
+  # by construction.
+  defp body_extra_style_requests(template_content, base_index, runs, paragraphs) do
+    paragraph_pairs =
+      paragraphs
+      |> Enum.zip(Enum.map(raw_paragraph_blocks(template_content), &paragraph_extras/1))
+
+    run_pairs = Enum.zip(runs, Enum.map(raw_run_style_list(template_content), &text_extras/1))
+
+    SegmentReplay.extra_paragraph_style_requests(base_index, paragraph_pairs) ++
+      SegmentReplay.extra_text_style_requests(base_index, run_pairs)
+  end
+
+  defp raw_paragraph_blocks(content) do
+    content
+    |> Enum.filter(&Map.has_key?(&1, "paragraph"))
+    |> Enum.map(&Map.fetch!(&1, "paragraph"))
+  end
+
+  defp raw_run_style_list(content) do
+    content
+    |> raw_paragraph_blocks()
+    |> Enum.flat_map(fn paragraph ->
+      rule? = has_horizontal_rule?(paragraph)
+
+      paragraph
+      |> Map.get("elements", [])
+      |> Enum.filter(fn el -> (get_in(el, ["textRun", "content"]) || "") != "" end)
+      |> Enum.map(fn el -> {get_in(el, ["textRun", "textStyle"]) || %{}, rule?} end)
+    end)
+  end
+
+  # A paragraph carrying a native `horizontalRule` element (never inserted
+  # through the API, see `append_template/3`'s header/footer doc) replays
+  # as a thin bordered paragraph regardless of what its OWN paragraphStyle
+  # says (it typically says nothing — the line comes from the element type,
+  # not from a border) — `@rule_border`/forced 6pt `spaceBelow`/4pt
+  # `fontSize` (the run side, see `text_extras/1`), matching
+  # `docs/superpowers/template-header-footer-backup-2026-09-21/house_header_footer.ex`'s
+  # own rule paragraph.
+  @rule_border %{
+    "color" => %{
+      "color" => %{"rgbColor" => %{"red" => 0.4509804, "green" => 0.4509804, "blue" => 0.4509804}}
+    },
+    "width" => %{"magnitude" => 0.75, "unit" => "PT"},
+    "padding" => %{"magnitude" => 1.0, "unit" => "PT"},
+    "dashStyle" => "SOLID"
+  }
+
+  defp paragraph_extras(paragraph) do
+    if has_horizontal_rule?(paragraph) do
+      %{
+        border_top: nil,
+        border_bottom: @rule_border,
+        border_left: nil,
+        border_right: nil,
+        shading: nil,
+        space_below: 6.0
+      }
+    else
+      style = Map.get(paragraph, "paragraphStyle", %{})
+
+      %{
+        border_top: border_or_nil(style, "borderTop"),
+        border_bottom: border_or_nil(style, "borderBottom"),
+        border_left: border_or_nil(style, "borderLeft"),
+        border_right: border_or_nil(style, "borderRight"),
+        shading: Map.get(style, "shading"),
+        space_below: nil
+      }
+    end
+  end
+
+  defp has_horizontal_rule?(%{"elements" => elements}),
+    do: Enum.any?(elements, &Map.has_key?(&1, "horizontalRule"))
+
+  defp has_horizontal_rule?(_), do: false
+
+  # A border with no `width.magnitude` is the API's "explicit zero" spelling
+  # elsewhere (`dimension_or_nil/1`), but for a border specifically it means
+  # "no line at all" — sending it would draw a border Google renders as
+  # invisible-but-present, not the same as never asking for one, so it's
+  # skipped entirely rather than replayed.
+  defp border_or_nil(style, key) do
+    case get_in(style, [key, "width", "magnitude"]) do
+      m when is_number(m) -> Map.get(style, key)
+      _ -> nil
+    end
+  end
+
+  defp text_extras({raw_style, rule?}) do
+    %{
+      weighted_font_family: Map.get(raw_style, "weightedFontFamily"),
+      underline: Map.get(raw_style, "underline"),
+      link: Map.get(raw_style, "link"),
+      baseline_offset: Map.get(raw_style, "baselineOffset"),
+      font_size: if(rule?, do: 4.0, else: nil)
+    }
   end
 
   defp finish_segment_replay(_kind, _ctx, _segment_id, _template_content, []), do: :ok
@@ -2565,11 +2722,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     finish_segment_tables(kind, ctx, segment_id, tables_by_index)
   end
 
-  # Adds the per-cell style/image info the shared flatten pass doesn't
-  # capture (it's only needed for header/footer replay, not body tables):
-  # `cell_styles` (padding + contentAlignment, row-major, padded to
-  # `columns` the same way `normalize_row/3` already pads `cell_texts`) and
-  # `cell_image_ids` (an `inlineObjects` key or `nil`, same padding).
+  # Adds the per-cell style/image/extra-style info the shared flatten pass
+  # doesn't capture (it's only needed for header/footer replay, not body
+  # tables): `cell_styles` (padding + contentAlignment, row-major, padded to
+  # `columns` the same way `normalize_row/3` already pads `cell_texts`),
+  # `cell_image_ids` (an `inlineObjects` key or `nil`, same padding), and
+  # `cell_paragraph_extras`/`cell_run_extras` (border/font-family/underline/
+  # link per cell, same padding — a cell's own content list is walked the
+  # same way `body_extra_style_requests/4` walks the body, so each cell's
+  # entry index-aligns with that cell's own `cell_paragraphs`/`cell_runs`).
   defp augment_table_info(info, raw_table) do
     rows = get_in(raw_table, ["table", "tableRows"]) || []
     cell_styles = Enum.flat_map(rows, &normalize_row(row_cell_styles(&1), info.columns, %{}))
@@ -2577,10 +2738,32 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     cell_image_ids =
       Enum.flat_map(rows, &normalize_row(row_cell_image_ids(&1), info.columns, nil))
 
+    raw_cell_contents =
+      Enum.flat_map(rows, &normalize_row(row_cell_raw_contents(&1), info.columns, []))
+
+    cell_paragraph_extras =
+      Enum.zip(info.cell_paragraphs, raw_cell_contents)
+      |> Enum.map(fn {spans, raw_content} ->
+        Enum.zip(spans, Enum.map(raw_paragraph_blocks(raw_content), &paragraph_extras/1))
+      end)
+
+    cell_run_extras =
+      Enum.zip(info.cell_runs, raw_cell_contents)
+      |> Enum.map(fn {cell_runs, raw_content} ->
+        Enum.zip(cell_runs, Enum.map(raw_run_style_list(raw_content), &text_extras/1))
+      end)
+
     info
     |> Map.put(:cell_styles, cell_styles)
     |> Map.put(:cell_image_ids, cell_image_ids)
+    |> Map.put(:cell_paragraph_extras, cell_paragraph_extras)
+    |> Map.put(:cell_run_extras, cell_run_extras)
   end
+
+  defp row_cell_raw_contents(%{"tableCells" => cells}),
+    do: Enum.map(cells, &Map.get(&1, "content", []))
+
+  defp row_cell_raw_contents(_), do: []
 
   defp row_cell_styles(%{"tableCells" => cells}), do: Enum.map(cells, &cell_style_essentials/1)
   defp row_cell_styles(_), do: []
@@ -2619,7 +2802,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # Mirrors `finish_append_template/6`'s marker -> skeleton -> fill flow,
   # scoped to one header/footer segment instead of the body: a fresh
   # segment never has pre-existing tables, so `match_new_tables/3` always
-  # gets `[]` for that argument (unlike the body case).
+  # gets `[]` for that argument (unlike the body case). One extra step
+  # between the table-skeleton batch and the fill: `insertTable` landing
+  # where a marker was always splits whatever paragraph absorbed the
+  # marker's own position, inserting an empty, unstyled paragraph
+  # immediately ahead of the table (seen live 2026-09-23: a template
+  # section 5 elements long came back 7, the two extras both this
+  # Arial-11pt-default shape) — `remove_phantoms/3` deletes it before the
+  # fill phase re-fetches the tables' now-final positions.
   defp finish_segment_tables(kind, ctx, segment_id, tables_by_index) do
     container = segment_container(kind)
 
@@ -2633,9 +2823,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
            ),
          {:ok, _} <- maybe_batch(ctx.batch_fn, ctx.target_doc_id, skeleton_requests),
          {:ok, %{body: doc2}} <- ctx.get_fn.(ctx.target_doc_id),
+         tables_after_skeleton =
+           doc2 |> segment_tables(container, segment_id) |> Enum.sort_by(& &1["startIndex"]),
+         phantom_requests =
+           SegmentReplay.with_segment_id(
+             phantom_delete_requests(tables_after_skeleton, doc2, container, segment_id),
+             segment_id
+           ),
+         {:ok, doc3} <- remove_phantoms(ctx, doc2, phantom_requests),
          slot_starts = marker_ranges |> Enum.map(& &1.start_index) |> Enum.sort(),
          tables_asc =
-           doc2 |> segment_tables(container, segment_id) |> Enum.sort_by(& &1["startIndex"]),
+           doc3 |> segment_tables(container, segment_id) |> Enum.sort_by(& &1["startIndex"]),
          {:ok, new_tables} <- match_new_tables(tables_asc, [], slot_starts),
          entries = build_segment_fill_entries(marker_ranges, new_tables, tables_by_index),
          fill_requests =
@@ -2648,6 +2846,58 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     else
       :mismatch -> {:error, :segment_table_match_mismatch}
       {:error, _} = err -> err
+    end
+  end
+
+  # Whatever element sits immediately before a table Docs just created via
+  # `insertTable` landing at a marker's (deleted) position is always the
+  # implicit split-paragraph, never a real template paragraph — any real
+  # paragraph immediately before that table in the template was already
+  # inserted as its own, separately-styled content one position further
+  # back (see `finish_segment_tables/4`'s doc). Requests come back sorted
+  # descending so deleting one phantom never shifts another still to be
+  # found relative to `tables_after_skeleton`'s captured positions.
+  defp phantom_delete_requests(tables, doc, container, segment_id) do
+    content = doc |> get_in([container, segment_id, "content"]) |> List.wrap()
+
+    tables
+    |> Enum.flat_map(fn table_el ->
+      case Enum.find_index(content, &(Map.get(&1, "startIndex") == table_el["startIndex"])) do
+        index when is_integer(index) and index > 0 -> phantom_at(content, index - 1)
+        _ -> []
+      end
+    end)
+    |> Enum.sort_by(
+      fn %{"deleteContentRange" => %{"range" => %{"startIndex" => s}}} -> s end,
+      :desc
+    )
+  end
+
+  defp phantom_at(content, index) do
+    case Enum.at(content, index) do
+      %{"paragraph" => _, "startIndex" => s, "endIndex" => e} ->
+        [%{"deleteContentRange" => %{"range" => %{"startIndex" => s, "endIndex" => e}}}]
+
+      _ ->
+        []
+    end
+  end
+
+  # No phantoms found (or none to delete) — `doc2` is already accurate, no
+  # extra round trip. Otherwise send the deletes and re-fetch, since every
+  # table's position shifts by however many phantoms sat before it.
+  defp remove_phantoms(_ctx, doc2, []), do: {:ok, doc2}
+
+  defp remove_phantoms(ctx, _doc2, phantom_requests) do
+    case maybe_batch(ctx.batch_fn, ctx.target_doc_id, phantom_requests) do
+      {:ok, _} ->
+        case ctx.get_fn.(ctx.target_doc_id) do
+          {:ok, %{body: doc3}} -> {:ok, doc3}
+          {:error, _} = err -> err
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -2666,7 +2916,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         cell_texts: info.cell_texts,
         cell_runs: info.cell_runs,
         cell_paragraphs: info.cell_paragraphs,
-        cell_image_ids: info.cell_image_ids
+        cell_image_ids: info.cell_image_ids,
+        cell_paragraph_extras: info.cell_paragraph_extras,
+        cell_run_extras: info.cell_run_extras
       }
     end)
   end
