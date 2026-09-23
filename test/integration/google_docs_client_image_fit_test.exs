@@ -730,4 +730,190 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       assert_in_delta height, 769.89 - 72 - @default_line_pt - 200.0, 0.01
     end
   end
+
+  describe "duplicate slot names across sections (Block H regression)" do
+    # A composed document where more than one section uses the SAME image
+    # slot name — the real case: an image-grid template and its
+    # per-orientation twin both render `{{ images: joonised }}`. Before this
+    # fix, `apply_image_fills/3` keyed its fills/ranges map by name alone,
+    # so whichever section's fill entered the map last silently won every
+    # occurrence of that name; every earlier section's placeholder was
+    # filtered out of `filtered_ranges` (its start_index never fell inside
+    # the one surviving range) and never substituted at all — no delete, no
+    # insert, the raw `{{ images: ... }}` text left behind (later stripped
+    # as dead markup by cleanup, leaving that page with no photo).
+    defp shared_slot_doc(count) do
+      tag_text = "{{ images: photos }}\n"
+
+      {paragraphs, _next} =
+        Enum.map_reduce(1..count, 1, fn _, start ->
+          {para(start, tag_text), start + String.length(tag_text)}
+        end)
+
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{"content" => [section_break(0) | paragraphs]}
+      }
+
+      ranges =
+        paragraphs
+        |> Enum.with_index()
+        |> Map.new(fn {p, i} -> {i, {p["startIndex"], p["endIndex"]}} end)
+
+      {doc, ranges}
+    end
+
+    test "two sections share a slot name: each keeps its own image, not the other's" do
+      {doc, ranges} = shared_slot_doc(2)
+      stub_doc_and_batch(doc)
+
+      sections = [
+        %{
+          position: 0,
+          variable_values: %{},
+          image_params: %{
+            "photos" => image_list_slot(%{"media" => [%{"uri" => "section0.png"}]})
+          }
+        },
+        %{
+          position: 1,
+          variable_values: %{},
+          image_params: %{
+            "photos" => image_list_slot(%{"media" => [%{"uri" => "section1.png"}]})
+          }
+        }
+      ]
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, ranges)
+
+      inserts = insert_inline_image_requests()
+      assert length(inserts) == 2, "expected one image per section, got #{length(inserts)}"
+
+      by_index =
+        Map.new(inserts, fn req ->
+          {req.insertInlineImage.location.index, req.insertInlineImage.uri}
+        end)
+
+      {s0, _} = ranges[0]
+      {s1, _} = ranges[1]
+      assert by_index[s0] == "section0.png"
+      assert by_index[s1] == "section1.png"
+    end
+
+    test "three sections share a slot name: each resolves in document order, none lost" do
+      {doc, ranges} = shared_slot_doc(3)
+      stub_doc_and_batch(doc)
+
+      sections =
+        for i <- 0..2 do
+          %{
+            position: i,
+            variable_values: %{},
+            image_params: %{
+              "photos" => image_list_slot(%{"media" => [%{"uri" => "section#{i}.png"}]})
+            }
+          }
+        end
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, ranges)
+
+      inserts = insert_inline_image_requests()
+      assert length(inserts) == 3
+
+      by_index =
+        Map.new(inserts, fn req ->
+          {req.insertInlineImage.location.index, req.insertInlineImage.uri}
+        end)
+
+      for i <- 0..2 do
+        {s, _} = ranges[i]
+        assert by_index[s] == "section#{i}.png"
+      end
+    end
+
+    test "duplicate slot name with fit: \"page\": each section keeps its own image and its own sizing" do
+      # Two Docs sections (not just two app-level sections sharing one Docs
+      # section, as `shared_slot_doc/1` builds) — the real scenario: an
+      # orientation twin pair each has its own `flipPageOrientation`, so
+      # each occurrence sits in its own Docs section and legitimately
+      # qualifies for its own fit=page slot (fit=page is capped at one
+      # PER DOCS SECTION, a separate, intentional rule unrelated to this
+      # fix — sharing one Docs section here would make the second
+      # occurrence fall back to fit=width and weaken the assertion below).
+      tag_text = "{{ images: photos }}\n"
+      para1 = para(1, tag_text)
+      para2 = para(para1["endIndex"], tag_text)
+
+      doc = %{
+        "documentStyle" => doc_style(),
+        "body" => %{
+          "content" => [
+            section_break(0),
+            para1,
+            section_break(para1["endIndex"]),
+            para2
+          ]
+        }
+      }
+
+      ranges = %{
+        0 => {para1["startIndex"], para1["endIndex"]},
+        1 => {para2["startIndex"], para2["endIndex"]}
+      }
+
+      stub_doc_and_batch(doc)
+
+      sections = [
+        %{
+          position: 0,
+          variable_values: %{},
+          image_params: %{
+            "photos" =>
+              image_list_slot(%{
+                "fit" => "page",
+                "media" => [%{"uri" => "section0.png", "width_px" => 1600, "height_px" => 900}]
+              })
+          }
+        },
+        %{
+          position: 1,
+          variable_values: %{},
+          image_params: %{
+            "photos" =>
+              image_list_slot(%{
+                "fit" => "page",
+                "media" => [%{"uri" => "section1.png", "width_px" => 900, "height_px" => 1600}]
+              })
+          }
+        }
+      ]
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, ranges)
+
+      inserts = insert_inline_image_requests()
+      assert length(inserts) == 2
+
+      by_uri = Map.new(inserts, fn req -> {req.insertInlineImage.uri, req} end)
+
+      width0 =
+        get_in(by_uri["section0.png"], [:insertInlineImage, :objectSize, :width, :magnitude])
+
+      height0 =
+        get_in(by_uri["section0.png"], [:insertInlineImage, :objectSize, :height, :magnitude])
+
+      width1 =
+        get_in(by_uri["section1.png"], [:insertInlineImage, :objectSize, :width, :magnitude])
+
+      height1 =
+        get_in(by_uri["section1.png"], [:insertInlineImage, :objectSize, :height, :magnitude])
+
+      # section0's media is 16:9 (wider than tall), section1's is 9:16
+      # (taller than wide) — the rendered aspect must follow, proving each
+      # section resolved to its OWN media rather than both ending up with
+      # whichever section's fill won the old name-keyed collision (which
+      # would give both images the same aspect).
+      assert width0 > height0, "section0's 16:9 image should render wider than tall"
+      assert height1 > width1, "section1's 9:16 image should render taller than wide"
+    end
+  end
 end

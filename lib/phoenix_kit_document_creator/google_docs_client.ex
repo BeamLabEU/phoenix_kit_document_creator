@@ -4576,7 +4576,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       |> Enum.flat_map(fn s ->
         fills = build_image_fills(s.image_params)
         range = Map.get(ranges, s.position)
-        Enum.map(fills, fn {name, fill} -> {name, fill, range} end)
+        Enum.map(fills, fn {name, fill} -> {{s.position, name}, fill, range} end)
       end)
 
     if all_image_fills == [] do
@@ -4586,9 +4586,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
-  # Runs the actual substitution for a non-empty set of `{name, fill, range}`
-  # tuples: build the Phase 1 batch (inline deletes/inserts + table creation),
-  # then, if any multi-column table slots exist, fill their cells in Phase 2.
+  # Runs the actual substitution for a non-empty set of `{{position, name},
+  # fill, range}` tuples: build the Phase 1 batch (inline deletes/inserts +
+  # table creation), then, if any multi-column table slots exist, fill their
+  # cells in Phase 2.
+  #
+  # Keyed by `{position, name}`, not `name` alone: the same slot name can
+  # appear in more than one section (an image-grid template and its
+  # per-orientation twin both use e.g. `joonised`), and every earlier
+  # `fills_map`/`range_by_name` here was `Map.new`'d straight from `name` —
+  # the last section holding a given name silently won every occurrence of
+  # that name in the document, leaving every other section's copy of the
+  # slot's placeholder text stranded (later deleted as dead template markup,
+  # so those sections render with no photo at all).
   #
   # Every slot's width comes from the `section_boxes/1` box of the DOCS
   # SECTION it physically sits in (falling back to `content_width_pt(doc2)`
@@ -4596,25 +4606,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # — this is what makes an image_list slot render at the landscape section's
   # own width instead of the document's (portrait) one, with no config flag.
   defp apply_image_fills(doc_id, doc2, all_image_fills) do
-    fills_map = Map.new(all_image_fills, fn {name, fill, _} -> {name, fill} end)
-    range_by_name = Map.new(all_image_fills, fn {name, _, range} -> {name, range} end)
+    fills_map = Map.new(all_image_fills, fn {key, fill, _} -> {key, fill} end)
+
+    names =
+      all_image_fills |> Enum.map(fn {{_pos, name}, _fill, _range} -> name end) |> Enum.uniq()
+
     boxes = section_boxes(doc2)
 
     filtered_ranges =
       doc2
-      |> find_image_tag_ranges(Map.keys(fills_map))
-      |> Enum.filter(fn %{name: name, start_index: s} ->
-        in_section_range?(range_by_name, name, s)
-      end)
+      |> find_image_tag_ranges(names)
+      |> resolve_image_ranges(all_image_fills)
 
     # Partition into table slots (image_list + columns >= 2) and inline slots.
     {table_ranges, inline_ranges} =
-      Enum.split_with(filtered_ranges, fn %{name: name} ->
-        fill = Map.fetch!(fills_map, name)
+      Enum.split_with(filtered_ranges, fn %{key: key} ->
+        fill = Map.fetch!(fills_map, key)
         fill.kind == :image_list and Map.get(fill, :columns, 1) >= 2
       end)
 
-    fit_page_names = resolve_fit_page_names(filtered_ranges, fills_map, doc2, boxes)
+    fit_page_keys = resolve_fit_page_keys(filtered_ranges, fills_map, doc2, boxes)
 
     # Phase 1 batch: inline slot deletes+inserts + table slot delete+insertTable.
     # Sort all requests descending by start_index so earlier inserts don't shift later ones.
@@ -4624,7 +4635,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         fills_map,
         doc2,
         boxes,
-        fit_page_names
+        fit_page_keys
       )
 
     # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
@@ -4651,13 +4662,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   # Like `build_image_batch_requests/3`, but resolves each slot's width from
   # the `section_boxes/1` box it sits in (see `apply_image_fills/3`'s doc)
-  # and, for the slots `resolve_fit_page_names/4` cleared for `fit: "page"`,
+  # and, for the slots `resolve_fit_page_keys/4` cleared for `fit: "page"`,
   # scales the image to fill the section's remaining page instead.
-  defp boxed_image_batch_requests(ranges, fills_map, doc2, boxes, fit_page_names) do
+  defp boxed_image_batch_requests(ranges, fills_map, doc2, boxes, fit_page_keys) do
     ranges
     |> Enum.sort_by(& &1.start_index, :desc)
-    |> Enum.flat_map(fn %{name: name, start_index: s, end_index: e} ->
-      fill = Map.fetch!(fills_map, name)
+    |> Enum.flat_map(fn %{key: key, start_index: s, end_index: e} ->
+      fill = Map.fetch!(fills_map, key)
       delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
       box = box_for_index(boxes, s)
       content_width_pt = (box && box.width_pt) || content_width_pt(doc2)
@@ -4668,17 +4679,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
             single_image_inserts(fill, s)
 
           :image_list ->
-            list_image_inserts_boxed(fill, s, content_width_pt, box, doc2, name, fit_page_names)
+            list_image_inserts_boxed(fill, s, content_width_pt, box, doc2, key, fit_page_keys)
         end
 
       [delete | inserts]
     end)
   end
 
-  defp list_image_inserts_boxed(%{media: []}, _index, _cw, _box, _doc2, _name, _fit_names),
+  defp list_image_inserts_boxed(%{media: []}, _index, _cw, _box, _doc2, _key, _fit_keys),
     do: []
 
-  defp list_image_inserts_boxed(fill, index, content_width_pt, box, doc2, name, fit_page_names) do
+  defp list_image_inserts_boxed(fill, index, content_width_pt, box, doc2, key, fit_page_keys) do
     cols = Map.get(fill, :columns, 1)
 
     cond do
@@ -4695,7 +4706,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           }
         ]
 
-      box && MapSet.member?(fit_page_names, name) ->
+      box && MapSet.member?(fit_page_keys, key) ->
         paragraphs_reserve_pt = paragraphs_reserve_before_slot(doc2, box, index)
         page_fit_image_list_inserts(fill, index, box, paragraphs_reserve_pt)
 
@@ -4921,7 +4932,13 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # and at most one per section — the earliest (lowest start_index) wins.
   # Every slot that asked for `fit: "page"` but doesn't qualify falls back
   # to `fit: "width"` with a logged reason.
-  defp resolve_fit_page_names(ranges, fills_map, doc2, boxes) do
+  #
+  # Tracked by `key` (`{position, name}`), not `name` — two sections sharing
+  # a slot name each have their own box and their own accept/reject outcome
+  # (see `apply_image_fills/3`'s doc); a name-only set would let one
+  # section's acceptance leak into another section's, individually-rejected,
+  # occurrence of the same name.
+  defp resolve_fit_page_keys(ranges, fills_map, doc2, boxes) do
     table_spans =
       doc2
       |> collect_tables()
@@ -4936,31 +4953,31 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     |> elem(0)
   end
 
-  defp wants_fit_page?(%{name: name}, fills_map) do
-    fill = Map.fetch!(fills_map, name)
+  defp wants_fit_page?(%{key: key}, fills_map) do
+    fill = Map.fetch!(fills_map, key)
     fill.kind == :image_list and Map.get(fill, :fit, :width) == :page
   end
 
   defp accept_or_reject_fit_page(
-         %{name: name, start_index: s},
+         %{key: key, name: name, start_index: s},
          fills_map,
          table_spans,
          boxes,
-         {names, used}
+         {keys, used}
        ) do
-    fill = Map.fetch!(fills_map, name)
+    fill = Map.fetch!(fills_map, key)
     box_key = boxes |> box_for_index(s) |> then(&(&1 && &1.start_index))
 
     case fit_page_rejection_reason(fill, s, table_spans, box_key, used) do
       nil ->
-        {MapSet.put(names, name), if(box_key, do: MapSet.put(used, box_key), else: used)}
+        {MapSet.put(keys, key), if(box_key, do: MapSet.put(used, box_key), else: used)}
 
       reason ->
         Logger.warning(
           "fit=page ignored for image slot #{inspect(name)}: #{reason}; falling back to fit=width"
         )
 
-        {names, used}
+        {keys, used}
     end
   end
 
@@ -5045,8 +5062,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     slots_and_tables = Enum.zip(table_slots_asc, new_tables)
 
     border_requests =
-      Enum.flat_map(slots_and_tables, fn {%{name: name}, table_el} ->
-        fill = Map.fetch!(fills_map, name)
+      Enum.flat_map(slots_and_tables, fn {%{key: key}, table_el} ->
+        fill = Map.fetch!(fills_map, key)
 
         if Map.get(fill, :columns, 1) >= 2 do
           grid_border_requests(table_el)
@@ -5056,8 +5073,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       end)
 
     fill_requests =
-      Enum.flat_map(slots_and_tables, fn {%{name: name, start_index: s}, table_el} ->
-        fill = Map.fetch!(fills_map, name)
+      Enum.flat_map(slots_and_tables, fn {%{key: key, start_index: s}, table_el} ->
+        fill = Map.fetch!(fills_map, key)
         cols = Map.get(fill, :columns, 1)
         box = box_for_index(boxes, s)
         content_width_pt = (box && box.width_pt) || content_width_pt(doc2)
@@ -5138,12 +5155,51 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp extract_table_cells(_), do: []
 
-  defp in_section_range?(range_by_name, name, s) do
-    case Map.get(range_by_name, name) do
-      nil -> false
-      {rs, re} -> s >= rs and s < re
+  @doc """
+  Resolves each `find_image_tag_ranges/2` occurrence to the section-scoped
+  fill that owns it, tagging it with the `{position, name}` key
+  `apply_image_fills/3`'s `fills_map` is keyed by.
+
+  `all_image_fills` is `substitute_all_images/4`'s `{{position, name}, fill,
+  section_range}` list. An occurrence is matched to the entry whose `name`
+  equals its own and whose `section_range` contains its `start_index` — the
+  same slot name can occur once per section (an image-grid template and its
+  per-orientation twin, for example, both use a slot named `joonised`), so
+  matching by name alone (as this used to) always resolves to whichever
+  section happened to be last in `all_image_fills`, regardless of which
+  section's placeholder text is actually at that index.
+
+  An occurrence with no matching entry (no section's range contains it, or
+  no section declared that name) is dropped, same as before.
+  """
+  @spec resolve_image_ranges(
+          [%{name: String.t(), start_index: integer(), end_index: integer()}],
+          [{{non_neg_integer(), String.t()}, map(), {integer(), integer()} | nil}]
+        ) :: [
+          %{
+            name: String.t(),
+            start_index: integer(),
+            end_index: integer(),
+            key: {non_neg_integer(), String.t()}
+          }
+        ]
+  def resolve_image_ranges(tag_ranges, all_image_fills) do
+    Enum.flat_map(tag_ranges, &resolve_image_range(&1, all_image_fills))
+  end
+
+  defp resolve_image_range(%{name: name, start_index: s} = tag, all_image_fills) do
+    case Enum.find(all_image_fills, &image_fill_owns_range?(&1, name, s)) do
+      nil -> []
+      {key, _fill, _range} -> [Map.put(tag, :key, key)]
     end
   end
+
+  defp image_fill_owns_range?({{_pos, n}, _fill, range}, name, s) do
+    n == name and range_contains?(range, s)
+  end
+
+  defp range_contains?(nil, _s), do: false
+  defp range_contains?({rs, re}, s), do: s >= rs and s < re
 
   # Find which section owns a given text match by checking if the match's
   # start_index falls within that section's range.
