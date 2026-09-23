@@ -1062,6 +1062,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   no taller than its margin leaves the nominal margin as-is. See the
   moduledoc's `Configuration` section for the live measurement this
   reproduces.
+
+  A section's `defaultHeaderId`/`defaultFooterId` resolve by walking the
+  sections in document order — own value if set, else the PREVIOUS
+  section's (already-resolved) value, else (only for the first section)
+  `documentStyle`'s — per the Docs API reference for those fields ("If
+  unset, the value inherits from the previous SectionBreak's SectionStyle.
+  If the value is unset in the first SectionBreak, it inherits from
+  DocumentStyle's defaultHeaderId"). This function does that walk once and
+  hands each section's *resolved* id to `header_extent_pt/2` /
+  `footer_extent_pt/2` as if it were the section's own — those two
+  functions themselves only ever look at the one section_style they're
+  given, they don't walk the chain.
   """
   @spec section_boxes(map()) :: [
           %{
@@ -1091,13 +1103,35 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         [build_section_box(doc, %{}, document_style, 0, doc_end)]
 
       breaks ->
-        breaks
-        |> Enum.with_index()
-        |> Enum.map(&section_box_for_break(&1, breaks, doc, document_style, doc_end))
+        {boxes, _last_header_footer_ids} =
+          breaks
+          |> Enum.with_index()
+          |> Enum.map_reduce({nil, nil}, fn indexed_break, prev_header_footer_ids ->
+            section_box_for_break(
+              indexed_break,
+              breaks,
+              doc,
+              document_style,
+              doc_end,
+              prev_header_footer_ids
+            )
+          end)
+
+        boxes
     end
   end
 
-  defp section_box_for_break({sb, i}, breaks, doc, document_style, doc_end) do
+  # Builds one section's box and returns `{box, {header_id, footer_id}}` —
+  # the resolved header_id/footer_id feed the next section's inheritance
+  # (see `section_boxes/1`'s doc for the resolution rule).
+  defp section_box_for_break(
+         {sb, i},
+         breaks,
+         doc,
+         document_style,
+         doc_end,
+         {prev_header_id, prev_footer_id}
+       ) do
     style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
     start_index = Map.get(sb, "startIndex", 0)
 
@@ -1107,8 +1141,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         next -> Map.get(next, "startIndex", doc_end)
       end
 
-    build_section_box(doc, style, document_style, start_index, end_index)
+    header_id = Map.get(style, "defaultHeaderId") || prev_header_id
+    footer_id = Map.get(style, "defaultFooterId") || prev_footer_id
+
+    effective_style =
+      style
+      |> put_resolved_id("defaultHeaderId", header_id)
+      |> put_resolved_id("defaultFooterId", footer_id)
+
+    box = build_section_box(doc, effective_style, document_style, start_index, end_index)
+
+    {box, {header_id, footer_id}}
   end
+
+  defp put_resolved_id(style, _key, nil), do: style
+  defp put_resolved_id(style, key, id), do: Map.put(style, key, id)
 
   defp build_section_box(doc, section_style, document_style, start_index, end_index) do
     flip = resolve_flip(section_style, document_style)

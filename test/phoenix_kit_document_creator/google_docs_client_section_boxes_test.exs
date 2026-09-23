@@ -279,5 +279,50 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientSectionBoxesTest do
       # under marginTop (72) — nominal margin still wins.
       assert box.body_top_pt == 72.0
     end
+
+    test "a section with no header of its own inherits the PREVIOUS section's, not the document's" do
+      # Per the Docs API reference for defaultHeaderId/defaultFooterId: "If
+      # unset, the value inherits from the previous SectionBreak's
+      # SectionStyle. If the value is unset in the first SectionBreak, it
+      # inherits from DocumentStyle's defaultHeaderId." Three sections:
+      # section 1 has no header of its own (→ document default, "doc-h",
+      # one default-style line); section 2 declares its own, taller header
+      # ("sec2-h", 5 lines); section 3 has none of its own and must inherit
+      # section 2's ("sec2-h"), NOT fall straight through to the document's
+      # ("doc-h") — a `section_style["defaultHeaderId"] ||
+      # document_style["defaultHeaderId"]` resolution (ignoring the chain)
+      # would give section 3 the document's shorter header instead, failing
+      # the body_top_pt equality assertion below.
+      doc = %{
+        "documentStyle" => Map.merge(doc_style(), %{"defaultHeaderId" => "doc-h"}),
+        "headers" => %{
+          "doc-h" => %{"content" => [header_paragraph("\n")]},
+          "sec2-h" => %{
+            "content" => for(_ <- 1..5, do: header_paragraph("\n"))
+          }
+        },
+        "body" => %{
+          "content" => [
+            section_break(0),
+            %{"startIndex" => 1, "endIndex" => 20, "paragraph" => %{}},
+            section_break(20, %{"defaultHeaderId" => "sec2-h"}),
+            %{"startIndex" => 21, "endIndex" => 40, "paragraph" => %{}},
+            section_break(40),
+            %{"startIndex" => 41, "endIndex" => 60, "paragraph" => %{}}
+          ]
+        }
+      }
+
+      [box1, box2, box3] = GoogleDocsClient.section_boxes(doc)
+
+      # Section 1's one-line document-default header (36 + @default_line_pt
+      # ≈ 51.4) is under marginTop (72) — the nominal margin wins there.
+      assert box1.body_top_pt == 72.0
+      assert_in_delta box2.body_top_pt, 36.0 + 5 * @default_line_pt, 0.001
+      # Section 3 inherits section 2's header (5 lines), not the document's
+      # (1 line) — same body_top_pt as section 2, not section 1.
+      assert_in_delta box3.body_top_pt, box2.body_top_pt, 0.001
+      assert abs(box3.body_top_pt - box1.body_top_pt) > 1.0
+    end
   end
 end
