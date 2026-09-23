@@ -1,3 +1,17 @@
+## 0.9.9 - 2026-09-23
+
+### Fixed
+
+- A composed document's appended sections keep their template's own page
+  orientation. A landscape template appended after a portrait one no longer
+  comes out portrait, and a portrait one after a landscape one no longer
+  inherits the flip. `append_template/3` now sends one `updateSectionStyle`
+  with the template's margins and an explicit `flipPageOrientation`, worked
+  out against the target document's page size (new
+  `GoogleDocsClient.section_layout_requests/3`).
+- A `null` document-level `flipPageOrientation` on a template is treated as
+  unset instead of as a flip.
+
 ## 0.9.8 - 2026-09-22
 
 ### Fixed

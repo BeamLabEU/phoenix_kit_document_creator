@@ -3279,6 +3279,24 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientAppendTablesTest do
       assert request["sectionStyle"] == %{"flipPageOrientation" => true}
     end
 
+    test "a non-boolean flipPageOrientation at either level reads as unset, not as a flip" do
+      template = %{
+        "documentStyle" => %{"pageSize" => portrait_page_size(), "flipPageOrientation" => nil},
+        "body" => %{
+          "content" => [
+            %{"sectionBreak" => %{"sectionStyle" => %{"flipPageOrientation" => nil}}}
+          ]
+        }
+      }
+
+      target = %{"documentStyle" => %{"pageSize" => portrait_page_size()}}
+
+      assert [%{"updateSectionStyle" => request}] =
+               GoogleDocsClient.section_layout_requests(11, template, target)
+
+      assert request["sectionStyle"] == %{"flipPageOrientation" => false}
+    end
+
     test "a template without a documentStyle still produces a request — the single flipPageOrientation: false field" do
       assert [%{"updateSectionStyle" => request}] =
                GoogleDocsClient.section_layout_requests(11, %{}, %{})

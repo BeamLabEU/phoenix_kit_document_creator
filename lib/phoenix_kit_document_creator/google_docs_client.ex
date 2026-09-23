@@ -2486,9 +2486,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @section_margin_fields ~w(marginTop marginBottom marginLeft marginRight marginHeader marginFooter)
 
   @doc """
-  Builds the `updateSectionStyle` request that gives an appended section its
-  template's own page margins. `section_index` is any index inside the
-  section — `append_template/3` passes the section's `content_start`.
+  Builds the `updateSectionStyle` request that gives a section its
+  template's own page margins, and nothing else. `section_index` is any
+  index inside the section. `append_template/3` does not call this: it
+  sends `section_layout_requests/3`, which carries these same margins plus
+  the section's page orientation in one request.
 
   The margins are the ones the template's own first page renders with: its
   first section's `sectionStyle.margin*` where set, else
@@ -2598,15 +2600,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # first_section_style's flipPageOrientation, if explicitly present (even
   # `false` — a composed template's own section can override its document),
   # else the template's documentStyle.flipPageOrientation, else false.
-  # Map.get/2 with `||` would treat an explicit `false` as absent, so this
-  # uses Map.fetch/2 to tell "unset" from "set to false" apart.
+  # Map.get/2 with `||` would treat an explicit `false` as absent, so each
+  # level is matched on is_boolean/1 instead. The guard on the document level
+  # matters too: a non-boolean there (a JSON null) would otherwise reach the
+  # `!=` XOR in section_flip?/2 and read as a flip.
   defp template_flip?(template_doc) do
     section_style = first_section_style(template_doc)
     document_style = Map.get(template_doc, "documentStyle") || %{}
 
-    case Map.fetch(section_style, "flipPageOrientation") do
-      {:ok, flip} when is_boolean(flip) -> flip
-      _ -> Map.get(document_style, "flipPageOrientation", false)
+    case {Map.get(section_style, "flipPageOrientation"),
+          Map.get(document_style, "flipPageOrientation")} do
+      {flip, _} when is_boolean(flip) -> flip
+      {_, flip} when is_boolean(flip) -> flip
+      _ -> false
     end
   end
 
