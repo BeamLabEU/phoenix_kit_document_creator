@@ -1072,6 +1072,11 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       assert Enum.sort(Enum.map([by_index[21], by_index[41]], & &1)) == ["s0-a", "s0-b"]
       assert Enum.sort(Enum.map([by_index[221], by_index[241]], & &1)) == ["s1-a", "s1-b"]
 
+      # The later table is filled first, so no insert shifts a cell index
+      # another insert in the same batch still relies on.
+      fill_indices = Enum.map(fill_reqs, &get_in(&1, ["insertInlineImage", "location", "index"]))
+      assert fill_indices == [241, 221, 41, 21]
+
       # Every border request precedes every Phase 2 image insert (Block E's
       # ordering guarantee, re-checked here through the real pipeline).
       border_positions =

@@ -561,6 +561,34 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientPhaseTest do
              "every border request must precede every image insert"
     end
 
+    test "two grid tables: image inserts run in strictly descending index order across tables" do
+      # Inserts are applied in batch order; filling the earlier table first
+      # would shift every later table's cell indices by the images already
+      # inserted, so the later table's inserts would miss their cells.
+      slot_a = %{key: {0, "a"}, name: "a", start_index: 50, end_index: 70}
+      slot_b = %{key: {1, "b"}, name: "b", start_index: 200, end_index: 220}
+
+      fills = %{
+        {0, "a"} => %{kind: :image_list, columns: 2, media: [%{uri: "a1"}, %{uri: "a2"}]},
+        {1, "b"} => %{kind: :image_list, columns: 2, media: [%{uri: "b1"}, %{uri: "b2"}]}
+      }
+
+      requests =
+        GoogleDocsClient.build_phase2_requests(
+          [slot_a, slot_b],
+          [grid_table_el(110, 1, 2), grid_table_el(260, 1, 2)],
+          fills,
+          %{},
+          []
+        )
+
+      inserts =
+        for %{"insertInlineImage" => %{"location" => %{"index" => i}, "uri" => u}} <- requests,
+            do: {i, u}
+
+      assert inserts == [{291, "b2"}, {271, "b1"}, {141, "a2"}, {121, "a1"}]
+    end
+
     test "columns: 1 slot gets no border request (regression)" do
       slot = %{key: {0, "single_col"}, name: "single_col", start_index: 50, end_index: 70}
       table_el = grid_table_el(110, 2, 1)

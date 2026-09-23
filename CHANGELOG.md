@@ -1,3 +1,16 @@
+## 0.9.11 - 2026-09-23
+
+### Fixed
+
+- Image grids (`image_list` with `columns >= 2`) are borderless: the table
+  cells no longer show Google Docs' default black border.
+- An image slot name used in several sections of a composed document fills
+  each section with that section's own images. Previously the last section
+  holding the name won, and the other sections' slots rendered empty.
+- A document with more than one image grid gets every grid's images in its
+  own cells. The later grids' images used to be placed at stale positions,
+  which failed the fill.
+
 ## 0.9.10 - 2026-09-23
 
 ### Added

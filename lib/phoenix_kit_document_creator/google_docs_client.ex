@@ -5056,6 +5056,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   not a text index range) does not, so ordering border-then-fill within one
   table would still corrupt a later table's `startIndex` were the two kinds
   interleaved per table instead of grouped by kind.
+
+  For the same reason the image inserts run in strictly descending index
+  order across the whole batch: the last table is filled first, each
+  table's cells back to front.
   """
   @spec build_phase2_requests([map()], [map()], map(), map(), [map()]) :: [map()]
   def build_phase2_requests(table_slots_asc, new_tables, fills_map, doc2, boxes) do
@@ -5072,8 +5076,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         end
       end)
 
+    # Last table first: each table's own inserts already run back to front
+    # (`fill_table_cells/3`), and filling the tables in ascending order would
+    # shift every later table's cell indices by the images inserted ahead
+    # of it, so its inserts would land outside its cells.
     fill_requests =
-      Enum.flat_map(slots_and_tables, fn {%{key: key, start_index: s}, table_el} ->
+      slots_and_tables
+      |> Enum.reverse()
+      |> Enum.flat_map(fn {%{key: key, start_index: s}, table_el} ->
         fill = Map.fetch!(fills_map, key)
         cols = Map.get(fill, :columns, 1)
         box = box_for_index(boxes, s)
