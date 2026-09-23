@@ -251,7 +251,7 @@
                               "endIndex": 69,
                               "startIndex": 7,
                               "textRun": {
-                                "content": "OÜ ANDI MÖÖBEL · Tapri 15, Tallinn 11415\u000BTel +372 6 311 979 · ",
+                                "content": "Example Company OÜ · Example Street 1, Example City\u000BTel +000 0 000 0000 · ",
                                 "textStyle": {
                                   "fontSize": {
                                     "magnitude": 9.5,
@@ -277,7 +277,7 @@
                               "endIndex": 80,
                               "startIndex": 69,
                               "textRun": {
-                                "content": "www.andi.ee",
+                                "content": "example.com",
                                 "textStyle": {
                                   "fontSize": {
                                     "magnitude": 9.5,
@@ -293,7 +293,7 @@
                                     }
                                   },
                                   "link": {
-                                    "url": "http://www.andi.ee"
+                                    "url": "http://example.com"
                                   },
                                   "underline": true,
                                   "weightedFontFamily": {
@@ -373,7 +373,7 @@
                               "endIndex": 122,
                               "startIndex": 82,
                               "textRun": {
-                                "content": "Reg. kood 10827447 \u000BKMKR nr EE100744347\n",
+                                "content": "Reg. code 00000000 \u000BVAT no EE000000000\n",
                                 "textStyle": {
                                   "fontSize": {
                                     "magnitude": 9.5,
@@ -412,7 +412,7 @@
                               "endIndex": 141,
                               "startIndex": 122,
                               "textRun": {
-                                "content": "SEB SWIFT EEUHEE2X\n",
+                                "content": "Example Bank SWIFT EXAMPLEXX\n",
                                 "textStyle": {
                                   "fontSize": {
                                     "magnitude": 9.5,
@@ -451,7 +451,7 @@
                               "endIndex": 167,
                               "startIndex": 141,
                               "textRun": {
-                                "content": "IBAN EE321010220025059013\n",
+                                "content": "IBAN EE000000000000000000\n",
                                 "textStyle": {
                                   "fontSize": {
                                     "magnitude": 9.5,
@@ -769,9 +769,9 @@
             }
           },
           "imageProperties": {
-            "contentUri": "https://lh7-rt.googleusercontent.com/docsz/AD_4nXf7gn-LumUsqOkm5OxCcIJQ6JiTo4U_LPuTs5V_KTExRCg7AHe14Xm9x0UYj8QvS85LWMMPzBK24ynzn7WjhiMuQsVveX3MPh6ndbX52dDRlFK8aUrBryPuKd-Y5ixNPsPZYA10Npl-9fjBtNQ4bzG7uO3_p3HyQnpzYY4tQwlI9W0PO1k=s2048?key=5YnqC7MYRvjnDboMxn1ABg",
+            "contentUri": "https://example.com/assets/logo-1.png",
             "cropProperties": {},
-            "sourceUri": "https://lh3.googleusercontent.com/d/1Rv6n0Mr2oIl1NtLaUU8u8sZbQySpN3Jl=s4096"
+            "sourceUri": "https://example.com/assets/source-1.png"
           },
           "marginBottom": {
             "magnitude": 9,
@@ -819,9 +819,9 @@
             }
           },
           "imageProperties": {
-            "contentUri": "https://lh7-rt.googleusercontent.com/docsz/AD_4nXcwfzlUecHzV6e65jRAZuv9IoM-yQcDnL9PY0e1Uj1HpwHzlAH08C9HgwUnTtT5W3lSs0gZKalDG-lyZZlco98JOue1djLmNubxwX9MOY79kRobPWIznlCZlzwQ4Dl4WyD9K5m6XKjjCxUYOMEgQI1Ea2HboxjhOqjgE2aSaU3Jb5sg=s2048?key=5YnqC7MYRvjnDboMxn1ABg",
+            "contentUri": "https://example.com/assets/logo-2.png",
             "cropProperties": {},
-            "sourceUri": "https://lh3.googleusercontent.com/d/1blHGrXnWfKJ3zw-RjIVVrc2LW4HFTnPG=s4096"
+            "sourceUri": "https://example.com/assets/source-2.png"
           },
           "marginBottom": {
             "magnitude": 9,
@@ -869,9 +869,9 @@
             }
           },
           "imageProperties": {
-            "contentUri": "https://lh7-rt.googleusercontent.com/docsz/AD_4nXftar-PNzaOlWzoZyU7ZAcwNRSP99YpscJaEV7nerkfJEbYuvhaH7m8nWXIFr3_2L4lj6QD72y6cxr9wXrP-TBKEr7I3tkkIjXnHwR6e9bZy_Zs0pKbych0V113FpqA7gkawtYVI8QDFTljs-8qyUruYwcwMz4z2bt0KXA_Pp4vVB_Urjw=s2048?key=5YnqC7MYRvjnDboMxn1ABg",
+            "contentUri": "https://example.com/assets/logo-3.png",
             "cropProperties": {},
-            "sourceUri": "https://lh3.googleusercontent.com/d/1zsE54NcxJirWvirvCqGi-hYdO8r72Vs4"
+            "sourceUri": "https://example.com/assets/source-3.png"
           },
           "marginBottom": {
             "magnitude": 9,

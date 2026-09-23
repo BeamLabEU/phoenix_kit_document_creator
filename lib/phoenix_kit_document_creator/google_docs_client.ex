@@ -1239,10 +1239,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   @doc """
   Estimated height in points of the header that resolves for `section_style`
-  (its own `defaultHeaderId`, else the document's — same resolution Docs
-  itself uses for inheritance) — `0.0` when neither has one. See the
-  moduledoc's `Configuration` section for the estimator's rules and the live
-  measurement it's calibrated against.
+  (its own `defaultHeaderId`, else the document's) — `0.0` when neither has
+  one. This function only ever looks at the ONE `section_style` it's given;
+  it does not walk the "inherits from the previous SectionBreak" chain Docs
+  itself uses for `defaultHeaderId`/`defaultFooterId` (see `section_boxes/1`'s
+  doc) — callers outside that chain-aware pipeline (e.g. a direct call on an
+  isolated section) get only the own-or-document resolution, which is
+  correct for the document's first section but not necessarily for a later
+  one whose own id is unset. See the moduledoc's `Configuration` section for
+  the estimator's rules and the live measurement it's calibrated against.
   """
   @spec header_extent_pt(map(), map()) :: float()
   def header_extent_pt(doc, section_style) when is_map(doc) and is_map(section_style) do
