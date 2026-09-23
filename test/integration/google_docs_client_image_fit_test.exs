@@ -112,6 +112,44 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
         do: request
   end
 
+  # Every request across every recorded :batchUpdate call, in call order —
+  # unlike `insert_inline_image_requests/0`, this doesn't filter by key
+  # shape, so it also picks up Phase 2's string-keyed requests
+  # (`"insertInlineImage"`, `"updateTableCellStyle"`) that a columns >= 2
+  # slot goes through.
+  defp all_batch_requests do
+    for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+        String.contains?(url, ":batchUpdate"),
+        request <- opts[:json].requests,
+        do: request
+  end
+
+  # A table element shaped like `collect_tables/1`'s output
+  # (`%{"startIndex" => _, "table" => %{"rows" => _, "columns" => _,
+  # "tableRows" => [...]}}`), with `rows * columns` cells laid out
+  # left-to-right, top-to-bottom, each cell's own startIndex spaced 20
+  # apart starting at `base_cell_start` — enough for
+  # `extract_table_cells/1` to compute distinct insert indices per cell.
+  defp grid_table_block(start_index, rows, columns, base_cell_start) do
+    cell_starts =
+      for r <- 0..(rows - 1), c <- 0..(columns - 1) do
+        base_cell_start + (r * columns + c) * 20
+      end
+
+    table_rows =
+      cell_starts
+      |> Enum.chunk_every(columns)
+      |> Enum.map(fn row_starts ->
+        %{"tableCells" => Enum.map(row_starts, &%{"startIndex" => &1, "content" => []})}
+      end)
+
+    %{
+      "startIndex" => start_index,
+      "endIndex" => start_index + 100,
+      "table" => %{"rows" => rows, "columns" => columns, "tableRows" => table_rows}
+    }
+  end
+
   describe "box-width fix — image_list columns=1, fit: \"width\" (default)" do
     test "uses the LANDSCAPE section's own box width, not the (portrait) document's" do
       doc = %{
@@ -914,6 +952,135 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientImageFitTest do
       # would give both images the same aspect).
       assert width0 > height0, "section0's 16:9 image should render wider than tall"
       assert height1 > width1, "section1's 9:16 image should render taller than wide"
+    end
+
+    test "duplicate slot name with columns >= 2: each section's grid gets its own images, own cells, own border request" do
+      # A grid slot (columns >= 2) goes through Phase 1 (insertTable) and
+      # Phase 2 (re-fetch, then fill_matched_tables — see
+      # build_phase2_requests/5). Phase 2 needs a POST-insertTable document
+      # to find the new tables in, so `get_document` is stubbed with a
+      # counter: the first two GETs (text phase, then image phase) see the
+      # placeholder-only document; the third (Phase 2's re-fetch) sees the
+      # two tables Phase 1 would have created.
+      tag_text = "{{ images: photos }}\n"
+      para1 = para(1, tag_text)
+      para2 = para(para1["endIndex"], tag_text)
+
+      doc_before_tables = %{
+        "documentStyle" => doc_style(),
+        "body" => %{"content" => [section_break(0), para1, para2]}
+      }
+
+      table0 = grid_table_block(10, 1, 2, 20)
+      table1 = grid_table_block(200, 1, 2, 220)
+
+      doc_after_tables = %{
+        "documentStyle" => doc_style(),
+        "body" => %{"content" => [section_break(0), table0, table1]}
+      }
+
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      get_response = fn ->
+        n = Agent.get_and_update(counter, fn n -> {n, n + 1} end)
+        body = if n < 2, do: doc_before_tables, else: doc_after_tables
+        {:ok, %{status: 200, body: body}}
+      end
+
+      StubIntegrations.stub_request(:get, "/v1/documents/fit-doc", get_response)
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [
+        %{
+          position: 0,
+          variable_values: %{},
+          image_params: %{
+            "photos" =>
+              image_list_slot(%{
+                "columns" => 2,
+                "media" => [%{"uri" => "s0-a"}, %{"uri" => "s0-b"}]
+              })
+          }
+        },
+        %{
+          position: 1,
+          variable_values: %{},
+          image_params: %{
+            "photos" =>
+              image_list_slot(%{
+                "columns" => 2,
+                "media" => [%{"uri" => "s1-a"}, %{"uri" => "s1-b"}]
+              })
+          }
+        }
+      ]
+
+      ranges = %{
+        0 => {para1["startIndex"], para1["endIndex"]},
+        1 => {para2["startIndex"], para2["endIndex"]}
+      }
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("fit-doc", sections, ranges)
+
+      requests = all_batch_requests()
+
+      insert_table_reqs = Enum.filter(requests, &Map.has_key?(&1, "insertTable"))
+      assert length(insert_table_reqs) == 2, "expected one insertTable per section"
+
+      assert Enum.all?(insert_table_reqs, fn r ->
+               match?(%{"insertTable" => %{"rows" => 1, "columns" => 2}}, r)
+             end)
+
+      border_reqs = Enum.filter(requests, &Map.has_key?(&1, "updateTableCellStyle"))
+
+      assert length(border_reqs) == 2,
+             "expected one border-clearing request per grid table (Block E)"
+
+      border_starts =
+        Enum.map(border_reqs, fn r ->
+          get_in(r, [
+            "updateTableCellStyle",
+            "tableRange",
+            "tableCellLocation",
+            "tableStartLocation",
+            "index"
+          ])
+        end)
+
+      assert Enum.sort(border_starts) == [10, 200],
+             "each grid keeps its own tableStartLocation"
+
+      # Phase 2's own insertInlineImage requests are string-keyed (distinct
+      # from Phase 1's atom-keyed inline path, which columns >= 2 never uses).
+      fill_reqs = Enum.filter(requests, &Map.has_key?(&1, "insertInlineImage"))
+      assert length(fill_reqs) == 4, "2 cells per table x 2 tables"
+
+      by_index =
+        Map.new(fill_reqs, fn r ->
+          {get_in(r, ["insertInlineImage", "location", "index"]),
+           get_in(r, ["insertInlineImage", "uri"])}
+        end)
+
+      # table0's cells (startIndex 20, 40 -> insert index 21, 41) get
+      # section 0's media; table1's cells (220, 240 -> 221, 241) get
+      # section 1's — never swapped, and never both landing on one table.
+      assert Enum.sort(Enum.map([by_index[21], by_index[41]], & &1)) == ["s0-a", "s0-b"]
+      assert Enum.sort(Enum.map([by_index[221], by_index[241]], & &1)) == ["s1-a", "s1-b"]
+
+      # Every border request precedes every Phase 2 image insert (Block E's
+      # ordering guarantee, re-checked here through the real pipeline).
+      border_positions =
+        for {r, i} <- Enum.with_index(requests), Map.has_key?(r, "updateTableCellStyle"), do: i
+
+      fill_positions =
+        for {r, i} <- Enum.with_index(requests), Map.has_key?(r, "insertInlineImage"), do: i
+
+      assert Enum.max(border_positions) < Enum.min(fill_positions)
     end
   end
 end
