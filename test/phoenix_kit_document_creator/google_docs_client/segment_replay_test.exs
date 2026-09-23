@@ -3,13 +3,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplayTest do
   Coverage for `SegmentReplay`'s fingerprint and pure request builders.
 
   The fingerprint fixtures below are trimmed, hand-built versions of three
-  REAL "home" header/footer segments fetched live 2026-09-23 (Hinnapakkumine
-  `1mUxGXjRdI0dAoeUiIWEigg9LdZZsr1Vz-7OS6FD2kaM`, Leping
-  `17WIQfTf-RDGzzZtDrpKb3Vg8BOSh_L4yiXmiqaRkSa0`, Joonised (tootmine)
-  `1jn32dxiSqVfn8Kc2ByFPX-mpBeXqDFEyRhWw6DmP4aY`) via `GoogleDocsClient.get_document/1`
-  through the andi stand's Tidewave — see `SegmentReplay`'s moduledoc for
-  the specific discrepancies (table/image size, cell padding, rule
-  representation) this is calibrated to tolerate.
+  REAL "home" header/footer segments (three separately-templated documents
+  meant to share one look) fetched live 2026-09-23 via
+  `GoogleDocsClient.get_document/1` against a production stand — all
+  requisites text and image URIs replaced with placeholders here; see
+  `SegmentReplay`'s moduledoc for the specific discrepancies (table/image
+  size, cell padding, rule representation) this is calibrated to tolerate.
   """
 
   use ExUnit.Case, async: true
@@ -132,7 +131,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient.SegmentReplayTest do
       table([
         cell([
           para([
-            text_run("OÜ ANDI MÖÖBEL\n", %{"fontSize" => %{"magnitude" => 9.5, "unit" => "PT"}})
+            text_run("Example Company OÜ\n", %{
+              "fontSize" => %{"magnitude" => 9.5, "unit" => "PT"}
+            })
           ])
         ]),
         cell([
