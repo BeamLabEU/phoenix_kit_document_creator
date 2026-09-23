@@ -28,6 +28,84 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   read; the rewritten setting then drives all subsequent dispatches.
   Folder configuration is stored separately under the
   `"document_creator_folders"` settings key.
+
+  ## Configuration
+
+  - `:page_fit_safety_pt` (float, default `8.0`) — small residual safety
+    margin subtracted from a `fit: "page"` image slot's available height on
+    every page it occupies, on top of the header/footer-derived body box.
+    See `page_fit_safety_pt/0`.
+
+        config :phoenix_kit_document_creator, :page_fit_safety_pt, 8.0
+
+    Through 2026-09-22 this was a single flat constant (`130pt`) standing in
+    for the whole header/footer overhang, calibrated live against one
+    template. As of 2026-09-23 the top/bottom of the body is instead
+    *computed* from each section's own header/footer content
+    (`header_extent_pt/2`, `footer_extent_pt/2`, folded into `section_boxes/1`
+    as `body_top_pt`/`body_bottom_pt`) — see `page_fit_image_list_inserts/4`.
+    `page_fit_safety_pt/0` now only covers what that estimate can't see
+    (line-height rounding, the little Docs adds before flowing an image vs.
+    plain text) — hence the much smaller default.
+
+    Calibrated live 2026-09-22/23 against Andi's landscape "Joonised
+    (tootmine)" template and the composite Hinnapakkumine + Joonised +
+    Leping preview (A4 landscape, 72pt margins, the shared "house" header —
+    a 1x2 table with a logo — and house footer — a `horizontalRule` element,
+    two empty Calibri 9.5pt paragraphs, and a details table whose cells hold
+    soft (`\u000B`) line breaks — both taller than their
+    `marginHeader`/`marginFooter` of 36pt) — these are the measurements the
+    header/footer content estimator (`segment_extent_pt/2` and friends) is
+    built to reproduce from `doc["headers"]`/`doc["footers"]` alone, without
+    a live render:
+
+    - text on a fresh page starts at 72pt (`marginTop`), but Docs starts an
+      inline image's paragraph at ~111pt — it lays the image out under the
+      header, which extends past its own margin (36pt + ~75pt of content);
+      plain text is NOT pushed down the same way. `header_extent_pt/2` on
+      this house header (a 1x2 table with a ~46pt-tall logo image) estimates
+      ≈78pt against the ≈75pt measured live — a few points over, never under.
+    - the footer extends ~68pt past its own 72pt `marginBottom` (the last
+      line of text that still fits lands around y≈448pt against that
+      nominal margin's 523pt edge on a 596pt-tall page) — i.e. ~105-107pt
+      of TOTAL footer zone measured from the page bottom, against a nominal
+      `marginFooter` of 36pt. `footer_extent_pt/2` on the house footer
+      estimates ≈106.8pt from its content alone (a `horizontalRule` element
+      counts as one line on top of its paragraph's own text, two empty
+      Calibri 9.5pt paragraphs, and a 2-column details table whose right
+      cell's soft `\u000B` line breaks add lines within a single Docs
+      paragraph) — in line with that measurement.
+    - a line's true height runs ahead of the naive `fontSize ×
+      lineSpacing/100` product — measured live at ~14.55pt for Arial
+      11pt/115% (12.65 × ~1.15). `estimate_paragraph_height_pt/1` applies a
+      single `@font_leading` (1.22) constant to every line regardless of
+      font, the larger of the two real multipliers measured (Arial ~1.15,
+      the house footer's Calibri ~1.22) — safe-side for Arial, matching for
+      Calibri.
+    - the section's terminal paragraph (present after the last image, when
+      the image slot ends its section) costs one more default-style line,
+      ~15.4pt (`11 × 1.15 × 1.22`) — this is
+      `page_fit_image_list_inserts/4`'s `trailing_line_pt`, subtracted only
+      from the LAST image rendered in the slot (every other image is
+      immediately followed by another image, not the section's terminal
+      paragraph).
+    - `header_extent_pt/2` / `footer_extent_pt/2` estimate a segment's
+      content the same way `estimate_paragraph_height_pt/1` estimates a body
+      paragraph (`lineCount × fontSize × lineSpacing/100 × @font_leading +
+      spaceAbove + spaceBelow + borderTop/borderBottom width+padding`, an
+      empty paragraph counting as one line, one more line per `\u000B` soft
+      break and per `horizontalRule` element), plus: a table is the sum of
+      its rows, a row is the tallest of its cells, and a cell is the sum of
+      its paragraphs' heights plus its own `tableCellStyle` padding (falling
+      back to 5pt top/bottom — the Docs default when a table's cells don't
+      set it explicitly, as seen on the house header's own cells) and
+      border widths — and a paragraph holding an inline image is sized from
+      that image's own `inlineObjects[id].embeddedObject.size.height` plus
+      its own `marginTop`/`marginBottom` (falling back to 5pt each) instead
+      of the font formula, which would drastically undersize it.
+    - live-verified (2026-09-23, commit `1137050`): a "Joonised (tootmine)"
+      preview with 2 and 3 `fit: "page"` images each landed one per page, no
+      blank pages, footer untouched — images sized to 311pt and 315pt.
   """
 
   require Logger
@@ -933,7 +1011,26 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @px_to_pt 0.75
   @image_gap_pt 8.0
   @default_content_width_pt 468.0
+  @default_content_height_pt 648.0
+  @default_margin_pt 72.0
+  @default_header_footer_margin_pt 36.0
   @max_columns 4
+  @default_paragraph_font_size_pt 11.0
+  @default_line_spacing_pct 115.0
+  # A line's true height runs ahead of the naive fontSize × lineSpacing/100
+  # product — see `estimate_paragraph_height_pt/1`'s doc for the live
+  # measurement this single, safe-side constant is calibrated against.
+  @font_leading 1.22
+  # Fallback padding used by the header/footer content estimator
+  # (`segment_extent_pt/2` and friends) when the API doesn't give us a more
+  # specific number — see the moduledoc's `Configuration` section.
+  @default_cell_padding_pt 5.0
+  @inline_image_padding_pt 5.0
+  # One default-style line's worth of the section's terminal paragraph,
+  # applied to every `fit: "page"` image for simplicity — see
+  # `page_fit_image_list_inserts/4`.
+  @page_fit_trailing_line_pt @default_paragraph_font_size_pt *
+                               (@default_line_spacing_pct / 100.0) * @font_leading
 
   @doc """
   Page content width in points = pageSize.width − marginLeft − marginRight.
@@ -953,6 +1050,320 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp magnitude(%{"magnitude" => m}) when is_number(m), do: m * 1.0
   defp magnitude(_), do: nil
+
+  @doc """
+  Per-section content boxes for a Google Doc — one per `sectionBreak` in its
+  body, each covering the character range from that break up to the next
+  (or the end of the body).
+
+  A `sectionBreak` StructuralElement's own `sectionStyle` describes the
+  section that STARTS right after it (see `first_section_style/1`'s doc for
+  why the body's very first element is always one of these). `width_pt` /
+  `height_pt` are that section's own page content area — `documentStyle`'s
+  `pageSize`, swapped when the section's resolved `flipPageOrientation` is
+  true (section value if the key is present, else the document's, else
+  `false` — same resolution `section_flip?/2` uses for "does the section
+  look landscape"), minus that section's own margins (its `sectionStyle`,
+  else `documentStyle`, else 72pt — the same resolution `content_width_pt/1`
+  and `section_margin_requests/2` use). `margin_top` / `margin_bottom` are
+  exposed so callers (the `fit: "page"` image scaling in `apply_image_fills/3`)
+  can reserve space without re-deriving them.
+
+  A document with no explicit `sectionBreak` yields a single box for the
+  whole body, using `documentStyle` alone; when `pageSize` is missing too it
+  falls back to the same constants `content_width_pt/1` uses — 468pt width
+  (documented as "Letter, 1in margins"), and 648pt height (Letter's 792pt
+  minus the same 144pt of margin).
+
+  `body_top_pt` / `body_bottom_pt` are the top/bottom of the area a `fit:
+  "page"` image can actually use — computed from the section's header/footer
+  *content* (`header_extent_pt/2`, `footer_extent_pt/2`), not just its
+  `marginTop`/`marginBottom`: `body_top_pt = max(margin_top, margin_header +
+  header_extent)`, `body_bottom_pt = page_h_effective - max(margin_bottom,
+  margin_footer + footer_extent)`. A header/footer taller than its own
+  margin pushes the body down/up further than the nominal margin would; one
+  no taller than its margin leaves the nominal margin as-is. See the
+  moduledoc's `Configuration` section for the live measurement this
+  reproduces.
+
+  A section's `defaultHeaderId`/`defaultFooterId` resolve by walking the
+  sections in document order — own value if set, else the PREVIOUS
+  section's (already-resolved) value, else (only for the first section)
+  `documentStyle`'s — per the Docs API reference for those fields ("If
+  unset, the value inherits from the previous SectionBreak's SectionStyle.
+  If the value is unset in the first SectionBreak, it inherits from
+  DocumentStyle's defaultHeaderId"). This function does that walk once and
+  hands each section's *resolved* id to `header_extent_pt/2` /
+  `footer_extent_pt/2` as if it were the section's own — those two
+  functions themselves only ever look at the one section_style they're
+  given, they don't walk the chain.
+  """
+  @spec section_boxes(map()) :: [
+          %{
+            start_index: non_neg_integer(),
+            end_index: non_neg_integer(),
+            width_pt: float(),
+            height_pt: float(),
+            margin_top: float(),
+            margin_bottom: float(),
+            body_top_pt: float(),
+            body_bottom_pt: float()
+          }
+        ]
+  def section_boxes(doc) when is_map(doc) do
+    document_style = Map.get(doc, "documentStyle") || %{}
+
+    breaks =
+      doc
+      |> get_in(["body", "content"])
+      |> List.wrap()
+      |> Enum.filter(&Map.has_key?(&1, "sectionBreak"))
+
+    doc_end = document_end_index(doc)
+
+    case breaks do
+      [] ->
+        [build_section_box(doc, %{}, document_style, 0, doc_end)]
+
+      breaks ->
+        {boxes, _last_header_footer_ids} =
+          breaks
+          |> Enum.with_index()
+          |> Enum.map_reduce({nil, nil}, fn indexed_break, prev_header_footer_ids ->
+            section_box_for_break(
+              indexed_break,
+              breaks,
+              doc,
+              document_style,
+              doc_end,
+              prev_header_footer_ids
+            )
+          end)
+
+        boxes
+    end
+  end
+
+  # Builds one section's box and returns `{box, {header_id, footer_id}}` —
+  # the resolved header_id/footer_id feed the next section's inheritance
+  # (see `section_boxes/1`'s doc for the resolution rule).
+  defp section_box_for_break(
+         {sb, i},
+         breaks,
+         doc,
+         document_style,
+         doc_end,
+         {prev_header_id, prev_footer_id}
+       ) do
+    style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
+    start_index = Map.get(sb, "startIndex", 0)
+
+    end_index =
+      case Enum.at(breaks, i + 1) do
+        nil -> doc_end
+        next -> Map.get(next, "startIndex", doc_end)
+      end
+
+    header_id = Map.get(style, "defaultHeaderId") || prev_header_id
+    footer_id = Map.get(style, "defaultFooterId") || prev_footer_id
+
+    effective_style =
+      style
+      |> put_resolved_id("defaultHeaderId", header_id)
+      |> put_resolved_id("defaultFooterId", footer_id)
+
+    box = build_section_box(doc, effective_style, document_style, start_index, end_index)
+
+    {box, {header_id, footer_id}}
+  end
+
+  defp put_resolved_id(style, _key, nil), do: style
+  defp put_resolved_id(style, key, id), do: Map.put(style, key, id)
+
+  defp build_section_box(doc, section_style, document_style, start_index, end_index) do
+    flip = resolve_flip(section_style, document_style)
+    page_size = Map.get(document_style, "pageSize") || %{}
+    raw_w = magnitude(Map.get(page_size, "width"))
+    raw_h = magnitude(Map.get(page_size, "height"))
+    {page_w, page_h} = if flip, do: {raw_h, raw_w}, else: {raw_w, raw_h}
+
+    margin_top = section_margin(section_style, document_style, "marginTop")
+    margin_bottom = section_margin(section_style, document_style, "marginBottom")
+    margin_left = section_margin(section_style, document_style, "marginLeft")
+    margin_right = section_margin(section_style, document_style, "marginRight")
+    margin_header = header_footer_margin(section_style, document_style, "marginHeader")
+    margin_footer = header_footer_margin(section_style, document_style, "marginFooter")
+
+    width_pt =
+      if is_number(page_w),
+        do: page_w - margin_left - margin_right,
+        else: @default_content_width_pt
+
+    height_pt =
+      if is_number(page_h),
+        do: page_h - margin_top - margin_bottom,
+        else: @default_content_height_pt
+
+    # Same fallback `content_width_pt/1`'s sibling above uses: when the API
+    # gives us no `pageSize` at all, assume the page is exactly margins +
+    # the default content box, so body_bottom_pt lines up with height_pt.
+    effective_page_h =
+      if is_number(page_h),
+        do: page_h,
+        else: margin_top + margin_bottom + @default_content_height_pt
+
+    header_extent = header_extent_pt(doc, section_style)
+    footer_extent = footer_extent_pt(doc, section_style)
+
+    %{
+      start_index: start_index,
+      end_index: end_index,
+      width_pt: width_pt,
+      height_pt: height_pt,
+      margin_top: margin_top,
+      margin_bottom: margin_bottom,
+      body_top_pt: max(margin_top, margin_header + header_extent),
+      body_bottom_pt: effective_page_h - max(margin_bottom, margin_footer + footer_extent)
+    }
+  end
+
+  defp section_margin(section_style, document_style, field) do
+    magnitude(Map.get(section_style, field) || Map.get(document_style, field)) ||
+      @default_margin_pt
+  end
+
+  defp header_footer_margin(section_style, document_style, field) do
+    magnitude(Map.get(section_style, field) || Map.get(document_style, field)) ||
+      @default_header_footer_margin_pt
+  end
+
+  @doc """
+  Estimated height in points of the header that resolves for `section_style`
+  (its own `defaultHeaderId`, else the document's) — `0.0` when neither has
+  one. This function only ever looks at the ONE `section_style` it's given;
+  it does not walk the "inherits from the previous SectionBreak" chain Docs
+  itself uses for `defaultHeaderId`/`defaultFooterId` (see `section_boxes/1`'s
+  doc) — callers outside that chain-aware pipeline (e.g. a direct call on an
+  isolated section) get only the own-or-document resolution, which is
+  correct for the document's first section but not necessarily for a later
+  one whose own id is unset. See the moduledoc's `Configuration` section for
+  the estimator's rules and the live measurement it's calibrated against.
+  """
+  @spec header_extent_pt(map(), map()) :: float()
+  def header_extent_pt(doc, section_style) when is_map(doc) and is_map(section_style) do
+    header_footer_extent_pt(doc, section_style, "headers", "defaultHeaderId")
+  end
+
+  @doc """
+  Same as `header_extent_pt/2`, for the footer that resolves for
+  `section_style`.
+  """
+  @spec footer_extent_pt(map(), map()) :: float()
+  def footer_extent_pt(doc, section_style) when is_map(doc) and is_map(section_style) do
+    header_footer_extent_pt(doc, section_style, "footers", "defaultFooterId")
+  end
+
+  defp header_footer_extent_pt(doc, section_style, container_key, id_key) do
+    document_style = Map.get(doc, "documentStyle") || %{}
+    id = Map.get(section_style, id_key) || Map.get(document_style, id_key)
+
+    case id && get_in(doc, [container_key, id, "content"]) do
+      nil -> 0.0
+      content -> segment_extent_pt(doc, content)
+    end
+  end
+
+  # Sum of estimated heights of the top-level structural elements
+  # (paragraphs, tables) of a header/footer segment, or of a table cell's
+  # own `content`.
+  defp segment_extent_pt(doc, elements) do
+    elements
+    |> List.wrap()
+    |> Enum.map(&element_extent_pt(doc, &1))
+    |> Enum.sum()
+  end
+
+  defp element_extent_pt(doc, %{"paragraph" => paragraph}),
+    do: paragraph_extent_pt(doc, paragraph)
+
+  defp element_extent_pt(doc, %{"table" => table}), do: table_extent_pt(doc, table)
+  defp element_extent_pt(_doc, _), do: 0.0
+
+  # A paragraph holding an inline image is sized from the image's own
+  # height (plus its own embeddedObject margins) rather than the font-size
+  # formula, which would badly undersize a header/footer logo row.
+  defp paragraph_extent_pt(doc, paragraph) do
+    image_heights =
+      paragraph
+      |> Map.get("elements", [])
+      |> Enum.map(&inline_image_extent_pt(doc, &1))
+      |> Enum.reject(&is_nil/1)
+
+    case image_heights do
+      [] -> estimate_paragraph_height_pt(%{"paragraph" => paragraph})
+      heights -> Enum.sum(heights)
+    end
+  end
+
+  defp inline_image_extent_pt(doc, %{"inlineObjectElement" => %{"inlineObjectId" => id}}) do
+    embedded =
+      get_in(doc, ["inlineObjects", id, "inlineObjectProperties", "embeddedObject"]) || %{}
+
+    case magnitude(get_in(embedded, ["size", "height"])) do
+      nil ->
+        nil
+
+      height ->
+        height + inline_image_padding(embedded, "marginTop") +
+          inline_image_padding(embedded, "marginBottom")
+    end
+  end
+
+  defp inline_image_extent_pt(_doc, _), do: nil
+
+  defp inline_image_padding(embedded, field) do
+    magnitude(Map.get(embedded, field)) || @inline_image_padding_pt
+  end
+
+  defp table_extent_pt(doc, table) do
+    table
+    |> Map.get("tableRows", [])
+    |> Enum.map(&table_row_extent_pt(doc, &1))
+    |> Enum.sum()
+  end
+
+  defp table_row_extent_pt(doc, row) do
+    case row |> Map.get("tableCells", []) |> Enum.map(&table_cell_extent_pt(doc, &1)) do
+      [] -> 0.0
+      heights -> Enum.max(heights)
+    end
+  end
+
+  defp table_cell_extent_pt(doc, cell) do
+    style = Map.get(cell, "tableCellStyle") || %{}
+    padding_top = magnitude(Map.get(style, "paddingTop")) || @default_cell_padding_pt
+    padding_bottom = magnitude(Map.get(style, "paddingBottom")) || @default_cell_padding_pt
+    border_top = magnitude(get_in(style, ["borderTop", "width"])) || 0.0
+    border_bottom = magnitude(get_in(style, ["borderBottom", "width"])) || 0.0
+
+    segment_extent_pt(doc, Map.get(cell, "content", [])) + padding_top + padding_bottom +
+      border_top + border_bottom
+  end
+
+  # Section value if the key is present (even `false`), else the document's,
+  # else `false` — same resolution `template_flip?/1` uses (kept separate to
+  # avoid coupling section_boxes/1 to append_template/3's document shape).
+  defp resolve_flip(section_style, document_style) do
+    case Map.fetch(section_style, "flipPageOrientation") do
+      {:ok, flip} when is_boolean(flip) -> flip
+      _ -> Map.get(document_style, "flipPageOrientation", false)
+    end
+  end
+
+  # Finds the box whose [start_index, end_index) range contains `index`.
+  defp box_for_index(boxes, index) do
+    Enum.find(boxes, fn box -> index >= box.start_index and index < box.end_index end)
+  end
 
   @doc """
   Per-image width in points for N columns sharing `content_width_pt`.
@@ -3196,10 +3607,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # Runs the actual substitution for a non-empty set of `{name, fill, range}`
   # tuples: build the Phase 1 batch (inline deletes/inserts + table creation),
   # then, if any multi-column table slots exist, fill their cells in Phase 2.
+  #
+  # Every slot's width comes from the `section_boxes/1` box of the DOCS
+  # SECTION it physically sits in (falling back to `content_width_pt(doc2)`
+  # when no box matches) rather than the whole document's `content_width_pt`
+  # — this is what makes an image_list slot render at the landscape section's
+  # own width instead of the document's (portrait) one, with no config flag.
   defp apply_image_fills(doc_id, doc2, all_image_fills) do
     fills_map = Map.new(all_image_fills, fn {name, fill, _} -> {name, fill} end)
     range_by_name = Map.new(all_image_fills, fn {name, _, range} -> {name, range} end)
-    content_width_pt = content_width_pt(doc2)
+    boxes = section_boxes(doc2)
 
     filtered_ranges =
       doc2
@@ -3215,11 +3632,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         fill.kind == :image_list and Map.get(fill, :columns, 1) >= 2
       end)
 
+    fit_page_names = resolve_fit_page_names(filtered_ranges, fills_map, doc2, boxes)
+
     # Phase 1 batch: inline slot deletes+inserts + table slot delete+insertTable.
     # Sort all requests descending by start_index so earlier inserts don't shift later ones.
     phase1_requests =
-      (table_ranges ++ inline_ranges)
-      |> build_image_batch_requests(fills_map, content_width_pt)
+      boxed_image_batch_requests(
+        table_ranges ++ inline_ranges,
+        fills_map,
+        doc2,
+        boxes,
+        fit_page_names
+      )
 
     # Snapshot pre-existing table start_indices from doc2 before Phase 1 so
     # Phase 2 can reconstruct the pre/new table interleaving (see
@@ -3235,10 +3659,330 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           doc_id,
           table_ranges,
           fills_map,
-          content_width_pt,
+          doc2,
+          boxes,
           pre_existing_table_starts
         )
       end
+    end
+  end
+
+  # Like `build_image_batch_requests/3`, but resolves each slot's width from
+  # the `section_boxes/1` box it sits in (see `apply_image_fills/3`'s doc)
+  # and, for the slots `resolve_fit_page_names/4` cleared for `fit: "page"`,
+  # scales the image to fill the section's remaining page instead.
+  defp boxed_image_batch_requests(ranges, fills_map, doc2, boxes, fit_page_names) do
+    ranges
+    |> Enum.sort_by(& &1.start_index, :desc)
+    |> Enum.flat_map(fn %{name: name, start_index: s, end_index: e} ->
+      fill = Map.fetch!(fills_map, name)
+      delete = %{deleteContentRange: %{range: %{startIndex: s, endIndex: e}}}
+      box = box_for_index(boxes, s)
+      content_width_pt = (box && box.width_pt) || content_width_pt(doc2)
+
+      inserts =
+        case fill.kind do
+          :image ->
+            single_image_inserts(fill, s)
+
+          :image_list ->
+            list_image_inserts_boxed(fill, s, content_width_pt, box, doc2, name, fit_page_names)
+        end
+
+      [delete | inserts]
+    end)
+  end
+
+  defp list_image_inserts_boxed(%{media: []}, _index, _cw, _box, _doc2, _name, _fit_names),
+    do: []
+
+  defp list_image_inserts_boxed(fill, index, content_width_pt, box, doc2, name, fit_page_names) do
+    cols = Map.get(fill, :columns, 1)
+
+    cond do
+      cols >= 2 ->
+        rows = (length(fill.media) / cols) |> Float.ceil() |> trunc() |> max(1)
+
+        [
+          %{
+            "insertTable" => %{
+              "rows" => rows,
+              "columns" => cols,
+              "location" => %{"index" => index}
+            }
+          }
+        ]
+
+      box && MapSet.member?(fit_page_names, name) ->
+        paragraphs_reserve_pt = paragraphs_reserve_before_slot(doc2, box, index)
+        page_fit_image_list_inserts(fill, index, box, paragraphs_reserve_pt)
+
+      true ->
+        w_pt = image_width_for_columns(content_width_pt, 1)
+        inline_image_inserts_pt(fill, index, w_pt)
+    end
+  end
+
+  # Host-tunable RESIDUAL safety margin subtracted from a `fit: "page"`
+  # image's available height — on EVERY image of the slot, not just the
+  # section's first. Configure via `config :phoenix_kit_document_creator,
+  # :page_fit_safety_pt, N` (see the `Configuration` section of this
+  # module's `@moduledoc` — the top/bottom of the available area now comes
+  # from `section_boxes/1`'s `body_top_pt`/`body_bottom_pt`, so this only
+  # needs to cover what that estimate can't see).
+  @spec page_fit_safety_pt() :: float()
+  def page_fit_safety_pt do
+    Application.get_env(:phoenix_kit_document_creator, :page_fit_safety_pt, 8.0) * 1.0
+  end
+
+  # Same last-first / separator dance as `inline_image_inserts_pt/3`, but
+  # sizes each image to fill the section's remaining page (`fit: "page"`).
+  # Available height is `body_bottom_pt - start - trailing_line -
+  # page_fit_safety_pt/0` (see the moduledoc for how `body_top_pt` /
+  # `body_bottom_pt` are derived from the section's header/footer content).
+  # `trailing_line_pt` (one line of the section's terminal paragraph) is
+  # subtracted ONLY for the media item that ends up LAST in the rendered
+  # document (the first one processed here, `i == 0` — inserts land ahead of
+  # what's already there, so processing order is reverse of render order):
+  # every other image is immediately followed by another image, not the
+  # section's terminal paragraph, which only ever sits after the true last
+  # one.
+  #
+  # The media item that ends up FIRST in the rendered document (the last one
+  # processed here, `i == last_idx` — see `inline_image_inserts_pt/3`'s
+  # sibling logic) starts at `max(body_top_pt, margin_top +
+  # paragraphs_reserve_pt)` — the estimated height of the section's own text
+  # ahead of it, when that pushes further down than the header already
+  # does; text is not pushed down by the header the way an image is (see
+  # `paragraphs_reserve_before_slot/3`'s doc), so the two reserves are
+  # combined with `max`, not summed. Every image after it starts a fresh
+  # page (the previous one filled its own), so it simply starts at
+  # `body_top_pt`.
+  defp page_fit_image_list_inserts(fill, index, box, paragraphs_reserve_pt) do
+    %{media: media, separator: sep} = fill
+    reversed = Enum.reverse(media)
+    last_idx = length(reversed) - 1
+    safety_pt = page_fit_safety_pt()
+
+    reversed
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {m, i} ->
+      start_pt =
+        if i == last_idx do
+          max(box.body_top_pt, box.margin_top + paragraphs_reserve_pt)
+        else
+          box.body_top_pt
+        end
+
+      trailing_pt = if i == 0, do: @page_fit_trailing_line_pt, else: 0.0
+      avail_h = max(box.body_bottom_pt - start_pt - trailing_pt - safety_pt, 0.0)
+      img = page_fit_insert(m, index, box.width_pt, avail_h)
+      if i < last_idx, do: [img, separator_request(sep, index)], else: [img]
+    end)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp page_fit_insert(media, index, box_w, avail_h) when is_map(media) do
+    uri = Map.get(media, :uri) || Map.get(media, "uri")
+    w_px = Map.get(media, :width_px) || Map.get(media, "width_px")
+    h_px = Map.get(media, :height_px) || Map.get(media, "height_px")
+
+    {width_pt, height_pt} = page_fit_dimensions(box_w, avail_h, w_px, h_px)
+
+    %{
+      insertInlineImage: %{
+        location: %{index: index},
+        uri: uri,
+        objectSize: %{
+          width: %{magnitude: width_pt * 1.0, unit: "PT"},
+          height: %{magnitude: height_pt * 1.0, unit: "PT"}
+        }
+      }
+    }
+  end
+
+  # scale = min(box_w / w_px, avail_h / h_px) — the image is scaled down to
+  # fit whichever of width/height runs out first, aspect ratio preserved.
+  defp page_fit_dimensions(box_w, avail_h, w_px, h_px)
+       when is_number(w_px) and w_px > 0 and is_number(h_px) and h_px > 0 and avail_h > 0 do
+    scale = min(box_w / w_px, avail_h / h_px)
+    {w_px * scale, h_px * scale}
+  end
+
+  # No usable source dimensions, or the reserve ate the whole box (avail_h
+  # <= 0) — fall back to today's width-based scaling (`scale_height/3`)
+  # rather than emit a non-positive size the API would reject.
+  defp page_fit_dimensions(box_w, _avail_h, w_px, h_px) do
+    scaled_h = scale_height(box_w, w_px, h_px) || box_w
+    {box_w, scaled_h}
+  end
+
+  # Sum of estimated heights of every paragraph in `box`'s section that
+  # fully precedes `slot_start_index` (a paragraph containing the slot
+  # itself has `endIndex > slot_start_index` and is excluded). Combined
+  # with `page_fit_safety_pt/0` by the caller — see
+  # `page_fit_image_list_inserts/4`'s doc. See
+  # `estimate_paragraph_height_pt/1` for the per-paragraph estimate.
+  defp paragraphs_reserve_before_slot(doc, box, slot_start_index) do
+    (get_in(doc, ["body", "content"]) || [])
+    |> Enum.filter(fn el ->
+      Map.has_key?(el, "paragraph") and
+        Map.get(el, "startIndex", 0) >= box.start_index and
+        Map.get(el, "endIndex", 0) <= slot_start_index
+    end)
+    |> Enum.map(&estimate_paragraph_height_pt/1)
+    |> Enum.sum()
+  end
+
+  # (lineCount × fontSize × lineSpacing/100 × @font_leading) + spaceAbove +
+  # spaceBelow + borderTop/borderBottom (width + padding), each falling back
+  # to Docs' own normal-text defaults (11pt / 115%, no border) when absent —
+  # including an empty paragraph, which still occupies one line at the
+  # default size.
+  #
+  # `@font_leading` (1.22): Docs lays out a line taller than the naive
+  # fontSize × lineSpacing/100 product — measured live (2026-09-23, the same
+  # composite-preview document as the header/footer estimator's fixture) at
+  # a body-text line pitch of ~14.55pt for Arial 11pt/115% (12.65 × ~1.15)
+  # and ~13.35pt for the house footer's Calibri 9.5pt/115% (10.925 × ~1.22)
+  # — different real multipliers per font, but a single constant is what
+  # `section_boxes/1`'s reserve/extent estimators can compute without a live
+  # render. `1.22` is the larger of the two: it overestimates Arial's true
+  # line height by ~6%, the safe direction (a slightly bigger reserve/extent
+  # costs a few points of image height, not an overflow).
+  #
+  # `paragraph_line_count/1` adds one line per `\u000B` "soft line break"
+  # inside the paragraph's own text (seen live in the house footer's
+  # details table cells, e.g. "Reg. code 1234567\u000BVAT no ..." on one
+  # visual line's worth of Docs paragraph but two rendered lines — a plain
+  # `\n` paragraph break is already its own structural element and isn't
+  # counted here) and one per `horizontalRule` element (the house footer's
+  # rule under its logo/details block — Docs stores it as its own paragraph
+  # element, sized like the sibling textRun it shares a paragraph with, and
+  # it occupies a rendered line on top of that paragraph's own text).
+  #
+  # `paragraphStyle.borderTop`/`borderBottom` (each `width` + `padding`,
+  # both Dimensions) are added directly — seen live on OTHER templates'
+  # equivalent rule, drawn as a thin bordered paragraph (e.g. 4pt font,
+  # 6pt spaceBelow, 0.75pt borderBottom width, 1pt padding) instead of a
+  # `horizontalRule` element.
+  defp estimate_paragraph_height_pt(%{"paragraph" => paragraph}) do
+    style = Map.get(paragraph, "paragraphStyle") || %{}
+    line_spacing = numeric_or_nil(Map.get(style, "lineSpacing")) || @default_line_spacing_pct
+    space_above = magnitude(Map.get(style, "spaceAbove")) || 0.0
+    space_below = magnitude(Map.get(style, "spaceBelow")) || 0.0
+    font_size = paragraph_font_size_pt(paragraph)
+    lines = paragraph_line_count(paragraph)
+    border_pt = paragraph_border_pt(style)
+
+    lines * font_size * (line_spacing / 100.0) * @font_leading + space_above + space_below +
+      border_pt
+  end
+
+  defp estimate_paragraph_height_pt(_), do: 0.0
+
+  defp paragraph_font_size_pt(paragraph) do
+    paragraph
+    |> Map.get("elements", [])
+    |> Enum.find_value(&element_font_size_pt/1)
+    |> case do
+      fs when is_number(fs) -> fs * 1.0
+      _ -> @default_paragraph_font_size_pt
+    end
+  end
+
+  defp element_font_size_pt(element) do
+    get_in(element, ["textRun", "textStyle", "fontSize", "magnitude"]) ||
+      get_in(element, ["horizontalRule", "textStyle", "fontSize", "magnitude"])
+  end
+
+  defp paragraph_line_count(paragraph) do
+    elements = Map.get(paragraph, "elements", [])
+
+    soft_breaks =
+      elements
+      |> Enum.map_join(&(get_in(&1, ["textRun", "content"]) || ""))
+      |> String.split("\u000B")
+      |> length()
+      |> Kernel.-(1)
+
+    horizontal_rules = Enum.count(elements, &Map.has_key?(&1, "horizontalRule"))
+
+    1 + soft_breaks + horizontal_rules
+  end
+
+  defp paragraph_border_pt(style) do
+    border_edge_pt(Map.get(style, "borderTop")) + border_edge_pt(Map.get(style, "borderBottom"))
+  end
+
+  defp border_edge_pt(nil), do: 0.0
+
+  defp border_edge_pt(border) do
+    (magnitude(Map.get(border, "width")) || 0.0) + (magnitude(Map.get(border, "padding")) || 0.0)
+  end
+
+  # Determines which `image_list`, `fit: "page"` slots actually get the
+  # page-fit treatment (scope v1 — see `apply_image_fills/3`'s callers and
+  # the spec): columns must be 1, the slot must not sit inside a table cell,
+  # and at most one per section — the earliest (lowest start_index) wins.
+  # Every slot that asked for `fit: "page"` but doesn't qualify falls back
+  # to `fit: "width"` with a logged reason.
+  defp resolve_fit_page_names(ranges, fills_map, doc2, boxes) do
+    table_spans =
+      doc2
+      |> collect_tables()
+      |> Enum.map(&{Map.get(&1, "startIndex", 0), Map.get(&1, "endIndex", 0)})
+
+    ranges
+    |> Enum.filter(&wants_fit_page?(&1, fills_map))
+    |> Enum.sort_by(& &1.start_index)
+    |> Enum.reduce({MapSet.new(), MapSet.new()}, fn range, acc ->
+      accept_or_reject_fit_page(range, fills_map, table_spans, boxes, acc)
+    end)
+    |> elem(0)
+  end
+
+  defp wants_fit_page?(%{name: name}, fills_map) do
+    fill = Map.fetch!(fills_map, name)
+    fill.kind == :image_list and Map.get(fill, :fit, :width) == :page
+  end
+
+  defp accept_or_reject_fit_page(
+         %{name: name, start_index: s},
+         fills_map,
+         table_spans,
+         boxes,
+         {names, used}
+       ) do
+    fill = Map.fetch!(fills_map, name)
+    box_key = boxes |> box_for_index(s) |> then(&(&1 && &1.start_index))
+
+    case fit_page_rejection_reason(fill, s, table_spans, box_key, used) do
+      nil ->
+        {MapSet.put(names, name), if(box_key, do: MapSet.put(used, box_key), else: used)}
+
+      reason ->
+        Logger.warning(
+          "fit=page ignored for image slot #{inspect(name)}: #{reason}; falling back to fit=width"
+        )
+
+        {names, used}
+    end
+  end
+
+  defp fit_page_rejection_reason(fill, s, table_spans, box_key, used) do
+    cond do
+      Map.get(fill, :columns, 1) != 1 ->
+        "columns >= 2 is out of scope"
+
+      Enum.any?(table_spans, fn {ts, te} -> s >= ts and s < te end) ->
+        "the slot sits inside a table cell"
+
+      box_key && MapSet.member?(used, box_key) ->
+        "its section already has a fit=page slot"
+
+      true ->
+        nil
     end
   end
 
@@ -3249,7 +3993,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
          doc_id,
          table_ranges,
          fills_map,
-         content_width_pt,
+         doc2,
+         boxes,
          pre_existing_table_starts
        ) do
     with {:ok, %{body: doc3}} <- get_document(doc_id) do
@@ -3272,20 +4017,23 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
           :ok
 
         {:ok, new_tables} ->
-          fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, content_width_pt)
+          fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, doc2, boxes)
       end
     end
   end
 
   # Build and run the Phase 2 batch: one insertInlineImage per cell across all
-  # matched tables, paired with their slots in document order.
-  defp fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, content_width_pt) do
+  # matched tables, paired with their slots in document order. Each table's
+  # width comes from its own section's box, same as the inline path.
+  defp fill_matched_tables(doc_id, table_slots_asc, new_tables, fills_map, doc2, boxes) do
     phase2_requests =
       table_slots_asc
       |> Enum.zip(new_tables)
-      |> Enum.flat_map(fn {%{name: name}, table_el} ->
+      |> Enum.flat_map(fn {%{name: name, start_index: s}, table_el} ->
         fill = Map.fetch!(fills_map, name)
         cols = Map.get(fill, :columns, 1)
+        box = box_for_index(boxes, s)
+        content_width_pt = (box && box.width_pt) || content_width_pt(doc2)
         image_width_pt = image_width_for_columns(content_width_pt, cols)
         cells = extract_table_cells(table_el)
         fill_table_cells(cells, fill.media, %{image_width_pt: image_width_pt})
@@ -3450,12 +4198,17 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         opacity: Map.get(params, "opacity") || 1.0,
         z_index: Map.get(params, "z_index") || 0,
         separator: normalize_separator_atom(Map.get(params, "separator") || "newline"),
+        fit: normalize_fit_atom(Map.get(params, "fit")),
         media: media_items
       }
 
       {name, fill}
     end)
   end
+
+  defp normalize_fit_atom("page"), do: :page
+  defp normalize_fit_atom(:page), do: :page
+  defp normalize_fit_atom(_), do: :width
 
   defp normalize_columns(n) when is_integer(n), do: n |> max(1) |> min(@max_columns)
 
