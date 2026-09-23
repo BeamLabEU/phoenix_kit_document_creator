@@ -356,14 +356,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
 
       # State after the skeleton insertText: the header segment holds only
       # the marker text (merged with the segment's own pre-existing
-      # newline, since nothing separates them).
+      # newline, since nothing separates them). No `startIndex` on the
+      # element at all — proto3 JSON omits a zero-valued field, and a
+      # segment's own index space starts at 0 (verified live 2026-09-23:
+      # this is EXACTLY the shape that broke `segment_marker_ranges/3`
+      # before it defaulted a missing `startIndex` to 0).
       doc_after_skeleton = %{
         "headers" => %{
           "kix.new_header" => %{
             "content" => [
               %{
                 "paragraph" => %{
-                  "elements" => [%{"startIndex" => 0, "textRun" => %{"content" => marker_text}}]
+                  "elements" => [%{"textRun" => %{"content" => marker_text}}]
                 }
               }
             ]
@@ -522,6 +526,99 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
                %{"index" => 1, "segmentId" => "kix.new_header"}
     end
 
+    test "finds the table marker even when the segment's own re-fetch omits startIndex (proto3 zero)" do
+      # Exact shape reported live 2026-09-23: a header whose only content is
+      # a table, re-fetched right after the skeleton insert — Google's own
+      # JSON gives the sole element (and its sole textRun) no `startIndex`
+      # key at all, since a segment's index space starts at 0 and proto3
+      # omits zero-valued fields. `find_table_marker_ranges/1`'s own filter
+      # (built for the body, where a real textRun's `startIndex` is
+      # practically never 0) requires the key present and would silently
+      # find nothing here — this fixture pins that the segment-scoped
+      # lookup doesn't share that blind spot.
+      template_header_content = table_header_content()
+
+      template_doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.tpl_header"},
+        "headers" => %{"kix.tpl_header" => %{"content" => template_header_content}},
+        "body" => %{"content" => [text_paragraph("Body\n")]}
+      }
+
+      current_doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.cur_header"},
+        "headers" => %{"kix.cur_header" => %{"content" => [text_paragraph("Plain\n")]}},
+        "body" => target_body()
+      }
+
+      {marker_text, _tables} =
+        GoogleDocsClient.flatten_template_with_table_markers(%{
+          "body" => %{"content" => template_header_content}
+        })
+
+      # No `startIndex` anywhere — matching the live report's exact shape
+      # (there, `"endIndex" => 19` on both the block and its textRun; the
+      # marker's own length varies with the template so this fixture just
+      # keeps whatever `flatten_template_with_table_markers/1` produces).
+      doc_after_skeleton = %{
+        "headers" => %{
+          "kix.new_header" => %{
+            "content" => [
+              %{"paragraph" => %{"elements" => [%{"textRun" => %{"content" => marker_text}}]}}
+            ]
+          }
+        }
+      }
+
+      doc_after_table_skeleton = %{
+        "headers" => %{
+          "kix.new_header" => %{
+            "content" => [
+              %{
+                "table" => %{
+                  "tableRows" => [%{"tableCells" => [%{"startIndex" => 1, "content" => []}]}]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      target_docs = :counters.new(1, [])
+
+      get_fn = fn
+        "template-id" ->
+          {:ok, %{body: template_doc}}
+
+        "target-id" ->
+          call = :counters.get(target_docs, 1)
+          :counters.add(target_docs, 1, 1)
+
+          case call do
+            0 -> {:ok, %{body: current_doc}}
+            1 -> {:ok, %{body: doc_after_skeleton}}
+            2 -> {:ok, %{body: doc_after_table_skeleton}}
+          end
+      end
+
+      batch_fn = fn
+        "target-id", [%{"createHeader" => _}] = requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{body: %{"replies" => [%{"createHeader" => %{"headerId" => "kix.new_header"}}]}}}
+
+        "target-id", requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{}}
+      end
+
+      # The bug returned {:error, :table_marker_count_mismatch} before
+      # ever reaching insertTable — this must now succeed.
+      assert {:ok, {11, _}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+    end
+
     test "a segment element count mismatch fails loudly instead of guessing a pairing" do
       template_header_content = [text_paragraph("\n")] ++ table_header_content()
 
@@ -543,13 +640,15 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
           "body" => %{"content" => table_header_content()}
         })
 
+      # No `startIndex` on the sole element — see the previous test's
+      # comment on why this specific omission is the realistic shape.
       doc_after_skeleton = %{
         "headers" => %{
           "kix.new_header" => %{
             "content" => [
               %{
                 "paragraph" => %{
-                  "elements" => [%{"startIndex" => 0, "textRun" => %{"content" => marker_text}}]
+                  "elements" => [%{"textRun" => %{"content" => marker_text}}]
                 }
               }
             ]

@@ -2973,12 +2973,28 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     end
   end
 
+  # A fresh segment's own index space starts at 0 — unlike the body, where
+  # a real textRun's own `startIndex` is (in every document seen so far)
+  # never actually 0, so `find_table_marker_ranges/1`'s equivalent filter
+  # requiring the key to be PRESENT never had to notice this: proto3 JSON
+  # omits a zero-valued field, so the very first textRun in a segment
+  # carries no `startIndex` key at all (verified live 2026-09-23 — the
+  # re-fetched header's sole paragraph, marker text merged with the
+  # segment's own terminal newline, had neither the block's own nor its
+  # textRun's `startIndex`) — the old `Map.has_key?`-shaped filter silently
+  # dropped it, `table_marker_count_mismatch` on every single-paragraph
+  # segment before a table existed to even attempt creating. Filters on
+  # `textRun` alone and defaults a missing `startIndex` to 0 (`Map.put_new`,
+  # same convention as the module's own `Map.get(el, "startIndex", 0)`
+  # elsewhere) before handing off to `extract_marker_ranges/1`, which still
+  # requires the key present — this is the fix, not that shared function.
   defp segment_marker_ranges(doc, container, segment_id) do
     doc
     |> get_in([container, segment_id, "content"])
     |> List.wrap()
     |> Enum.flat_map(&walk_block/1)
-    |> Enum.filter(&match?(%{"textRun" => _, "startIndex" => _}, &1))
+    |> Enum.filter(&match?(%{"textRun" => _}, &1))
+    |> Enum.map(&Map.put_new(&1, "startIndex", 0))
     |> Enum.flat_map(&extract_marker_ranges/1)
   end
 
@@ -3100,7 +3116,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
 
   defp table_info_to_entry(segment_table_el, info) do
     %{
-      table_start: segment_table_el["startIndex"],
+      table_start: Map.get(segment_table_el, "startIndex", 0),
       cells: extract_table_cells(segment_table_el),
       column_properties: Map.get(info, :column_properties, []),
       cell_styles: info.cell_styles,
