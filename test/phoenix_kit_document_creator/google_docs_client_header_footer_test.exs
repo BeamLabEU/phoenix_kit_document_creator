@@ -982,6 +982,19 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
       # both tables got their own fill/style requests, at their own real
       # (not the other table's) startIndex.
       assert Enum.sort(table_starts) == [2, 8]
+
+      # …and each table got its OWN template's content: "X" lands inside the
+      # first table (2..6), "Y" inside the second (8..12). Pairing every
+      # segment table with the first template table would still style both
+      # startIndexes above, but fill both cells with "X" (review, 2026-09-23).
+      cell_texts =
+        for %{"insertText" => %{"text" => text, "location" => %{"index" => index}}} <- style_batch,
+            do: {String.trim(text), index}
+
+      assert [{"X", x_index}] = Enum.filter(cell_texts, &(elem(&1, 0) == "X"))
+      assert [{"Y", y_index}] = Enum.filter(cell_texts, &(elem(&1, 0) == "Y"))
+      assert x_index in 2..6
+      assert y_index in 8..12
     end
 
     test "a segment element count mismatch fails loudly instead of guessing a pairing" do
