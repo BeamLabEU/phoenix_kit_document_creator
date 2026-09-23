@@ -322,8 +322,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
   end
 
   describe "append_template/3 — replays a table inside the new header" do
-    test "creates the header, inserts the skeleton, then rebuilds and fills the table via a re-fetch cycle" do
-      template_header_content = table_header_content()
+    test "creates the header, inserts the skeleton, then styles every element at its real post-table index" do
+      # [P, TABLE, P] — the shape verified live 2026-09-23 against a real
+      # header: both spacer paragraphs are trivially empty ("\n" only), so
+      # neither contributes anything to the skeleton text once its trailing
+      # newline is stripped (see `table_bearing_skeleton_text/2`'s doc) —
+      # the skeleton insert is the table marker alone, same as before.
+      template_header_content =
+        [text_paragraph("\n")] ++ table_header_content() ++ [text_paragraph("\n")]
 
       template_doc = %{
         "documentStyle" => %{"defaultHeaderId" => "kix.tpl_header"},
@@ -337,13 +343,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
         "body" => target_body()
       }
 
+      # The marker alone — NOT derived from `template_header_content` (which
+      # still carries both spacer paragraphs' own "\n"s): the skeleton
+      # insert strips both, since each is either immediately before the
+      # table or the template's own last block (see
+      # `table_bearing_skeleton_text/2`'s doc), so only the bare marker
+      # from the table alone (nothing to strip around it) matches.
       {marker_text, _tables} =
         GoogleDocsClient.flatten_template_with_table_markers(%{
-          "body" => %{"content" => template_header_content}
+          "body" => %{"content" => table_header_content()}
         })
 
       # State after the skeleton insertText: the header segment holds only
-      # the marker text.
+      # the marker text (merged with the segment's own pre-existing
+      # newline, since nothing separates them).
       doc_after_skeleton = %{
         "headers" => %{
           "kix.new_header" => %{
@@ -358,11 +371,16 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
         }
       }
 
-      # State after the table-skeleton batch: the marker is gone, replaced
-      # by a bare 1x1 table — but `insertTable` landing where the marker
-      # was also split the paragraph that absorbed it, leaving an empty,
-      # unstyled phantom paragraph immediately ahead of the table (seen
-      # live 2026-09-23 — see `finish_segment_tables/4`'s doc).
+      # State after the table-skeleton batch: `insertTable` landing where
+      # the marker was splits the paragraph that absorbed it into a
+      # "before" half (an empty paragraph — nothing preceded the marker,
+      # since the first spacer's own text was never inserted) and an
+      # "after" half (the segment's own pre-existing newline, likewise
+      # never re-inserted for the second spacer) — exactly [P, TABLE, P],
+      # matching the template 1:1. Neither half is deleted (verified live
+      # 2026-09-23: the API refuses "Cannot delete the requested range"
+      # for the paragraph immediately before a table) — both are styled
+      # in place instead.
       doc_after_table_skeleton = %{
         "headers" => %{
           "kix.new_header" => %{
@@ -378,8 +396,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
               },
               %{
                 "startIndex" => 1,
+                "endIndex" => 4,
                 "table" => %{
-                  "tableRows" => [%{"tableCells" => [%{"startIndex" => 2, "content" => []}]}]
+                  "tableRows" => [
+                    %{"tableCells" => [%{"startIndex" => 2, "endIndex" => 3, "content" => []}]}
+                  ]
+                }
+              },
+              %{
+                "startIndex" => 4,
+                "endIndex" => 5,
+                "paragraph" => %{
+                  "elements" => [
+                    %{"startIndex" => 4, "endIndex" => 5, "textRun" => %{"content" => "\n"}}
+                  ]
                 }
               }
             ]
@@ -387,9 +417,150 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
         }
       }
 
-      # State after the phantom is deleted: the table's index shifts back
-      # by the phantom's one character.
-      doc_after_phantom_removal = %{
+      target_docs = :counters.new(1, [])
+
+      get_fn = fn
+        "template-id" ->
+          {:ok, %{body: template_doc}}
+
+        "target-id" ->
+          call = :counters.get(target_docs, 1)
+          :counters.add(target_docs, 1, 1)
+
+          case call do
+            0 -> {:ok, %{body: current_doc}}
+            1 -> {:ok, %{body: doc_after_skeleton}}
+            2 -> {:ok, %{body: doc_after_table_skeleton}}
+          end
+      end
+
+      batch_fn = fn
+        "target-id", [%{"createHeader" => _}] = requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{body: %{"replies" => [%{"createHeader" => %{"headerId" => "kix.new_header"}}]}}}
+
+        "target-id", requests ->
+          send(self(), {:batch, requests})
+          {:ok, %{}}
+      end
+
+      assert {:ok, {11, _}} =
+               GoogleDocsClient.append_template("target-id", "template-id",
+                 get_fn: get_fn,
+                 batch_fn: batch_fn
+               )
+
+      assert_receive {:batch, [%{insertSectionBreak: %{}} | _]}
+      assert_receive {:batch, [%{"createHeader" => _}]}
+
+      # skeleton batch: ONLY the insertText — no style requests yet, since
+      # a table-bearing segment's real positions aren't known until after
+      # the table exists.
+      assert_receive {:batch,
+                      [
+                        %{
+                          "insertText" => %{
+                            "location" => %{"segmentId" => "kix.new_header"},
+                            "text" => ^marker_text
+                          }
+                        }
+                      ]}
+
+      assert_receive {:batch, table_skeleton_batch}
+
+      assert Enum.any?(
+               table_skeleton_batch,
+               &match?(%{"insertTable" => %{"rows" => 1, "columns" => 1}}, &1)
+             )
+
+      assert Enum.all?(table_skeleton_batch, fn
+               %{"deleteContentRange" => %{"range" => range}} ->
+                 range["segmentId"] == "kix.new_header"
+
+               %{"insertTable" => %{"location" => loc}} ->
+                 loc["segmentId"] == "kix.new_header"
+             end)
+
+      # invariant: the only delete here is the marker's own (pre-table)
+      # range — never a range reaching the table's own real startIndex
+      # (1) — the API refuses that too (verified live 2026-09-23).
+      refute Enum.any?(table_skeleton_batch, fn
+               %{"deleteContentRange" => %{"range" => %{"endIndex" => 1}}} -> true
+               _ -> false
+             end)
+
+      assert_receive {:batch, style_batch}
+      refute_receive {:batch, _}
+
+      # both spacer paragraphs get their (empty, unstyled) paragraph/text
+      # style applied at their REAL post-split index — [0, 1) for the
+      # "before" half, [4, 5) for the "after" half — never an analytical
+      # offset.
+      paragraph_style_ranges =
+        style_batch
+        |> Enum.filter(&Map.has_key?(&1, "updateParagraphStyle"))
+        |> Enum.map(& &1["updateParagraphStyle"]["range"])
+
+      assert %{"startIndex" => 0, "endIndex" => 1, "segmentId" => "kix.new_header"} in paragraph_style_ranges
+
+      assert %{"startIndex" => 4, "endIndex" => 5, "segmentId" => "kix.new_header"} in paragraph_style_ranges
+
+      insert_text = Enum.find(style_batch, &Map.has_key?(&1, "insertText"))
+      # trailing newline stripped — the target's own pre-existing bare cell
+      # already supplies it structurally (same convention as the body table
+      # fill's `cell_fill_requests/4`, see `cell_text/1`'s doc). Index 3 =
+      # the cell's real startIndex (2) + 1, read from doc_after_table_skeleton.
+      assert insert_text["insertText"]["text"] == "Reg"
+      assert insert_text["insertText"]["location"]["index"] == 3
+      assert insert_text["insertText"]["location"]["segmentId"] == "kix.new_header"
+
+      cell_style = Enum.find(style_batch, &Map.has_key?(&1, "updateTableCellStyle"))
+
+      assert cell_style["updateTableCellStyle"]["tableRange"]["tableCellLocation"][
+               "tableStartLocation"
+             ] ==
+               %{"index" => 1, "segmentId" => "kix.new_header"}
+    end
+
+    test "a segment element count mismatch fails loudly instead of guessing a pairing" do
+      template_header_content = [text_paragraph("\n")] ++ table_header_content()
+
+      template_doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.tpl_header"},
+        "headers" => %{"kix.tpl_header" => %{"content" => template_header_content}},
+        "body" => %{"content" => [text_paragraph("Body\n")]}
+      }
+
+      current_doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.cur_header"},
+        "headers" => %{"kix.cur_header" => %{"content" => [text_paragraph("Plain\n")]}},
+        "body" => target_body()
+      }
+
+      # The marker alone — see the previous test's comment on why.
+      {marker_text, _tables} =
+        GoogleDocsClient.flatten_template_with_table_markers(%{
+          "body" => %{"content" => table_header_content()}
+        })
+
+      doc_after_skeleton = %{
+        "headers" => %{
+          "kix.new_header" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [%{"startIndex" => 0, "textRun" => %{"content" => marker_text}}]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      # Only 1 element (the table) where the template — [P, TABLE] — has 2:
+      # an unexpected shape `match_segment_elements/2` must reject rather
+      # than pair up wrongly.
+      doc_after_table_skeleton = %{
         "headers" => %{
           "kix.new_header" => %{
             "content" => [
@@ -418,7 +589,6 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
             0 -> {:ok, %{body: current_doc}}
             1 -> {:ok, %{body: doc_after_skeleton}}
             2 -> {:ok, %{body: doc_after_table_skeleton}}
-            3 -> {:ok, %{body: doc_after_phantom_removal}}
           end
       end
 
@@ -432,70 +602,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
           {:ok, %{}}
       end
 
-      assert {:ok, {11, _}} =
+      assert {:error, {:segment_shape_mismatch, expected: 2, actual: 1}} =
                GoogleDocsClient.append_template("target-id", "template-id",
                  get_fn: get_fn,
                  batch_fn: batch_fn
                )
-
-      assert_receive {:batch, [%{insertSectionBreak: %{}} | _]}
-      assert_receive {:batch, [%{"createHeader" => _}]}
-
-      assert_receive {:batch,
-                      [
-                        %{
-                          "insertText" => %{
-                            "location" => %{"segmentId" => "kix.new_header"},
-                            "text" => ^marker_text
-                          }
-                        }
-                      ]}
-
-      assert_receive {:batch, table_skeleton_batch}
-
-      assert Enum.any?(
-               table_skeleton_batch,
-               &match?(%{"insertTable" => %{"rows" => 1, "columns" => 1}}, &1)
-             )
-
-      assert Enum.all?(table_skeleton_batch, fn
-               %{"deleteContentRange" => %{"range" => range}} ->
-                 range["segmentId"] == "kix.new_header"
-
-               %{"insertTable" => %{"location" => loc}} ->
-                 loc["segmentId"] == "kix.new_header"
-             end)
-
-      assert_receive {:batch,
-                      [
-                        %{
-                          "deleteContentRange" => %{
-                            "range" => %{
-                              "startIndex" => 0,
-                              "endIndex" => 1,
-                              "segmentId" => "kix.new_header"
-                            }
-                          }
-                        }
-                      ]}
-
-      assert_receive {:batch, fill_batch}
-      insert_text = Enum.find(fill_batch, &Map.has_key?(&1, "insertText"))
-      # trailing newline stripped — the target's own pre-existing bare cell
-      # already supplies it structurally (same convention as the body table
-      # fill's `cell_fill_requests/4`, see `cell_text/1`'s doc).
-      assert insert_text["insertText"]["text"] == "Reg"
-      assert insert_text["insertText"]["location"]["index"] == 2
-      assert insert_text["insertText"]["location"]["segmentId"] == "kix.new_header"
-
-      cell_style = Enum.find(fill_batch, &Map.has_key?(&1, "updateTableCellStyle"))
-
-      assert cell_style["updateTableCellStyle"]["tableRange"]["tableCellLocation"][
-               "tableStartLocation"
-             ] ==
-               %{"index" => 0, "segmentId" => "kix.new_header"}
-
-      refute_receive {:batch, _}
     end
   end
 
