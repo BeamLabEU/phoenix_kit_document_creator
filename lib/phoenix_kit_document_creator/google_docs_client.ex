@@ -994,14 +994,20 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   @max_columns 4
   @default_paragraph_font_size_pt 11.0
   @default_line_spacing_pct 115.0
+  # A line's true height runs ahead of the naive fontSize × lineSpacing/100
+  # product — see `estimate_paragraph_height_pt/1`'s doc for the live
+  # measurement this single, safe-side constant is calibrated against.
+  @font_leading 1.22
   # Fallback padding used by the header/footer content estimator
   # (`segment_extent_pt/2` and friends) when the API doesn't give us a more
   # specific number — see the moduledoc's `Configuration` section.
   @default_cell_padding_pt 5.0
   @inline_image_padding_pt 5.0
-  # One line's worth of the section's terminal paragraph, applied to every
-  # `fit: "page"` image for simplicity — see `page_fit_image_list_inserts/4`.
-  @page_fit_trailing_line_pt 12.3
+  # One default-style line's worth of the section's terminal paragraph,
+  # applied to every `fit: "page"` image for simplicity — see
+  # `page_fit_image_list_inserts/4`.
+  @page_fit_trailing_line_pt @default_paragraph_font_size_pt *
+                               (@default_line_spacing_pct / 100.0) * @font_leading
 
   @doc """
   Page content width in points = pageSize.width − marginLeft − marginRight.
@@ -1262,8 +1268,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     style = Map.get(cell, "tableCellStyle") || %{}
     padding_top = magnitude(Map.get(style, "paddingTop")) || @default_cell_padding_pt
     padding_bottom = magnitude(Map.get(style, "paddingBottom")) || @default_cell_padding_pt
+    border_top = magnitude(get_in(style, ["borderTop", "width"])) || 0.0
+    border_bottom = magnitude(get_in(style, ["borderBottom", "width"])) || 0.0
 
-    segment_extent_pt(doc, Map.get(cell, "content", [])) + padding_top + padding_bottom
+    segment_extent_pt(doc, Map.get(cell, "content", [])) + padding_top + padding_bottom +
+      border_top + border_bottom
   end
 
   # Section value if the key is present (even `false`), else the document's,
@@ -3737,17 +3746,37 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
     |> Enum.sum()
   end
 
-  # fontSize × lineSpacing/100 + spaceAbove + spaceBelow, each falling back
-  # to Docs' own normal-text defaults (11pt / 115%) when absent — including
-  # an empty paragraph, which still occupies one line at the default size.
+  # (lineCount × fontSize × lineSpacing/100 × @font_leading) + spaceAbove +
+  # spaceBelow, each falling back to Docs' own normal-text defaults (11pt /
+  # 115%) when absent — including an empty paragraph, which still occupies
+  # one line at the default size.
+  #
+  # `@font_leading` (1.22): Docs lays out a line taller than the naive
+  # fontSize × lineSpacing/100 product — measured live (2026-09-23, the same
+  # composite-preview document as the header/footer estimator's fixture) at
+  # a body-text line pitch of ~14.55pt for Arial 11pt/115% (12.65 × ~1.15)
+  # and ~13.35pt for the house footer's Calibri 9.5pt/115% (10.925 × ~1.22)
+  # — different real multipliers per font, but a single constant is what
+  # `section_boxes/1`'s reserve/extent estimators can compute without a live
+  # render. `1.22` is the larger of the two: it overestimates Arial's true
+  # line height by ~6%, the safe direction (a slightly bigger reserve/extent
+  # costs a few points of image height, not an overflow).
+  #
+  # `paragraph_line_count/1` adds one line per `\u000B` "soft line break"
+  # inside the paragraph's own text (seen live in the house footer's
+  # details table cells, e.g. "Reg. kood 10827447\u000BKMKR nr ..." on one
+  # visual line's worth of Docs paragraph but two rendered lines) — a plain
+  # `\n` paragraph break is already its own structural element and isn't
+  # counted here.
   defp estimate_paragraph_height_pt(%{"paragraph" => paragraph}) do
     style = Map.get(paragraph, "paragraphStyle") || %{}
     line_spacing = numeric_or_nil(Map.get(style, "lineSpacing")) || @default_line_spacing_pct
     space_above = magnitude(Map.get(style, "spaceAbove")) || 0.0
     space_below = magnitude(Map.get(style, "spaceBelow")) || 0.0
     font_size = paragraph_font_size_pt(paragraph)
+    lines = paragraph_line_count(paragraph)
 
-    font_size * (line_spacing / 100.0) + space_above + space_below
+    lines * font_size * (line_spacing / 100.0) * @font_leading + space_above + space_below
   end
 
   defp estimate_paragraph_height_pt(_), do: 0.0
@@ -3760,6 +3789,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
       fs when is_number(fs) -> fs * 1.0
       _ -> @default_paragraph_font_size_pt
     end
+  end
+
+  defp paragraph_line_count(paragraph) do
+    soft_breaks =
+      paragraph
+      |> Map.get("elements", [])
+      |> Enum.map_join(&(get_in(&1, ["textRun", "content"]) || ""))
+      |> String.split("\u000B")
+      |> length()
+      |> Kernel.-(1)
+
+    1 + soft_breaks
   end
 
   # Determines which `image_list`, `fit: "page"` slots actually get the

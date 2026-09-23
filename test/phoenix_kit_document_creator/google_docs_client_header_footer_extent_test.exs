@@ -8,6 +8,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterExtentTest do
   use ExUnit.Case, async: true
   alias PhoenixKitDocumentCreator.GoogleDocsClient
 
+  # A default-style (11pt / 115% lineSpacing) line's height, including the
+  # @font_leading (1.22) multiplier `estimate_paragraph_height_pt/1`
+  # applies — see its moduledoc for the live measurement this reproduces.
+  @default_line_pt 11.0 * 1.15 * 1.22
+
   defp para(text, style_overrides \\ %{}) do
     %{
       "paragraph" => %{
@@ -57,8 +62,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterExtentTest do
         }
       }
 
-      # Line one: default font 11pt * 1.15 = 12.65. Line two: 11 * 2.0 = 22.0.
-      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}), 12.65 + 22.0, 0.001
+      # Line one: default font/spacing → @default_line_pt. Line two: 11 * 2.0 * 1.22.
+      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}),
+                      @default_line_pt + 11.0 * 2.0 * 1.22,
+                      0.001
     end
 
     test "an empty paragraph still counts as one line" do
@@ -67,7 +74,42 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterExtentTest do
         "footers" => %{"f1" => %{"content" => [para("\n")]}}
       }
 
-      assert_in_delta GoogleDocsClient.footer_extent_pt(doc, %{}), 12.65, 0.001
+      assert_in_delta GoogleDocsClient.footer_extent_pt(doc, %{}), @default_line_pt, 0.001
+    end
+
+    test "a `\\u000B` soft line break inside a paragraph counts as one more line" do
+      doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "h1"},
+        "headers" => %{
+          "h1" => %{"content" => [para("first line\u000Bsecond line\n")]}
+        }
+      }
+
+      # One soft break → 2 lines, not 1 — a plain single-line paragraph would
+      # estimate to @default_line_pt instead of double that.
+      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}), @default_line_pt * 2, 0.001
+    end
+
+    test "a soft line break split across separate textRun elements still counts" do
+      doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "h1"},
+        "headers" => %{
+          "h1" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{"textRun" => %{"content" => "one\u000B"}},
+                    %{"textRun" => %{"content" => "two\n"}}
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}), @default_line_pt * 2, 0.001
     end
 
     test "a table is the sum of its rows; a row is the tallest of its cells" do
@@ -98,8 +140,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterExtentTest do
         }
       }
 
-      # cell 1: one paragraph (12.65). cell 2: two paragraphs (25.3). Row = max, not sum.
-      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}), 25.3, 0.001
+      # cell 1: one paragraph (@default_line_pt). cell 2: two paragraphs
+      # (2 * @default_line_pt). Row = max, not sum.
+      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}), @default_line_pt * 2, 0.001
     end
 
     test "a cell's own tableCellStyle padding is added when the table declares it" do
@@ -130,7 +173,44 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterExtentTest do
         }
       }
 
-      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}), 12.65 + 3.0 + 4.0, 0.001
+      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}),
+                      @default_line_pt + 3.0 + 4.0,
+                      0.001
+    end
+
+    test "a cell's own tableCellStyle border widths are added on top of its padding" do
+      doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "h1"},
+        "headers" => %{
+          "h1" => %{
+            "content" => [
+              %{
+                "table" => %{
+                  "tableRows" => [
+                    %{
+                      "tableCells" => [
+                        %{
+                          "content" => [para("x")],
+                          "tableCellStyle" => %{
+                            "paddingTop" => %{"magnitude" => 0.0},
+                            "paddingBottom" => %{"magnitude" => 0.0},
+                            "borderTop" => %{"width" => %{"magnitude" => 1.0, "unit" => "PT"}},
+                            "borderBottom" => %{"width" => %{"magnitude" => 2.0, "unit" => "PT"}}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+
+      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}),
+                      @default_line_pt + 1.0 + 2.0,
+                      0.001
     end
 
     test "falls back to 5pt/5pt cell padding when the table doesn't declare it" do
@@ -145,7 +225,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterExtentTest do
         }
       }
 
-      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}), 12.65 + 5.0 + 5.0, 0.001
+      assert_in_delta GoogleDocsClient.header_extent_pt(doc, %{}),
+                      @default_line_pt + 5.0 + 5.0,
+                      0.001
     end
 
     test "a paragraph holding an inline image is sized from the image, not the font formula" do
@@ -201,7 +283,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterExtentTest do
 
       assert_in_delta(
         GoogleDocsClient.header_extent_pt(doc, %{"defaultHeaderId" => "sec-header"}),
-        12.65 * 2,
+        @default_line_pt * 2,
         0.001
       )
     end

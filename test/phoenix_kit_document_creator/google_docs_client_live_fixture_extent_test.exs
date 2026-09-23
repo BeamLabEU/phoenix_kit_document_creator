@@ -14,9 +14,21 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientLiveFixtureExtentTest do
   moduledoc measurements (§9/§10 of
   `docs/superpowers/specs/2026-09-22-section-orientation-and-page-fit.md`)
   were calibrated against live, on a different template embedding the same
-  header/footer: an inline image starting at ~111pt (36pt marginHeader +
-  ~75pt of header content) and a footer extending ~68pt past its own
-  36pt margin.
+  header/footer.
+
+  Calibration target from the team lead's live-PDF pixel measurement
+  (2026-09-23, same fixture document): `header_extent_pt/2` should land in
+  `[75, 90]`; `footer_extent_pt/2 + page_fit_safety_pt()` should reach
+  `>= 109.2` (so the estimated body bottom stays at/above the last
+  confirmed-fit pixel, y≈450.85) while `footer_extent_pt/2` alone should stay
+  `<= 125` (not wildly over). After applying the `@font_leading` (1.22)
+  correction, `\\u000B` soft-line-break counting, and `tableCellStyle`
+  border widths, the header target is met; the footer estimate (see the test
+  below) is still short of the `>= 109.2` combined target — this fixture's
+  footer table declares no cell borders, and the shortfall doesn't appear to
+  come from anything else in the header/footer JSON this estimator reads
+  (see the block D report for the full trace). Flagged back rather than
+  padded further without evidence.
   """
 
   use ExUnit.Case, async: true
@@ -40,7 +52,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientLiveFixtureExtentTest do
       assert doc["documentStyle"]["defaultFooterId"]
     end
 
-    test "header_extent_pt/2 does not undersize the live house header (~75pt measured)", %{
+    test "header_extent_pt/2 lands in the team lead's calibrated [75, 90] range", %{
       doc: doc
     } do
       [_section1, section2] = doc["body"]["content"]
@@ -48,32 +60,31 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientLiveFixtureExtentTest do
 
       extent = GoogleDocsClient.header_extent_pt(doc, style)
 
-      # Measured live (§9/§10 of the spec): an inline image's paragraph on a
-      # fresh page starts at ~111pt = 36pt marginHeader + ~75pt of header
-      # content — the estimator must not come in under that ~75pt. A little
-      # over (this fixture: ~77pt) costs a few points of image height, not a
-      # page overflow.
       assert extent >= 75.0
-      assert_in_delta extent, 75.0, 15.0
+      assert extent <= 90.0
     end
 
-    test "footer_extent_pt/2 estimates the live house footer's content height", %{doc: doc} do
+    test "footer_extent_pt/2 + page_fit_safety_pt/0 — currently short of the >= 109.2 target",
+         %{doc: doc} do
       [_section1, section2] = doc["body"]["content"]
       style = get_in(section2, ["sectionBreak", "sectionStyle"])
 
       extent = GoogleDocsClient.footer_extent_pt(doc, style)
+      total = extent + GoogleDocsClient.page_fit_safety_pt()
 
-      # Measured live (§9 of the spec): the footer extends ~68pt past its
-      # own 36pt margin (the last line of text that still fits lands ~68pt
-      # short of the nominal marginBottom edge). The content-based estimator
-      # reproduces that figure directly from this fixture's headers/footers
-      # JSON (a rule + a 2-column details table), landing within a few
-      # points of it — not the (much larger) TOTAL reserved footer zone
-      # (marginFooter + extent ≈ 104pt) that a `≥ 100pt` bound would imply;
-      # flagged for the orchestrator to confirm which figure the block D
-      # live criterion meant.
-      assert extent >= 60.0
-      assert_in_delta extent, 68.0, 15.0
+      assert extent <= 125.0
+
+      # NOT met yet: the team lead's target is `total >= 109.2`. This
+      # fixture's footer table declares explicit 5pt/5pt cell padding and no
+      # cell borders, so neither the padding fallback nor the new border
+      # handling changes it — the ~93.5pt this estimator reaches from the
+      # footer's own paragraphs/table content (with @font_leading and
+      # \u000B-line counting applied) is the actual number, asserted here so
+      # a regression shows up; see the block D report for what was checked
+      # and ruled out.
+      assert_in_delta extent, 93.48, 0.5
+      assert_in_delta total, 101.48, 0.5
+      refute total >= 109.2
     end
 
     test "section_boxes/1 folds both extents into body_top_pt / body_bottom_pt", %{doc: doc} do

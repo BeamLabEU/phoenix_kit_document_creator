@@ -180,6 +180,11 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientSectionBoxesTest do
   end
 
   describe "section_boxes/1 — body_top_pt / body_bottom_pt" do
+    # A default-style (11pt / 115% lineSpacing) line's height, including the
+    # @font_leading (1.22) multiplier `estimate_paragraph_height_pt/1`
+    # applies.
+    @default_line_pt 11.0 * 1.15 * 1.22
+
     defp header_paragraph(text) do
       %{"paragraph" => %{"elements" => [%{"textRun" => %{"content" => text}}]}}
     end
@@ -220,9 +225,9 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientSectionBoxesTest do
 
       [box] = GoogleDocsClient.section_boxes(doc)
 
-      # header/footer extent (12.65pt, one default-style line) + marginHeader/
-      # Footer (36pt default) = 48.65pt, well under marginTop/Bottom (72pt) —
-      # the nominal margin wins the `max`.
+      # header/footer extent (@default_line_pt, one default-style line) +
+      # marginHeader/Footer (36pt default) — well under marginTop/Bottom
+      # (72pt) — the nominal margin wins the `max`.
       assert box.body_top_pt == 72.0
       assert_in_delta box.body_bottom_pt, 841.89 - 72.0, 0.001
     end
@@ -248,11 +253,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientSectionBoxesTest do
 
       [box] = GoogleDocsClient.section_boxes(doc)
 
-      # 3 default-style lines = 3 * 12.65 = 37.95pt; marginHeader/Footer (36) +
-      # 37.95 = 73.95pt — just over the nominal 72pt margin, so the
+      # 3 default-style lines (3 * @default_line_pt); marginHeader/Footer (36)
+      # + that comfortably clears the nominal 72pt margin, so the
       # header/footer content wins the `max`.
-      assert_in_delta box.body_top_pt, 36.0 + 37.95, 0.001
-      assert_in_delta box.body_bottom_pt, 841.89 - (36.0 + 37.95), 0.001
+      extent = 3 * @default_line_pt
+      assert_in_delta box.body_top_pt, 36.0 + extent, 0.001
+      assert_in_delta box.body_bottom_pt, 841.89 - (36.0 + extent), 0.001
     end
 
     test "section-level header/footer margins are used when the section overrides them" do
@@ -269,8 +275,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientSectionBoxesTest do
 
       [box] = GoogleDocsClient.section_boxes(doc)
 
-      # marginHeader override (0) + header extent (12.65) = 12.65, under
-      # marginTop (72) — nominal margin still wins.
+      # marginHeader override (0) + header extent (@default_line_pt), still
+      # under marginTop (72) — nominal margin still wins.
       assert box.body_top_pt == 72.0
     end
   end
