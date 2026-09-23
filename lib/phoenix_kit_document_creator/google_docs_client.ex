@@ -1113,13 +1113,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         ]
   def section_boxes(doc) when is_map(doc) do
     document_style = Map.get(doc, "documentStyle") || %{}
-
-    breaks =
-      doc
-      |> get_in(["body", "content"])
-      |> List.wrap()
-      |> Enum.filter(&Map.has_key?(&1, "sectionBreak"))
-
+    breaks = section_breaks(doc)
     doc_end = document_end_index(doc)
 
     case breaks do
@@ -1127,35 +1121,60 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         [build_section_box(doc, %{}, document_style, 0, doc_end)]
 
       breaks ->
-        {boxes, _last_header_footer_ids} =
-          breaks
-          |> Enum.with_index()
-          |> Enum.map_reduce({nil, nil}, fn indexed_break, prev_header_footer_ids ->
-            section_box_for_break(
-              indexed_break,
-              breaks,
-              doc,
-              document_style,
-              doc_end,
-              prev_header_footer_ids
-            )
-          end)
+        ids = header_footer_id_chain(breaks)
 
-        boxes
+        breaks
+        |> Enum.with_index()
+        |> Enum.zip(ids)
+        |> Enum.map(fn {indexed_break, {header_id, footer_id}} ->
+          section_box_for_break(
+            indexed_break,
+            breaks,
+            doc,
+            document_style,
+            doc_end,
+            header_id,
+            footer_id
+          )
+        end)
     end
   end
 
-  # Builds one section's box and returns `{box, {header_id, footer_id}}` —
-  # the resolved header_id/footer_id feed the next section's inheritance
-  # (see `section_boxes/1`'s doc for the resolution rule).
-  defp section_box_for_break(
-         {sb, i},
-         breaks,
-         doc,
-         document_style,
-         doc_end,
-         {prev_header_id, prev_footer_id}
-       ) do
+  # Every `sectionBreak` StructuralElement in a document's body, in order.
+  # Shared by `section_boxes/1`, `header_footer_id_chain/1`'s callers, and
+  # `section_break_style/3` — all three need the same list to walk.
+  defp section_breaks(doc) do
+    doc
+    |> get_in(["body", "content"])
+    |> List.wrap()
+    |> Enum.filter(&Map.has_key?(&1, "sectionBreak"))
+  end
+
+  # Resolves each break's `{header_id, footer_id}` in document order: own
+  # explicit id, else the previous break's (already-resolved) id, else
+  # `nil` — deliberately NOT `documentStyle`'s id here (see
+  # `effective_trailing_header_footer/1`'s doc for why its caller adds that
+  # fallback itself instead). Per the Docs API reference: "If unset, the
+  # value inherits from the previous SectionBreak's SectionStyle. If the
+  # value is unset in the first SectionBreak, it inherits from
+  # DocumentStyle's defaultHeaderId."
+  defp header_footer_id_chain(breaks) do
+    {chain, _last} =
+      Enum.map_reduce(breaks, {nil, nil}, fn sb, {prev_header_id, prev_footer_id} ->
+        style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
+        header_id = Map.get(style, "defaultHeaderId") || prev_header_id
+        footer_id = Map.get(style, "defaultFooterId") || prev_footer_id
+        {{header_id, footer_id}, {header_id, footer_id}}
+      end)
+
+    chain
+  end
+
+  # Builds one section's box from its ALREADY-RESOLVED header_id/footer_id
+  # (see `section_boxes/1`'s doc for the resolution rule) — this function
+  # itself doesn't walk the chain, `header_footer_id_chain/1` does that once
+  # for every break up front.
+  defp section_box_for_break({sb, i}, breaks, doc, document_style, doc_end, header_id, footer_id) do
     style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
     start_index = Map.get(sb, "startIndex", 0)
 
@@ -1165,17 +1184,12 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
         next -> Map.get(next, "startIndex", doc_end)
       end
 
-    header_id = Map.get(style, "defaultHeaderId") || prev_header_id
-    footer_id = Map.get(style, "defaultFooterId") || prev_footer_id
-
     effective_style =
       style
       |> put_resolved_id("defaultHeaderId", header_id)
       |> put_resolved_id("defaultFooterId", footer_id)
 
-    box = build_section_box(doc, effective_style, document_style, start_index, end_index)
-
-    {box, {header_id, footer_id}}
+    build_section_box(doc, effective_style, document_style, start_index, end_index)
   end
 
   defp put_resolved_id(style, _key, nil), do: style
@@ -2459,20 +2473,14 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   defp effective_trailing_header_footer(doc) do
     document_style = Map.get(doc, "documentStyle") || %{}
 
-    breaks =
+    {last_header_id, last_footer_id} =
       doc
-      |> get_in(["body", "content"])
-      |> List.wrap()
-      |> Enum.filter(&Map.has_key?(&1, "sectionBreak"))
+      |> section_breaks()
+      |> header_footer_id_chain()
+      |> List.last({nil, nil})
 
-    Enum.reduce(
-      breaks,
-      {Map.get(document_style, "defaultHeaderId"), Map.get(document_style, "defaultFooterId")},
-      fn sb, {h, f} ->
-        style = get_in(sb, ["sectionBreak", "sectionStyle"]) || %{}
-        {Map.get(style, "defaultHeaderId", h), Map.get(style, "defaultFooterId", f)}
-      end
-    )
+    {last_header_id || Map.get(document_style, "defaultHeaderId"),
+     last_footer_id || Map.get(document_style, "defaultFooterId")}
   end
 
   defp segment_container(:header), do: "headers"
@@ -3898,13 +3906,10 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   # start_index is always exactly its break's start_index + 1.
   defp section_break_style(doc, ranges, position) do
     with {range_start, _range_end} <- Map.get(ranges, position),
-         breaks =
-           doc
-           |> get_in(["body", "content"])
-           |> List.wrap()
-           |> Enum.filter(&Map.has_key?(&1, "sectionBreak")),
          break when not is_nil(break) <-
-           Enum.find(breaks, fn b -> Map.get(b, "startIndex", 0) == range_start - 1 end) do
+           Enum.find(section_breaks(doc), fn b ->
+             Map.get(b, "startIndex", 0) == range_start - 1
+           end) do
       get_in(break, ["sectionBreak", "sectionStyle"]) || %{}
     else
       _ -> %{}
