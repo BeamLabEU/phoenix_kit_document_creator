@@ -3847,7 +3847,7 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   #
   # `paragraph_line_count/1` adds one line per `\u000B` "soft line break"
   # inside the paragraph's own text (seen live in the house footer's
-  # details table cells, e.g. "Reg. kood 10827447\u000BKMKR nr ..." on one
+  # details table cells, e.g. "Reg. code 1234567\u000BVAT no ..." on one
   # visual line's worth of Docs paragraph but two rendered lines — a plain
   # `\n` paragraph break is already its own structural element and isn't
   # counted here) and one per `horizontalRule` element (the house footer's
