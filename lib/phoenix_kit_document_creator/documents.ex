@@ -206,6 +206,7 @@ defmodule PhoenixKitDocumentCreator.Documents do
       {"max_count", v} -> {"max_count", parse_integer_or_nil(v)}
       {"columns", v} -> {"columns", parse_columns(v)}
       {"annotated", v} -> {"annotated", parse_bool(v)}
+      {"fit", v} -> {"fit", parse_fit(v)}
       {k, v} -> {k, v}
     end)
     |> Enum.reject(fn {_k, v} -> v == :skip end)
@@ -261,6 +262,13 @@ defmodule PhoenixKitDocumentCreator.Documents do
   defp parse_bool("true"), do: true
   defp parse_bool("false"), do: false
   defp parse_bool(_), do: :skip
+
+  # Whitelist for the image_list `fit` config: only "page"/"width" are
+  # stored — any other value is dropped via :skip, preserving whatever the
+  # existing config already had (same contract as parse_bool/1 above).
+  defp parse_fit("page"), do: "page"
+  defp parse_fit("width"), do: "width"
+  defp parse_fit(_), do: :skip
 
   @doc "List templates from the local DB. Returns maps compatible with the LiveView."
   @spec list_templates_from_db() :: [map()]

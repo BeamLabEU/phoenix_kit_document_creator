@@ -756,6 +756,98 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
 
       assert [%{insertInlineImage: %{uri: "https://example.test/a.png"}}] = image_requests
     end
+
+    test "a section that got its own header (Block C) substitutes it with that section's own values, not the first section's" do
+      # Two REAL sections (an explicit sectionBreak, not the degenerate
+      # `"body" => %{"content" => []}` fixtures above) — section 1's own
+      # sectionBreak carries its own `defaultHeaderId`, simulating
+      # `append_template/3` having given it a replayed copy of its
+      # template's header (see google_docs_client_header_footer_test.exs).
+      # Both headers share the same placeholder key; each must resolve
+      # against the section that OWNS its segment, not against section 0
+      # just because it has the lowest position.
+      doc = %{
+        "documentStyle" => %{"defaultHeaderId" => "kix.home"},
+        "headers" => %{
+          "kix.home" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{"startIndex" => 1, "textRun" => %{"content" => "{{ title }}\n"}}
+                  ]
+                }
+              }
+            ]
+          },
+          "kix.own" => %{
+            "content" => [
+              %{
+                "paragraph" => %{
+                  "elements" => [
+                    %{"startIndex" => 1, "textRun" => %{"content" => "{{ title }}\n"}}
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "body" => %{
+          "content" => [
+            %{"sectionBreak" => %{"sectionStyle" => %{}}},
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 1, "endIndex" => 5, "textRun" => %{"content" => "Sec0\n"}}
+                ]
+              }
+            },
+            %{
+              "startIndex" => 5,
+              "sectionBreak" => %{"sectionStyle" => %{"defaultHeaderId" => "kix.own"}}
+            },
+            %{
+              "paragraph" => %{
+                "elements" => [
+                  %{"startIndex" => 6, "endIndex" => 10, "textRun" => %{"content" => "Sec1\n"}}
+                ]
+              }
+            }
+          ]
+        }
+      }
+
+      StubIntegrations.stub_request(
+        :get,
+        "/v1/documents/doc-mixed-headers",
+        {:ok, %{status: 200, body: doc}}
+      )
+
+      StubIntegrations.stub_request(
+        :post,
+        ":batchUpdate",
+        {:ok, %{status: 200, body: %{"replies" => []}}}
+      )
+
+      sections = [
+        %{position: 0, variable_values: %{"title" => "Home title"}, image_params: %{}},
+        %{position: 1, variable_values: %{"title" => "Section 1 title"}, image_params: %{}}
+      ]
+
+      ranges = %{0 => {1, 5}, 1 => {6, 10}}
+
+      assert :ok = GoogleDocsClient.substitute_all_sections("doc-mixed-headers", sections, ranges)
+
+      text_by_segment =
+        for {:post, url, opts} <- StubIntegrations.recorded_requests(),
+            String.contains?(url, ":batchUpdate"),
+            request <- opts[:json].requests,
+            %{insertText: %{location: %{segmentId: segment_id}, text: text}} <- [request],
+            into: %{},
+            do: {segment_id, text}
+
+      assert text_by_segment == %{"kix.home" => "Home title", "kix.own" => "Section 1 title"}
+    end
   end
 
   describe "shift_ranges/2" do
@@ -979,15 +1071,87 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
       assert {:error, :drive_forbidden} = GoogleDocsClient.export_pdf("doc-1")
     end
 
-    test "returns {:error, :drive_export_too_large} on 403 exportSizeLimitExceeded" do
+    test "returns {:error, :drive_export_too_large} on 403 exportSizeLimitExceeded when the export link can't be read either" do
+      stub_export_too_large("doc-1")
+
       StubIntegrations.stub_request(
         :get,
-        "/drive/v3/files/doc-1/export",
-        {:ok,
-         %{
-           status: 403,
-           body: %{"error" => %{"errors" => [%{"reason" => "exportSizeLimitExceeded"}]}}
-         }}
+        ~r{/drive/v3/files/doc-1$},
+        {:ok, %{status: 500, body: %{"error" => "boom"}}}
+      )
+
+      assert {:error, :drive_export_too_large} = GoogleDocsClient.export_pdf("doc-1")
+    end
+
+    test "past the export size cap, downloads the PDF from the file's exportLinks" do
+      pdf_body = "%PDF-1.4\n" <> String.duplicate("PDF", 50)
+
+      link =
+        "https://docs.google.com/feeds/download/documents/export/Export?id=doc-1&exportFormat=pdf"
+
+      stub_export_too_large("doc-1")
+      stub_export_links("doc-1", link)
+
+      StubIntegrations.stub_request(
+        :get,
+        "docs.google.com/feeds/download",
+        {:ok, %{status: 200, body: pdf_body, headers: %{}}}
+      )
+
+      assert {:ok, ^pdf_body} = GoogleDocsClient.export_pdf("doc-1")
+
+      assert Enum.any?(StubIntegrations.recorded_requests(), fn {method, url, opts} ->
+               method == :get and url == link and opts[:receive_timeout] > 15_000
+             end)
+    end
+
+    test "past the export size cap, rejects a 200 export link answer that is not a PDF" do
+      stub_export_too_large("doc-1")
+
+      stub_export_links(
+        "doc-1",
+        "https://docs.google.com/feeds/download/documents/export/Export?id=doc-1&exportFormat=pdf"
+      )
+
+      StubIntegrations.stub_request(
+        :get,
+        "docs.google.com/feeds/download",
+        {:ok, %{status: 200, body: "<!DOCTYPE html><html>Sign in</html>", headers: %{}}}
+      )
+
+      assert {:error, :drive_export_too_large} = GoogleDocsClient.export_pdf("doc-1")
+    end
+
+    test "past the export size cap, reports :drive_export_too_large when exportLinks has no usable PDF link" do
+      stub_export_too_large("doc-1")
+      stub_export_links("doc-1", nil)
+
+      assert {:error, :drive_export_too_large} = GoogleDocsClient.export_pdf("doc-1")
+    end
+
+    test "past the export size cap, never sends the token to an export link off docs.google.com" do
+      stub_export_too_large("doc-1")
+      stub_export_links("doc-1", "https://evil.example/Export?id=doc-1")
+
+      assert {:error, :drive_export_too_large} = GoogleDocsClient.export_pdf("doc-1")
+
+      refute Enum.any?(StubIntegrations.recorded_requests(), fn {_, url, _} ->
+               String.contains?(url, "evil.example")
+             end)
+    end
+
+    test "past the export size cap, reports :drive_export_too_large when the export link fails" do
+      stub_export_too_large("doc-1")
+
+      stub_export_links(
+        "doc-1",
+        "https://docs.google.com/feeds/download/documents/export/Export?id=doc-1&exportFormat=pdf"
+      )
+
+      StubIntegrations.stub_request(
+        :get,
+        "docs.google.com/feeds/download",
+        {:ok, %{status: 500, body: "boom"}}
       )
 
       assert {:error, :drive_export_too_large} = GoogleDocsClient.export_pdf("doc-1")
@@ -1001,6 +1165,45 @@ defmodule PhoenixKitDocumentCreator.Integration.GoogleDocsClientHttpTest do
       )
 
       assert {:error, :drive_rate_limited} = GoogleDocsClient.export_pdf("doc-1")
+    end
+  end
+
+  defp stub_export_too_large(file_id) do
+    StubIntegrations.stub_request(
+      :get,
+      "/drive/v3/files/#{file_id}/export",
+      {:ok,
+       %{
+         status: 403,
+         body: %{"error" => %{"errors" => [%{"reason" => "exportSizeLimitExceeded"}]}}
+       }}
+    )
+  end
+
+  defp stub_export_links(file_id, pdf_link) do
+    StubIntegrations.stub_request(
+      :get,
+      ~r{/drive/v3/files/#{Regex.escape(file_id)}$},
+      {:ok, %{status: 200, body: %{"exportLinks" => %{"application/pdf" => pdf_link}}}}
+    )
+  end
+
+  describe "upload_image_for_embedding/3" do
+    test "returns an lh3 URL that asks for the image at up to 4096px, not the 1600px default" do
+      StubIntegrations.stub_request(
+        :post,
+        "/upload/drive/v3/files",
+        {:ok, %{status: 200, body: %{"id" => "img-1"}}}
+      )
+
+      StubIntegrations.stub_request(
+        :post,
+        "/drive/v3/files/img-1/permissions",
+        {:ok, %{status: 200, body: %{}}}
+      )
+
+      assert {:ok, "https://lh3.googleusercontent.com/d/img-1=s4096"} =
+               GoogleDocsClient.upload_image_for_embedding("PNGDATA", "image/png")
     end
   end
 

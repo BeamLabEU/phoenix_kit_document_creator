@@ -1,3 +1,106 @@
+## 0.9.11 - 2026-09-23
+
+### Fixed
+
+- Image grids (`image_list` with `columns >= 2`) are borderless: the table
+  cells no longer show Google Docs' default black border.
+- An image slot name used in several sections of a composed document fills
+  each section with that section's own images. Previously the last section
+  holding the name won, and the other sections' slots rendered empty.
+- A document with more than one image grid gets every grid's images in its
+  own cells. The later grids' images used to be placed at stale positions,
+  which failed the fill.
+
+## 0.9.10 - 2026-09-23
+
+### Added
+
+- `image_list` slots can fill the rest of their page. A new `fit: "page"`
+  config (a "Fit page" / "Fit width" select in the variable form) scales a
+  single-column slot's images to `min(box width, available height)`, and
+  the available height accounts for the section's header, footer, and the
+  content ahead of the slot. The residual margin can be tuned per host with
+  `config :phoenix_kit_document_creator, :page_fit_safety_pt, 8.0`.
+- New `GoogleDocsClient.section_boxes/1`, `header_extent_pt/2`, and
+  `footer_extent_pt/2`: each section's own page box and estimated
+  header/footer heights.
+- A composed document's appended sections keep their template's own header
+  and footer. When the template's differs from what the section would
+  inherit, a fresh header/footer is created for that section and the
+  template's content (text, rules, tables, cell images) is rebuilt in it.
+  Header/footer placeholders are filled from the section that owns the
+  segment.
+
+### Fixed
+
+- Image slots in a composed document are sized against their own section's
+  width, so images in a landscape section no longer get the portrait width.
+- A header/footer table with more than one row no longer fails the whole
+  compose; each cell's style is addressed at its real row and column.
+- A template header/footer the replay can't rebuild faithfully (page
+  numbers, a floating or non-cell image, a drawing) keeps the inherited one
+  instead of getting a lossy copy, with a warning logged. Only external
+  URL links are copied.
+- A zero margin or cell padding, which the Docs API sends without a
+  magnitude, is read as 0pt rather than falling back to the default.
+- Tables and inline images ahead of a `fit: "page"` slot count at their
+  estimated height.
+
+## 0.9.9 - 2026-09-23
+
+### Fixed
+
+- A composed document's appended sections keep their template's own page
+  orientation. A landscape template appended after a portrait one no longer
+  comes out portrait, and a portrait one after a landscape one no longer
+  inherits the flip. `append_template/3` now sends one `updateSectionStyle`
+  with the template's margins and an explicit `flipPageOrientation`, worked
+  out against the target document's page size (new
+  `GoogleDocsClient.section_layout_requests/3`).
+- A `null` document-level `flipPageOrientation` on a template is treated as
+  unset instead of as a flip.
+
+## 0.9.8 - 2026-09-22
+
+### Fixed
+
+- Landscape documents and templates (`documentStyle.flipPageOrientation`) are
+  no longer cropped to their middle strip in the fixed portrait thumbnail
+  frames of the documents / templates grid and the create-document modal.
+  They are fitted whole and centred. The orientation is read server-side from
+  the cached thumbnail's image header (PNG, GIF, WebP, JPEG) by the new
+  `PhoenixKitDocumentCreator.Thumbnail`, so it survives LiveView re-renders
+  and needs no inline script.
+
+### Changed
+
+- Upgraded locked `phoenix_kit` 2.37.0 → 2.37.3. The `:phoenix_kit`
+  requirement is unchanged (`~> 2.21 and >= 2.21.3`).
+
+## 0.9.7 - 2026-09-22
+
+### Fixed
+
+- Images inserted into templates and documents keep their resolution. The
+  embed URL now asks Google for up to 4096px on the long side instead of the
+  1600px copy a bare `lh3.googleusercontent.com/d/<id>` URL serves; 4096px
+  keeps every aspect ratio under `insertInlineImage`'s 25-megapixel limit.
+- `GoogleDocsClient.export_pdf/1` no longer fails on documents whose PDF is
+  past the ~10 MB cap of Drive's `files.export` (403
+  `exportSizeLimitExceeded`). It downloads the same PDF from the file's
+  `exportLinks`, sending the token only to an `https://docs.google.com`
+  link, with a 120s receive timeout, and accepting only a body that starts
+  with `%PDF-`. `:drive_export_too_large` now means the fallback failed too.
+  The admin page still refuses to push PDFs over 5 MB, so these exports
+  reach API callers of `Documents.export_pdf/2` but not the download button.
+
+### Changed
+
+- Upgraded locked dependencies: `phoenix_kit` 2.35.0 → 2.37.0, `etcher`
+  0.16.0 → 0.17.0, `phoenix_template` 1.0.4 → 1.1.0, `quic` 1.8.2 → 1.10.0,
+  `webtransport` 0.4.5 → 0.4.6, `h2` 0.12.0 → 0.12.1. The `:phoenix_kit`
+  requirement is unchanged (`~> 2.21 and >= 2.21.3`).
+
 ## 0.9.6 - 2026-09-21
 
 ### Added
