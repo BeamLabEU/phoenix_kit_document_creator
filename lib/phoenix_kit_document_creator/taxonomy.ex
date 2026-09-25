@@ -1193,7 +1193,7 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   # Reads the most recent trash activity log entry for the given level and uuid
   # and returns the type/template uuids that were cascade-trashed at the time as
   # `%{types: [...], templates: [...]}`. Both lists are empty when no matching
-  # entry is found or the Activity schema isn't loaded.
+  # entry is found.
   defp fetch_cascade_uuids(level, resource_uuid) do
     action =
       case level do
@@ -1201,14 +1201,6 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
         :type -> "doc_taxonomy.type.trashed"
       end
 
-    if Code.ensure_loaded?(PhoenixKit.Activity.Entry) do
-      fetch_cascade_uuids_from_activity(action, resource_uuid)
-    else
-      %{types: [], templates: []}
-    end
-  end
-
-  defp fetch_cascade_uuids_from_activity(action, resource_uuid) do
     entry =
       from(e in PhoenixKit.Activity.Entry,
         where: e.action == ^action and e.resource_uuid == ^resource_uuid,

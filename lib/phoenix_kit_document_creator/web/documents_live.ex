@@ -603,8 +603,7 @@ defmodule PhoenixKitDocumentCreator.Web.DocumentsLive do
         _ -> :single
       end
 
-    # `:scope_folder` is validated and encoded by core. A core older than
-    # 2.23.2 ignores the option, and its selector would ignore the param too.
+    # `:scope_folder` is validated and encoded by core.
     selector_url =
       MediaSelectorHelper.media_selector_url(return_to,
         mode: mode_atom,

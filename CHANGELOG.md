@@ -1,3 +1,19 @@
+## 0.9.12 - 2026-09-25
+
+### Changed
+
+- Requires `phoenix_kit` `>= 2.38.0 and < 3.0.0`. The actor, activity
+  logging and the template image scope folder now come from core's shared
+  toolkits (`PhoenixKitWeb.Actor`, `Activity.log/3`,
+  `Storage.ResourceFolders`). An `:attachments_parent_folder` answer that
+  is not a uuid is now dropped.
+- The admin header shows a consistent trail on every Document Creator page:
+  `Document Creator / Templates`, `Document Creator / Categories / <category>
+  / Edit`, and so on. The Documents list is the landing page, and the
+  settings page sits under `Settings`.
+- The category and type edit forms open on the language the page is viewed
+  in. A new record still starts on the main language.
+
 ## 0.9.11 - 2026-09-23
 
 ### Fixed

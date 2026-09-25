@@ -14,7 +14,6 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
 
   alias PhoenixKit.Integrations
   alias PhoenixKit.Settings
-  alias PhoenixKit.Utils.Routes
   alias PhoenixKitDocumentCreator.Documents
   alias PhoenixKitDocumentCreator.GoogleDocsClient
   alias PhoenixKitDocumentCreator.Paths
@@ -72,7 +71,7 @@ defmodule PhoenixKitDocumentCreator.Web.GoogleOAuthSettingsLive do
     {:noreply,
      assign(socket,
        page_section: gettext("Settings"),
-       page_section_path: Routes.path("/admin/settings"),
+       page_section_path: Paths.admin_settings(),
        page_crumbs: [],
        page_title: gettext("Document Creator")
      )}
