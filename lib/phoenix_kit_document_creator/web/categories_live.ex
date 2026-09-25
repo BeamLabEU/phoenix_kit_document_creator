@@ -22,7 +22,6 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
     {:ok,
      assign(socket,
-       page_title: gettext("Categories"),
        categories: [],
        selected: nil,
        types: [],
@@ -43,6 +42,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
       # Read after `mount/3` (not in it) so it runs after the parent app's
       # telemetry hook has synced the process-global Gettext locale.
       |> assign(url_path: url_path, locale: Gettext.get_locale(PhoenixKitDocumentCreator.Gettext))
+      |> Helpers.assign_trail(gettext("Categories"))
       |> reload_categories()
 
     {:noreply, socket}

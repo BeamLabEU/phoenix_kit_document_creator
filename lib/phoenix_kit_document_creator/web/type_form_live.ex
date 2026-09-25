@@ -28,7 +28,6 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
     {:ok,
      socket
      |> assign(
-       page_title: gettext("Type"),
        type: nil,
        changeset: nil,
        form: nil,
@@ -47,6 +46,9 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
   def handle_params(params, uri, socket) do
     url_path = URI.parse(uri).path || "/"
     categories = Taxonomy.list_categories()
+    # Read here (not in `mount/3`) so it runs after the parent app's
+    # telemetry hook has synced the process-global Gettext locale.
+    locale = Gettext.get_locale(PhoenixKitDocumentCreator.Gettext)
 
     socket =
       case params do
@@ -60,9 +62,13 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
             type: type,
             changeset: changeset,
             form: to_form(changeset, as: :type),
-            page_title: gettext("Edit Type"),
             url_path: url_path,
             categories: categories
+          )
+          |> Helpers.assign_trail(
+            gettext("Edit"),
+            trail_crumbs(categories, type.category_uuid, locale) ++
+              [Helpers.record_crumb(type, locale)]
           )
 
         %{"category_uuid" => category_uuid} ->
@@ -75,9 +81,12 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
             type: type,
             changeset: changeset,
             form: to_form(changeset, as: :type),
-            page_title: gettext("New Type"),
             url_path: url_path,
             categories: categories
+          )
+          |> Helpers.assign_trail(
+            gettext("New type"),
+            trail_crumbs(categories, category_uuid, locale)
           )
 
         _ ->
@@ -90,13 +99,22 @@ defmodule PhoenixKitDocumentCreator.Web.TypeFormLive do
             type: type,
             changeset: changeset,
             form: to_form(changeset, as: :type),
-            page_title: gettext("New Type"),
             url_path: url_path,
             categories: categories
           )
+          |> Helpers.assign_trail(gettext("New type"), [Helpers.categories_crumb()])
       end
 
     {:noreply, refresh_multilang(socket)}
+  end
+
+  # `Categories / <category>` — the category is text because the list is
+  # its only page; a type whose category is gone shows the list alone.
+  defp trail_crumbs(categories, category_uuid, locale) do
+    case Enum.find(categories, &(&1.uuid == category_uuid)) do
+      nil -> [Helpers.categories_crumb()]
+      category -> [Helpers.categories_crumb(), Helpers.record_crumb(category, locale)]
+    end
   end
 
   @impl true

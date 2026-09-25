@@ -26,7 +26,6 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
     {:ok,
      socket
      |> assign(
-       page_title: gettext("Category"),
        category: nil,
        changeset: nil,
        form: nil,
@@ -43,6 +42,9 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
   @impl true
   def handle_params(params, uri, socket) do
     url_path = URI.parse(uri).path || "/"
+    # Read here (not in `mount/3`) so it runs after the parent app's
+    # telemetry hook has synced the process-global Gettext locale.
+    locale = Gettext.get_locale(PhoenixKitDocumentCreator.Gettext)
 
     socket =
       case params do
@@ -56,9 +58,12 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
             category: category,
             changeset: changeset,
             form: to_form(changeset, as: :category),
-            page_title: gettext("Edit Category"),
             url_path: url_path
           )
+          |> Helpers.assign_trail(gettext("Edit"), [
+            Helpers.categories_crumb(),
+            Helpers.record_crumb(category, locale)
+          ])
 
         _ ->
           changeset = Category.changeset(%Category{}, %{})
@@ -69,9 +74,9 @@ defmodule PhoenixKitDocumentCreator.Web.CategoryFormLive do
             category: %Category{},
             changeset: changeset,
             form: to_form(changeset, as: :category),
-            page_title: gettext("New Category"),
             url_path: url_path
           )
+          |> Helpers.assign_trail(gettext("New category"), [Helpers.categories_crumb()])
       end
 
     {:noreply, refresh_multilang(socket)}
