@@ -253,30 +253,18 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClient do
   end
 
   defp log_lazy_migration_activity(action_atom, metadata) do
-    if Code.ensure_loaded?(PhoenixKit.Activity) do
-      PhoenixKit.Activity.log(%{
-        action: "integration.legacy_migrated",
-        module: "document_creator",
-        mode: "auto",
-        resource_type: "integration",
-        metadata:
-          Map.merge(metadata, %{
-            "migration_kind" => Atom.to_string(action_atom),
-            "actor_role" => "system",
-            "trigger" => "lazy_on_read"
-          })
-      })
-    end
+    PhoenixKit.Activity.log("document_creator", "integration.legacy_migrated",
+      mode: "auto",
+      resource_type: "integration",
+      metadata:
+        Map.merge(metadata, %{
+          "migration_kind" => Atom.to_string(action_atom),
+          "actor_role" => "system",
+          "trigger" => "lazy_on_read"
+        })
+    )
 
     :ok
-  rescue
-    e ->
-      Logger.warning(fn ->
-        "[GoogleDocsClient] activity log failed during lazy legacy migration: " <>
-          "kind=#{action_atom}, exception=#{inspect(e.__struct__)}"
-      end)
-
-      :ok
   end
 
   defp find_uuid_for_data(provider_key, data) do
