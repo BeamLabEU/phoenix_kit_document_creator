@@ -1036,7 +1036,8 @@ defmodule PhoenixKitDocumentCreator.GoogleDocsClientHeaderFooterTest do
       # segment table with the first template table would still style both
       # startIndexes above, but fill both cells with "X" (review, 2026-09-23).
       cell_texts =
-        for %{"insertText" => %{"text" => text, "location" => %{"index" => index}}} <- style_batch,
+        for %{"insertText" => %{"text" => text, "location" => %{"index" => index}}} <-
+              style_batch,
             do: {String.trim(text), index}
 
       assert [{"X", x_index}] = Enum.filter(cell_texts, &(elem(&1, 0) == "X"))

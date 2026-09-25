@@ -13,7 +13,7 @@ uses the Drive export endpoint. Templates are organised by a Category → Type
 taxonomy with per-category presets, and documents can be composed from several
 template sections.
 
-- **Depends on:** `phoenix_kit` `~> 2.21 and >= 2.21.3` (Hex) — Module behaviour, Settings,
+- **Depends on:** `phoenix_kit` `>= 2.38.0 and < 3.0.0` (Hex) — Module behaviour, Settings,
   Integrations, Activity, PubSubHelper, `Utils.Routes`, `Utils.Slug`,
   `Utils.Multilang`, `SchemaPrefix`, `Modules.Storage`, `Modules.Languages`,
   core web components. Plus `phoenix_live_view ~> 1.2`, `req ~> 0.5`,
@@ -178,9 +178,9 @@ mix gettext.extract --merge priv/gettext
   `fun(:document_image, actor_uuid, %{template_file_id: id})` or `/2` and
   returns `{:ok, folder_uuid}` or `nil`. Pass the answer to
   `MediaSelectorHelper.media_selector_url/2` as `scope_folder:`. Don't
-  hand-append the param: core validates and encodes it there. It takes effect
-  only on core 2.23.2 or later and applies to uploads, not picked files. A hook
-  that raises, throws or exits must degrade to `nil`.
+  hand-append the param: core validates and encodes it there. It applies to
+  uploads, not picked files. A hook that raises, throws or exits must degrade
+  to `nil`.
 
 ### Landmines
 
@@ -432,10 +432,11 @@ a machine with no `postgres` role, export `PGUSER`; the preflight reports the
 rejected credentials up front instead of letting the pool time out later.
 
 Two conformance tests are load-bearing and should not be relaxed:
-`core_pin_conformance_test.exs` (the `:phoenix_kit` requirement must stay
-`~> 2.21 and >= 2.21.3` — the floor is where core's website-wide Integrations
-page took its current path, and a three-segment `~> 2.21.3` would pin a single
-minor and break consumers, never this repo) and
+`core_pin_conformance_test.exs` (the `:phoenix_kit` requirement keeps the
+compound `>= 2.38.0 and < 3.0.0` form — the floor is the core that carries
+`PhoenixKitWeb.Actor`, `Activity.log/3` and `Storage.ResourceFolders`, and a
+three-segment `~> 2.38.0` would pin a single minor and break consumers, never
+this repo) and
 `schema_prefix_conformance_test.exs` (every table-backed schema must
 `use PhoenixKit.SchemaPrefix`).
 
