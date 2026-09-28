@@ -293,6 +293,13 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     {:noreply, reload_types(socket)}
   end
 
+  # The files topic is a public contract other code can broadcast on; a
+  # message this page does not know must not crash it.
+  def handle_info(msg, socket) do
+    Logger.debug("DocumentCreator.CategoriesLive: ignoring unexpected message: #{inspect(msg)}")
+    {:noreply, socket}
+  end
+
   # ── Render ─────────────────────────────────────────────────────────────────
 
   @impl true

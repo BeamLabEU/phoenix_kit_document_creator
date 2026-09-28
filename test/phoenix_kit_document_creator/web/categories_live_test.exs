@@ -171,6 +171,19 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLiveTest do
       assert has_element?(view, "#type-template-count-#{acts.uuid}", ~r/^\s*1\s*$/)
     end
 
+    test "an unexpected message on the files topic does not crash the page", %{conn: conn} do
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, cat} = Taxonomy.create_category(%{name: "Contracts"})
+      {:ok, acts} = Taxonomy.create_type(%{name: "Acts", category_uuid: cat.uuid})
+
+      view = open_category(conn, cat)
+      PhoenixKit.PubSubHelper.broadcast(Documents.pubsub_topic(), {:something_else, self()})
+      _ = :sys.get_state(view.pid)
+
+      assert Process.alive?(view.pid)
+      assert has_element?(view, "#type-template-count-#{acts.uuid}", ~r/^\s*0\s*$/)
+    end
+
     test "trashed types carry no count", %{conn: conn} do
       conn = put_test_scope(conn, fake_scope())
       {:ok, cat} = Taxonomy.create_category(%{name: "Contracts"})

@@ -453,15 +453,17 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
   @doc """
   Counts published templates per group, keyed by type uuid.
 
-  Counted through the `phoenix_kit_doc_template_taxonomy` memberships with
-  the same rule as
-  `PhoenixKitDocumentCreator.Documents.list_templates_for_category/1`:
-  published templates, filed under the type's current category. So a
-  template filed under several categories counts once in each category's
-  group; trashed, lost or unfiled templates are not counted; and a
-  membership left under the old category when a type moves to another one
-  counts for neither. One query for the whole list; a type with no
-  published template is absent from the map.
+  Counted through the `phoenix_kit_doc_template_taxonomy` memberships:
+  published templates filed under the type's current category, which is
+  what `PhoenixKitDocumentCreator.Documents.list_templates_for_category/1`
+  returns for that category. So a template filed under several categories
+  counts once in each category's group, and trashed, lost or unfiled
+  templates are not counted. A membership left under the old category when
+  a type moves to another one is not counted: the new category's listing
+  does not return it, and the old category no longer shows the type (its
+  listing still returns the row, which this count deliberately ignores).
+  One query for the whole list; a type with no published template is
+  absent from the map.
   """
   @spec count_published_templates_by_type([Ecto.UUID.t()]) ::
           %{Ecto.UUID.t() => pos_integer()}

@@ -1,3 +1,18 @@
+## 0.9.13 - 2026-09-28
+
+### Added
+
+- The Categories page shows the number of published templates next to each
+  type of the selected category, counted the way the preset editor lists
+  them (templates filed under the type's current category). The count
+  follows memberships, cascades and single-template trash/restore live.
+  New `Taxonomy.count_published_templates_by_type/1`.
+
+### Fixed
+
+- The Categories page no longer crashes on an unexpected message on the
+  Document Creator PubSub topics.
+
 ## 0.9.12 - 2026-09-25
 
 ### Changed
