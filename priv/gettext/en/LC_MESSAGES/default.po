@@ -1069,6 +1069,13 @@ msgstr "That category no longer exists."
 msgid "That type no longer exists."
 msgstr "That type no longer exists."
 
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:438
+#, elixir-autogen, elixir-format
+msgid "%{count} template"
+msgid_plural "%{count} templates"
+msgstr[0] "%{count} template"
+msgstr[1] "%{count} templates"
+
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:474
 #, elixir-autogen, elixir-format
 msgid "%{count} broken template"

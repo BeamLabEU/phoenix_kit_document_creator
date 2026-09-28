@@ -579,6 +579,77 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
       end
     end
 
+    describe "count_published_templates_by_type/1" do
+      test "counts published templates per group through the memberships" do
+        cat = create_category!()
+        main = create_type!(cat.uuid)
+        annex = create_type!(cat.uuid)
+        empty = create_type!(cat.uuid)
+
+        for _ <- 1..2 do
+          tmpl = create_template!()
+
+          {:ok, _} =
+            Taxonomy.set_template_memberships(tmpl.uuid, [
+              %{category_uuid: cat.uuid, type_uuid: main.uuid}
+            ])
+        end
+
+        tmpl = create_template!()
+
+        {:ok, _} =
+          Taxonomy.set_template_memberships(tmpl.uuid, [
+            %{category_uuid: cat.uuid, type_uuid: annex.uuid}
+          ])
+
+        # In the category but in no group: counts for no type.
+        ungrouped = create_template!()
+        {:ok, _} = Taxonomy.set_template_memberships(ungrouped.uuid, [%{category_uuid: cat.uuid}])
+
+        counts = Taxonomy.count_published_templates_by_type([main.uuid, annex.uuid, empty.uuid])
+
+        assert counts == %{main.uuid => 2, annex.uuid => 1}
+        assert Map.get(counts, empty.uuid, 0) == 0
+      end
+
+      test "does not count trashed, lost or unfiled templates" do
+        cat = create_category!()
+        type = create_type!(cat.uuid)
+
+        for status <- ~w(published trashed lost unfiled) do
+          tmpl = create_template!(%{status: status})
+
+          {:ok, _} =
+            Taxonomy.set_template_memberships(tmpl.uuid, [
+              %{category_uuid: cat.uuid, type_uuid: type.uuid}
+            ])
+        end
+
+        assert Taxonomy.count_published_templates_by_type([type.uuid]) == %{type.uuid => 1}
+      end
+
+      test "a template in two categories counts once in each category's group" do
+        cat_a = create_category!()
+        cat_b = create_category!()
+        type_a = create_type!(cat_a.uuid)
+        type_b = create_type!(cat_b.uuid)
+        multi = create_template!()
+
+        {:ok, _} =
+          Taxonomy.set_template_memberships(multi.uuid, [
+            %{category_uuid: cat_a.uuid, type_uuid: type_a.uuid},
+            %{category_uuid: cat_b.uuid, type_uuid: type_b.uuid}
+          ])
+
+        assert Taxonomy.count_published_templates_by_type([type_a.uuid, type_b.uuid]) ==
+                 %{type_a.uuid => 1, type_b.uuid => 1}
+      end
+
+      test "an empty list asks nothing" do
+        assert Taxonomy.count_published_templates_by_type([]) == %{}
+      end
+    end
+
     describe "restore_type/1" do
       test "restores a trashed type and templates trashed by cascade" do
         cat = create_category!()

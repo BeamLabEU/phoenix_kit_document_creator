@@ -1069,6 +1069,14 @@ msgstr "Эта категория больше не существует."
 msgid "That type no longer exists."
 msgstr "Этот тип больше не существует."
 
+#: lib/phoenix_kit_document_creator/web/categories_live.ex:438
+#, elixir-autogen, elixir-format
+msgid "%{count} template"
+msgid_plural "%{count} templates"
+msgstr[0] "%{count} шаблон"
+msgstr[1] "%{count} шаблона"
+msgstr[2] "%{count} шаблонов"
+
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:474
 #, elixir-autogen, elixir-format
 msgid "%{count} broken template"

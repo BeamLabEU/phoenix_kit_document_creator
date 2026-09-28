@@ -25,6 +25,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
        categories: [],
        selected: nil,
        types: [],
+       type_template_counts: %{},
        presets: [],
        categories_status_mode: "active",
        types_status_mode: "active",
@@ -427,7 +428,24 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                     >
                       <span class="hero-bars-3 w-4 h-4" />
                     </span>
-                    <span class="flex-1 text-sm font-medium">{Taxonomy.localized_name(type, @locale)}</span>
+                    <span class="flex-1 flex items-center gap-2">
+                      <span class="text-sm font-medium">{Taxonomy.localized_name(type, @locale)}</span>
+                      <span
+                        :if={@types_status_mode == "active"}
+                        id={"type-template-count-#{type.uuid}"}
+                        class="badge badge-ghost badge-sm shrink-0"
+                        title={
+                          ngettext(
+                            "%{count} template",
+                            "%{count} templates",
+                            template_count(@type_template_counts, type),
+                            count: template_count(@type_template_counts, type)
+                          )
+                        }
+                      >
+                        {template_count(@type_template_counts, type)}
+                      </span>
+                    </span>
                     <.type_row_menu type={type} trash_view={@types_status_mode == "trashed"} />
                   </li>
                 <% end %>
@@ -696,7 +714,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     socket =
       case socket.assigns.selected do
         nil ->
-          assign(socket, types: [], trashed_types_count: 0)
+          assign(socket, types: [], type_template_counts: %{}, trashed_types_count: 0)
 
         category ->
           status_mode = socket.assigns.types_status_mode
@@ -708,11 +726,24 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
               do: length(types),
               else: Taxonomy.count_types_for_category(category.uuid, status: "deleted")
 
-          assign(socket, types: types, trashed_types_count: trashed_types_count)
+          # Only the active list shows counts: a trashed type's templates
+          # went to the trash with it.
+          type_template_counts =
+            if status_mode == "trashed",
+              do: %{},
+              else: Taxonomy.count_published_templates_by_type(Enum.map(types, & &1.uuid))
+
+          assign(socket,
+            types: types,
+            type_template_counts: type_template_counts,
+            trashed_types_count: trashed_types_count
+          )
       end
 
     reload_presets(socket)
   end
+
+  defp template_count(counts, type), do: Map.get(counts, type.uuid, 0)
 
   defp reload_presets(socket) do
     case socket.assigns.selected do
