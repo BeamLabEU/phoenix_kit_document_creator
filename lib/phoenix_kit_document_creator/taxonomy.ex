@@ -450,6 +450,37 @@ defmodule PhoenixKitDocumentCreator.Taxonomy do
     |> repo().aggregate(:count)
   end
 
+  @doc """
+  Counts published templates per group, keyed by type uuid.
+
+  Counted through the `phoenix_kit_doc_template_taxonomy` memberships with
+  the same rule as
+  `PhoenixKitDocumentCreator.Documents.list_templates_for_category/1`:
+  published templates, filed under the type's current category. So a
+  template filed under several categories counts once in each category's
+  group; trashed, lost or unfiled templates are not counted; and a
+  membership left under the old category when a type moves to another one
+  counts for neither. One query for the whole list; a type with no
+  published template is absent from the map.
+  """
+  @spec count_published_templates_by_type([Ecto.UUID.t()]) ::
+          %{Ecto.UUID.t() => pos_integer()}
+  def count_published_templates_by_type([]), do: %{}
+
+  def count_published_templates_by_type(type_uuids) when is_list(type_uuids) do
+    from(m in TemplateTaxonomy,
+      join: t in Template,
+      on: t.uuid == m.template_uuid,
+      join: ty in Type,
+      on: ty.uuid == m.type_uuid and ty.category_uuid == m.category_uuid,
+      where: m.type_uuid in ^type_uuids and t.status == "published",
+      group_by: m.type_uuid,
+      select: {m.type_uuid, count(m.template_uuid, :distinct)}
+    )
+    |> repo().all()
+    |> Map.new()
+  end
+
   @doc "Fetches a type by UUID. Returns `nil` if not found."
   @spec get_type(Ecto.UUID.t()) :: Type.t() | nil
   def get_type(uuid), do: repo().get(Type, uuid)
