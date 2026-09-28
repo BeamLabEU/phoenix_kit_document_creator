@@ -18,7 +18,13 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket), do: Taxonomy.subscribe()
+    # Taxonomy events move templates between groups; :files_changed is what
+    # trashing and restoring a template send when its status changes — both
+    # move the template counts next to the types.
+    if connected?(socket) do
+      Taxonomy.subscribe()
+      PhoenixKit.PubSubHelper.subscribe(Documents.pubsub_topic())
+    end
 
     {:ok,
      assign(socket,
@@ -283,6 +289,10 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
     {:noreply, reload_categories(socket)}
   end
 
+  def handle_info({:files_changed, _from}, socket) do
+    {:noreply, reload_types(socket)}
+  end
+
   # ── Render ─────────────────────────────────────────────────────────────────
 
   @impl true
@@ -434,14 +444,9 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
                         :if={@types_status_mode == "active"}
                         id={"type-template-count-#{type.uuid}"}
                         class="badge badge-ghost badge-sm shrink-0"
-                        title={
-                          ngettext(
-                            "%{count} template",
-                            "%{count} templates",
-                            template_count(@type_template_counts, type),
-                            count: template_count(@type_template_counts, type)
-                          )
-                        }
+                        title={template_count_label(@type_template_counts, type)}
+                        role="img"
+                        aria-label={template_count_label(@type_template_counts, type)}
                       >
                         {template_count(@type_template_counts, type)}
                       </span>
@@ -726,8 +731,8 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
               do: length(types),
               else: Taxonomy.count_types_for_category(category.uuid, status: "deleted")
 
-          # Only the active list shows counts: a trashed type's templates
-          # went to the trash with it.
+          # Only the active list shows counts: the trash lists types to
+          # restore or delete, not ones in use.
           type_template_counts =
             if status_mode == "trashed",
               do: %{},
@@ -744,6 +749,11 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLive do
   end
 
   defp template_count(counts, type), do: Map.get(counts, type.uuid, 0)
+
+  defp template_count_label(counts, type) do
+    count = template_count(counts, type)
+    ngettext("%{count} template", "%{count} templates", count, count: count)
+  end
 
   defp reload_presets(socket) do
     case socket.assigns.selected do

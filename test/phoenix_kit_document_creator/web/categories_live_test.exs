@@ -149,6 +149,28 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLiveTest do
       assert has_element?(view, ~s{#type-template-count-#{acts.uuid}[title="1 template"]})
     end
 
+    test "follows a template trashed or restored while the page is open", %{conn: conn} do
+      conn = put_test_scope(conn, fake_scope())
+      {:ok, cat} = Taxonomy.create_category(%{name: "Contracts"})
+      {:ok, acts} = Taxonomy.create_type(%{name: "Acts", category_uuid: cat.uuid})
+      tmpl = file_template!(cat.uuid, acts.uuid)
+
+      view = open_category(conn, cat)
+      assert has_element?(view, "#type-template-count-#{acts.uuid}", ~r/^\s*1\s*$/)
+
+      # What delete_template/2 and restore_template/2 do after the DB write:
+      # a :files_changed broadcast, no taxonomy event.
+      tmpl = tmpl |> Ecto.Changeset.change(status: "trashed") |> TestRepo.update!()
+      PhoenixKitDocumentCreator.Documents.broadcast_files_changed()
+      _ = :sys.get_state(view.pid)
+      assert has_element?(view, "#type-template-count-#{acts.uuid}", ~r/^\s*0\s*$/)
+
+      tmpl |> Ecto.Changeset.change(status: "published") |> TestRepo.update!()
+      PhoenixKitDocumentCreator.Documents.broadcast_files_changed()
+      _ = :sys.get_state(view.pid)
+      assert has_element?(view, "#type-template-count-#{acts.uuid}", ~r/^\s*1\s*$/)
+    end
+
     test "trashed types carry no count", %{conn: conn} do
       conn = put_test_scope(conn, fake_scope())
       {:ok, cat} = Taxonomy.create_category(%{name: "Contracts"})

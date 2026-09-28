@@ -2,6 +2,7 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
   defmodule PhoenixKitDocumentCreator.Integration.TaxonomyTest do
     use PhoenixKitDocumentCreator.DataCase, async: true
 
+    alias PhoenixKitDocumentCreator.Documents
     alias PhoenixKitDocumentCreator.Schemas.Document
     alias PhoenixKitDocumentCreator.Schemas.Template
     alias PhoenixKitDocumentCreator.Taxonomy
@@ -647,6 +648,27 @@ if Code.ensure_loaded?(PhoenixKitDocumentCreator.DataCase) do
 
       test "an empty list asks nothing" do
         assert Taxonomy.count_published_templates_by_type([]) == %{}
+      end
+
+      test "counts only the memberships filed under the type's current category" do
+        cat = create_category!()
+        other = create_category!()
+        type = create_type!(cat.uuid)
+        tmpl = create_template!()
+
+        {:ok, _} =
+          Taxonomy.set_template_memberships(tmpl.uuid, [
+            %{category_uuid: cat.uuid, type_uuid: type.uuid}
+          ])
+
+        assert Taxonomy.count_published_templates_by_type([type.uuid]) == %{type.uuid => 1}
+
+        # Moving the type leaves the membership under the old category, so the
+        # preset editor of the new one lists nothing — and neither does the count.
+        {:ok, moved} = Taxonomy.update_type(type, %{category_uuid: other.uuid})
+
+        assert Documents.list_templates_for_category(other.uuid) == []
+        assert Taxonomy.count_published_templates_by_type([moved.uuid]) == %{}
       end
     end
 
