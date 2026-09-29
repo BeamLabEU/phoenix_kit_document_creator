@@ -142,12 +142,12 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLiveTest do
 
       assert render(view) =~ "Gone"
 
-      view
-      |> element("button[phx-click='select_category'][phx-value-uuid='#{other.uuid}']")
-      |> render_click()
+      # Through the URL alone (a link, Back/Forward) — not the click, which
+      # resets the tab by itself.
+      render_patch(view, @page <> "?category=#{other.uuid}")
 
-      assert_patch(view, @page <> "?category=#{other.uuid}")
       refute render(view) =~ "OtherGone"
+      assert has_element?(view, "h2", "Other")
     end
   end
 
