@@ -59,7 +59,7 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLiveTest do
       end
     end
 
-    test "the category trash tab and trashing the category drop it from the URL",
+    test "trashing, the category Trash tab and deleting forever drop it from the URL",
          %{conn: conn, cat: cat} do
       {:ok, view, _html} = live(conn, @page <> "?category=#{cat.uuid}")
 
@@ -69,7 +69,11 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLiveTest do
 
       assert_patch(view, @page)
       assert render(view) =~ "Select a category to see its types."
+      # The flash put before the patch is still shown after it.
+      assert has_element?(view, "#flash-info", "Category trashed.")
 
+      # Switching to the Trash tab drops a selection (the trashed `cat`
+      # keeps the tab on the page).
       {:ok, other} = Taxonomy.create_category(%{name: "Other"})
       {:ok, view, _html} = live(conn, @page <> "?category=#{other.uuid}")
 
@@ -81,6 +85,22 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLiveTest do
 
       assert_patch(view, @page)
       assert render(view) =~ "Select a category to see its types."
+
+      # In the Trash tab: selecting `cat` patches it in, deleting it forever
+      # patches it out, the flash survives.
+      view
+      |> element("button[phx-click='select_category'][phx-value-uuid='#{cat.uuid}']")
+      |> render_click()
+
+      assert_patch(view, @page <> "?category=#{cat.uuid}")
+
+      view
+      |> element("button[phx-click='delete_category_forever'][phx-value-uuid='#{cat.uuid}']")
+      |> render_click()
+
+      assert_patch(view, @page)
+      assert has_element?(view, "#flash-info", "Category permanently deleted.")
+      assert Taxonomy.get_category(cat.uuid) == nil
     end
 
     test "clicking the selected category again goes back to its active types",
@@ -104,6 +124,30 @@ defmodule PhoenixKitDocumentCreator.Web.CategoriesLiveTest do
 
       refute render(view) =~ "Gone"
       assert render(view) =~ "Contract"
+    end
+
+    test "another category opens on its active types", %{conn: conn, cat: cat} do
+      {:ok, type} = Taxonomy.create_type(%{name: "Gone", category_uuid: cat.uuid})
+      {:ok, _} = Taxonomy.trash_type(type)
+      {:ok, other} = Taxonomy.create_category(%{name: "Other"})
+      {:ok, other_type} = Taxonomy.create_type(%{name: "OtherGone", category_uuid: other.uuid})
+      {:ok, _} = Taxonomy.trash_type(other_type)
+      {:ok, view, _html} = live(conn, @page <> "?category=#{cat.uuid}")
+
+      view
+      |> element(
+        "button[phx-click='switch_status'][phx-value-target='types'][phx-value-mode='trashed']"
+      )
+      |> render_click()
+
+      assert render(view) =~ "Gone"
+
+      view
+      |> element("button[phx-click='select_category'][phx-value-uuid='#{other.uuid}']")
+      |> render_click()
+
+      assert_patch(view, @page <> "?category=#{other.uuid}")
+      refute render(view) =~ "OtherGone"
     end
   end
 
