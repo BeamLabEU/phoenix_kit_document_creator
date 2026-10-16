@@ -280,31 +280,12 @@ defmodule PhoenixKitDocumentCreator do
       {:error, e}
   end
 
-  # Prefer the uuid-strict `find_uuid_by_provider_name/1` (core 1.7.105+)
-  # so the check matches the same lookup shape we use elsewhere
-  # (`migrate_legacy_connection_references/0`, the consumer pattern in
-  # AGENTS.md). On older cores that pre-date the helper, fall back to
-  # the legacy `provider:name` string lookup against `get_integration/1`'s
-  # dual-input read shim. The fallback can be deleted once
-  # `phoenix_kit ~> 1.7.105` is the floor in `mix.exs` (also tracked in
-  # dev_docs/migration_cleanup.md).
+  # The migrated row exists when core finds a connection under the new
+  # provider and name; `find_uuid_by_provider_name/1` answers `{:ok, uuid}`.
   defp already_migrated? do
     storage_key = "#{@new_integration_provider}:#{@new_integration_name}"
 
-    if function_exported?(Integrations, :find_uuid_by_provider_name, 1) do
-      # `apply/3` is deliberate: cores that pre-date the helper would
-      # otherwise emit an "undefined function" warning at compile time
-      # even though the `function_exported?/3` guard makes the call
-      # safe at runtime. Drop the `apply/3` once `~> 1.7.105` is the
-      # floor in `mix.exs`.
-      # credo:disable-for-next-line Credo.Check.Refactor.Apply
-      apply(Integrations, :find_uuid_by_provider_name, [storage_key]) |> is_binary()
-    else
-      case Integrations.get_integration(storage_key) do
-        {:ok, _} -> true
-        _ -> false
-      end
-    end
+    match?({:ok, uuid} when is_binary(uuid), Integrations.find_uuid_by_provider_name(storage_key))
   end
 
   defp do_migrate_oauth_credentials(legacy_data) do
@@ -355,26 +336,10 @@ defmodule PhoenixKitDocumentCreator do
     end
   end
 
-  # Cross-version compat for the `:already_exists` resolve step.
-  #
-  # `find_uuid_by_provider_name/1` is the cleaner V107 primitive but
-  # doesn't exist in Hex `~> 1.7`. Without the `function_exported?/3`
-  # gate, dialyzer / `mix precommit` flags it as a missing call.
-  # When the floor version is bumped past V107 the gate can be
-  # removed and the call inlined.
   defp resolve_existing_connection_uuid(provider, name) do
-    if function_exported?(Integrations, :find_uuid_by_provider_name, 1) do
-      # credo:disable-for-next-line Credo.Check.Refactor.Apply
-      case apply(Integrations, :find_uuid_by_provider_name, [{provider, name}]) do
-        {:ok, uuid} -> {:ok, %{uuid: uuid}}
-        error -> error
-      end
-    else
-      # Pre-V107 fallback — scan provider's connections by name.
-      case Integrations.list_connections(provider) |> Enum.find(&(&1.name == name)) do
-        %{uuid: uuid} -> {:ok, %{uuid: uuid}}
-        _ -> {:error, :not_found}
-      end
+    case Integrations.find_uuid_by_provider_name({provider, name}) do
+      {:ok, uuid} -> {:ok, %{uuid: uuid}}
+      error -> error
     end
   end
 
