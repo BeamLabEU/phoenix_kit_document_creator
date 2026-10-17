@@ -244,7 +244,6 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
       assert data["external_account_id"] == "user@example.com"
     end
 
-    @tag :requires_unreleased_core
     test "credentials migration: clears the legacy oauth key after success" do
       # Stage legacy plaintext OAuth tokens.
       legacy_oauth = %{
@@ -272,7 +271,6 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
       refute Map.has_key?(legacy_after, "refresh_token")
     end
 
-    @tag :requires_unreleased_core
     test "credentials migration: short-circuits when integration row already exists" do
       # On a running host core's Integrations module is always loaded; a
       # check that only works while it is not would pass here and fail there.
@@ -299,7 +297,6 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
                PhoenixKit.Integrations.get_integration("google:default")
     end
 
-    @tag :requires_unreleased_core
     test "reference migration: rewrites string-shape google_connection to uuid" do
       # Pre-stage an integration row + a settings value pointing at
       # it via name string.
@@ -317,7 +314,6 @@ defmodule PhoenixKitDocumentCreator.Integration.ActiveIntegrationTest do
                Settings.get_json_setting("document_creator_settings", %{})
     end
 
-    @tag :requires_unreleased_core
     test "is idempotent — calling twice yields the same end state" do
       {:ok, %{uuid: uuid}} = PhoenixKit.Integrations.add_connection("google", "default")
       {:ok, _} = PhoenixKit.Integrations.save_setup(uuid, %{"client_id" => "cid"})

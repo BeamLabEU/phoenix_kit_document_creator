@@ -231,12 +231,8 @@ defmodule PhoenixKitDocumentCreator do
   @new_integration_provider "google"
   @new_integration_name "default"
 
-  # Implements the optional `migrate_legacy/0` callback added in core
-  # V107+. Hex `~> 1.7` doesn't declare it on the `PhoenixKit.Module`
-  # behaviour, so `@impl PhoenixKit.Module` would warn — keep this as
-  # a plain function until the floor version is bumped. The orchestrator
-  # in `PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0`
-  # dispatches by `function_exported?/3` regardless of the annotation.
+  # Runs at host boot via `PhoenixKit.ModuleRegistry.run_all_legacy_migrations/0`.
+  @impl PhoenixKit.Module
   def migrate_legacy do
     creds_result = migrate_legacy_oauth_credentials()
     refs_result = migrate_legacy_connection_references()
@@ -504,10 +500,9 @@ defmodule PhoenixKitDocumentCreator do
     end
   end
 
-  # `find_uuid_by_provider_name/1` is the cleaner core API but only
-  # exists in newer phoenix_kit versions. Use `list_connections/1`
-  # (long-stable) so this works against any phoenix_kit dep this
-  # module's mix.exs allows.
+  # Resolves a legacy `provider` / `provider:name` string through
+  # `list_connections/1`, defaulting the name to `"default"` (the one case
+  # `find_uuid_by_provider_name/1` answers differently for a bare provider).
   defp resolve_via_list_connections(name_string) do
     {provider, name} =
       case String.split(name_string, ":", parts: 2) do
