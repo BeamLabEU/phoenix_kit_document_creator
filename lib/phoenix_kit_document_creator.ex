@@ -270,71 +270,82 @@ defmodule PhoenixKitDocumentCreator do
   rescue
     e ->
       Logger.warning(
-        "[DocumentCreator] OAuth credentials migration raised: #{Exception.message(e)}"
+        "[DocumentCreator] OAuth credentials migration raised: exception=#{inspect(e.__struct__)}"
       )
 
       {:error, e}
   end
 
-  # The migrated row exists when core finds a connection under the new
-  # provider and name; `find_uuid_by_provider_name/1` answers `{:ok, uuid}`.
+  # A row can exist before any credentials were saved (manual creation or an
+  # interrupted migration). Preserve even partially configured connections.
   defp already_migrated? do
-    storage_key = "#{@new_integration_provider}:#{@new_integration_name}"
+    case Integrations.find_uuid_by_provider_name(
+           {@new_integration_provider, @new_integration_name}
+         ) do
+      {:ok, uuid} ->
+        # Inspect presence in storage, so a temporarily undecryptable secret
+        # is still protected from being overwritten by the legacy value.
+        data = Settings.get_json_setting_by_uuid(uuid, %{})
 
-    match?({:ok, uuid} when is_binary(uuid), Integrations.find_uuid_by_provider_name(storage_key))
+        Enum.any?(
+          ~w(client_id client_secret access_token refresh_token),
+          &(data[&1] not in [nil, ""])
+        )
+
+      {:error, :not_found} ->
+        false
+    end
   end
 
   defp do_migrate_oauth_credentials(legacy_data) do
     integration_data = build_integration_data(legacy_data)
     integration_key = "#{@new_integration_provider}:#{@new_integration_name}"
 
-    # Two-step write under core's strict-UUID Integrations API: create
-    # the row via `add_connection/3` (the only legitimate place to
-    # construct a new `integration:{provider}:{name}` storage key),
-    # then save the migrated credentials against the returned uuid.
-    with {:ok, %{uuid: uuid}} <-
-           ensure_connection(@new_integration_provider, @new_integration_name),
-         {:ok, _saved} <- Integrations.save_setup(uuid, integration_data) do
-      migrate_legacy_folders(legacy_data)
-      clear_legacy_oauth_key()
+    # Commit the connection, folders and plaintext cleanup together. Otherwise
+    # a failed write leaves an apparently migrated row that later boots skip,
+    # or clears the only copy of folder settings that were never saved.
+    repo = PhoenixKit.RepoHelper.repo()
 
-      log_migration_activity(:credentials_migrated, %{
-        legacy_key: @legacy_oauth_settings_key,
-        new_key: "integration:#{integration_key}",
-        integration_uuid: uuid
-      })
+    result =
+      repo.transaction(fn ->
+        with {:ok, %{uuid: uuid}} <-
+               ensure_connection(@new_integration_provider, @new_integration_name),
+             {:ok, _saved} <- Integrations.save_setup(uuid, integration_data),
+             {:ok, _folders} <- migrate_legacy_folders(legacy_data),
+             {:ok, _cleared} <- clear_legacy_oauth_key() do
+          uuid
+        else
+          {:error, reason} -> repo.rollback(reason)
+        end
+      end)
 
-      Logger.info(
-        "[DocumentCreator] Migrated legacy '#{@legacy_oauth_settings_key}' → 'integration:#{integration_key}'"
-      )
+    case result do
+      {:ok, uuid} ->
+        log_migration_activity(:credentials_migrated, %{
+          legacy_key: @legacy_oauth_settings_key,
+          new_key: "integration:#{integration_key}",
+          integration_uuid: uuid
+        })
 
-      :migrated
-    else
-      {:error, reason} ->
-        Logger.warning(
-          "[DocumentCreator] OAuth credentials migration save failed: #{inspect(reason)}"
+        Logger.info(
+          "[DocumentCreator] Migrated legacy '#{@legacy_oauth_settings_key}' → 'integration:#{integration_key}'"
         )
+
+        :migrated
+
+      {:error, reason} ->
+        Logger.warning("[DocumentCreator] OAuth credentials migration save failed")
 
         {:error, reason}
     end
   end
 
   defp ensure_connection(provider, name) do
-    case Integrations.add_connection(provider, name) do
-      {:ok, %{uuid: _} = result} ->
-        {:ok, result}
-
-      {:error, :already_exists} ->
-        resolve_existing_connection_uuid(provider, name)
-
-      error ->
-        error
-    end
-  end
-
-  defp resolve_existing_connection_uuid(provider, name) do
+    # Core allows duplicate names; add_connection/3 does not return
+    # :already_exists. Reuse an empty row so existing UUID references survive.
     case Integrations.find_uuid_by_provider_name({provider, name}) do
       {:ok, uuid} -> {:ok, %{uuid: uuid}}
+      {:error, :not_found} -> Integrations.add_connection(provider, name)
       error -> error
     end
   end
@@ -390,32 +401,13 @@ defmodule PhoenixKitDocumentCreator do
 
   defp maybe_put_connected_at(data, _legacy_data), do: data
 
-  # After the credentials are migrated into a `PhoenixKit.Integrations`
-  # row (which encrypts secrets at rest), the original
-  # `document_creator_google_oauth` settings row still holds plaintext
-  # `client_secret` / `access_token` / `refresh_token`. `already_migrated?/0`
-  # stops re-migration on subsequent boots, so without this cleanup the
-  # plaintext copies would persist in `phoenix_kit_settings` indefinitely.
-  # Overwrite with `%{}` to keep the row but drop the secrets. Failure
-  # here doesn't roll back the migration — it's a best-effort secrets
-  # wipe; ops can always remove the row by hand.
+  # Remove plaintext copies only in the transaction that saves their new home.
   defp clear_legacy_oauth_key do
     Settings.update_json_setting_with_module(
       @legacy_oauth_settings_key,
       %{},
       module_key()
     )
-
-    :ok
-  rescue
-    e ->
-      Logger.warning(
-        "[DocumentCreator] Failed to clear legacy OAuth key after migration — " <>
-          "plaintext secrets may remain in '#{@legacy_oauth_settings_key}'. " <>
-          "exception=#{inspect(e.__struct__)}"
-      )
-
-      :ok
   end
 
   defp migrate_legacy_folders(legacy_data) do
@@ -435,12 +427,9 @@ defmodule PhoenixKitDocumentCreator do
         folder_data,
         module_key()
       )
+    else
+      {:ok, nil}
     end
-  rescue
-    e ->
-      Logger.warning(
-        "[DocumentCreator] Failed to move legacy folder config: #{Exception.message(e)}"
-      )
   end
 
   # Migration (2): boot-time sweep that resolves any name-string
