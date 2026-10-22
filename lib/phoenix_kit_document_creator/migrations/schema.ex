@@ -208,7 +208,7 @@ defmodule PhoenixKitDocumentCreator.Migrations.Schema do
     note =
       "deprecated: mirror of primary membership for backward compatibility; " <>
         "source of truth is phoenix_kit_doc_template_taxonomy — do not drop " <>
-        "without migrating the ANDI consumer"
+        "without migrating the host app that still reads it"
 
     execute("COMMENT ON COLUMN #{p}phoenix_kit_doc_templates.category_uuid IS '#{note}'")
 
