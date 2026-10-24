@@ -1,11 +1,22 @@
-## 0.9.15 - 2026-10-17
+## 0.9.15 - 2026-10-24
 
 ### Changed
 
 - Requires `phoenix_kit` `>= 2.43.0 and < 3.0.0`, the first core that
-  compiles on Erlang/OTP 28. The locked core moves to 2.62.2, and the
-  compat shims around `Integrations.find_uuid_by_provider_name/1` are gone.
+  compiles on Erlang/OTP 28. The compat shims around
+  `Integrations.find_uuid_by_provider_name/1` are gone.
+- Dependency refresh: `phoenix_kit` 2.64.1 and its transitive set.
 - `migrate_legacy/0` carries `@impl PhoenixKit.Module`.
+- Comments, docs and two Categories-page strings use neutral host-application
+  wording (#64): the confirm dialog now reads "Create the standard groups
+  (Hinnapakkumine … Hooldusjuhend) in this category, in order? …" and the
+  button title "Seed the standard group order". Both strings had no
+  translations yet, so none were lost.
+- The deprecation `COMMENT` on the legacy `phoenix_kit_doc_templates`
+  `category_uuid`/`type_uuid` columns uses the same neutral wording on fresh
+  installs. Existing databases keep the old text, since V2 is not re-run. Both
+  versions carry the "deprecated … do not drop" warning, and the chain
+  version is unchanged.
 
 ### Fixed
 
