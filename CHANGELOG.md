@@ -1,3 +1,18 @@
+## Unreleased
+
+### Changed
+
+- The migration chain is now V3 and adopts the seven `phoenix_kit_doc_*`
+  tables core's V135 baseline creates for this module (categories, types,
+  templates, documents, document sections, headers/footers, template presets):
+  `CREATE TABLE IF NOT EXISTS`, guarded constraints and indexes, identical to
+  what a fresh core builds. A no-op on every existing install; the adoption
+  runs first in `up/1`, ahead of V1 and V2, which touch those tables. `down/1`
+  never drops them. With it the chain builds all eight tables without core
+  (`test/integration/migrations_build_alone_test.exs`, core's
+  `ModuleChainCheck`). See core's
+  `dev_docs/plans/2026-10-25-module-table-ownership.md`.
+
 ## 0.9.15 - 2026-10-24
 
 ### Changed
