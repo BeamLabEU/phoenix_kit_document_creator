@@ -22,20 +22,20 @@ msgstr ""
 msgid "Document Creator"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1198
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:489
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1207
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:492
 #, elixir-autogen
 msgid "Documents"
 msgstr ""
 
 #: lib/phoenix_kit_document_creator/web/documents_live.ex:123
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1198
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:464
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1207
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:467
 #, elixir-autogen
 msgid "Templates"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:366
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:369
 #, elixir-autogen
 msgid "Document Creator Settings"
 msgstr ""
@@ -46,22 +46,22 @@ msgstr ""
 msgid "Google Account Not Connected"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:404
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:407
 #, elixir-autogen
 msgid "Google Account"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:426
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:429
 #, elixir-autogen
 msgid "Drive Folders"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:568
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:571
 #, elixir-autogen
 msgid "Select Folder"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1544
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1553
 #, elixir-autogen
 msgid "Resolve Unfiled Item"
 msgstr ""
@@ -82,85 +82,85 @@ msgstr ""
 msgid "Start blank or choose a template."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:368
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:371
 #, elixir-autogen
 msgid "Configure Google Drive folders for templates and documents."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:428
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:431
 #, elixir-autogen
 msgid "Customize the Google Drive folder names used for storage. Folders are created automatically if they don't exist."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:539
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:542
 #, elixir-autogen
 msgid "Click the path button to browse your Google Drive. Deleted items go to subfolders inside the deleted folder. Folders are created automatically if they don't exist."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:417
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:420
 #, elixir-autogen
 msgid "Manage your Google connections in"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:418
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:421
 #, elixir-autogen
 msgid "Settings → Integrations"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:589
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:592
 #, elixir-autogen
 msgid "No subfolders"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:254
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:257
 #, elixir-autogen
 msgid "My Drive"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:441
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:472
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:497
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:522
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:444
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:475
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:500
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:525
 #, elixir-autogen
 msgid "Browse Google Drive — root"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:441
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:472
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:497
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:522
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:444
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:475
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:500
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:525
 #, elixir-autogen
 msgid "Browse Google Drive — %{path}"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1548
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1557
 #, elixir-autogen
 msgid "Choose how %{name} should be handled."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1552
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1561
 #, elixir-autogen
 msgid "Saved location:"
 msgstr ""
 
 ## Action buttons
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1176
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1185
 #, elixir-autogen
 msgid "Go to Settings"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1219
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1248
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1228
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1257
 #, elixir-autogen
 msgid "Open Folder"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1190
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1199
 #, elixir-autogen
 msgid "New Template"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1190
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1199
 #, elixir-autogen
 msgid "New Document"
 msgstr ""
@@ -188,17 +188,17 @@ msgstr ""
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:201
 #: lib/phoenix_kit_document_creator/web/components/create_document_modal.ex:88
 #: lib/phoenix_kit_document_creator/web/components/create_document_modal.ex:152
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1559
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1684
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:609
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1568
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1693
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:612
 #: lib/phoenix_kit_document_creator/web/preset_form_live.ex:362
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:253
 #, elixir-autogen
 msgid "Cancel"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2018
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2164
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2027
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2173
 #, elixir-autogen
 msgid "View"
 msgstr ""
@@ -207,66 +207,66 @@ msgstr ""
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:613
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:653
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:63
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2026
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2172
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2363
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2035
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2181
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2372
 #: lib/phoenix_kit_document_creator/web/preset_form_live.ex:83
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:69
 #, elixir-autogen
 msgid "Edit"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2035
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2181
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2044
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2190
 #, elixir-autogen
 msgid "Export PDF"
 msgstr ""
 
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:589
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:624
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2051
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2197
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2060
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2206
 #, elixir-autogen
 msgid "Restore"
 msgstr ""
 
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:664
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2060
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2206
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2069
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2215
 #, elixir-autogen
 msgid "Delete"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:547
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:550
 #, elixir-autogen
 msgid "Save Folder Settings"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:611
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:614
 #, elixir-autogen
 msgid "Select Current Folder"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1569
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1578
 #, elixir-autogen
 msgid "Set This As Correct Location"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1579
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1588
 #, elixir-autogen
 msgid "Move To Documents"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1589
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1598
 #, elixir-autogen
 msgid "Move To Templates"
 msgstr ""
 
 ## Loading / progress states (phx-disable-with)
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1207
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1241
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2040
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2186
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1216
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1250
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2049
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2195
 #, elixir-autogen
 msgid "Refreshing…"
 msgstr ""
@@ -274,111 +274,111 @@ msgstr ""
 #: lib/phoenix_kit_document_creator/web/components/create_document_modal.ex:52
 #: lib/phoenix_kit_document_creator/web/components/create_document_modal.ex:157
 #: lib/phoenix_kit_document_creator/web/components/create_document_modal.ex:160
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1193
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1202
 #, elixir-autogen
 msgid "Creating…"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1193
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1202
 #, elixir-autogen
 msgid "Opening…"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1567
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1577
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1587
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1690
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1576
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1586
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1596
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1699
 #, elixir-autogen
 msgid "Working…"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:439
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:470
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:495
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:520
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:442
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:473
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:498
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:523
 #, elixir-autogen
 msgid "Loading…"
 msgstr ""
 
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:206
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:545
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:548
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:258
 #, elixir-autogen
 msgid "Saving…"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2033
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2179
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2042
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2188
 #, elixir-autogen
 msgid "Exporting…"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2049
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2195
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2058
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2204
 #, elixir-autogen
 msgid "Restoring…"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2058
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2204
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2067
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2213
 #, elixir-autogen
 msgid "Deleting…"
 msgstr ""
 
 ## Table headers / form labels
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:179
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1462
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2070
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1471
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2079
 #: lib/phoenix_kit_document_creator/web/preset_form_live.ex:252
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:215
 #, elixir-autogen
 msgid "Name"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1463
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2082
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1472
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2091
 #, elixir-autogen
 msgid "Modified"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1464
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2011
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2085
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2157
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1473
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2020
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2094
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2166
 #, elixir-autogen
 msgid "Actions"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2073
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2082
 #, elixir-autogen
 msgid "Status"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2076
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:514
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2085
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:517
 #, elixir-autogen
 msgid "Deleted"
 msgstr ""
 
 ## Placeholders
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:482
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:485
 #, elixir-autogen
 msgid "templates"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:507
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:510
 #, elixir-autogen
 msgid "documents"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:532
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:535
 #, elixir-autogen
 msgid "deleted"
 msgstr ""
 
 ## Status badges / inline indicators
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:553
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1270
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1279
 #, elixir-autogen
 msgid "Active"
 msgstr ""
@@ -386,40 +386,40 @@ msgstr ""
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:562
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:583
 #: lib/phoenix_kit_document_creator/web/categories_live.ex:618
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1271
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1280
 #, elixir-autogen
 msgid "Trash"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1962
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2125
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1971
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2134
 #, elixir-autogen
 msgid "lost"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1976
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2141
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1985
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2150
 #, elixir-autogen
 msgid "unfiled"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2219
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2220
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2228
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2229
 #, elixir-autogen
 msgid "root"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1890
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1899
 #, elixir-autogen
 msgid "Trash is empty"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1893
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1902
 #, elixir-autogen
 msgid "No files yet"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1960
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1969
 #, elixir-autogen
 msgid "File not found in Google Drive"
 msgstr ""
@@ -449,32 +449,32 @@ msgstr ""
 msgid "Restored"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2223
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2232
 #, elixir-autogen
 msgid "Moved to templates"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2224
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2233
 #, elixir-autogen
 msgid "Moved to documents"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2225
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2234
 #, elixir-autogen
 msgid "Saved current location"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2226
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2235
 #, elixir-autogen
 msgid "Updated"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:195
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:198
 #, elixir-autogen
 msgid "Connection updated"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:680
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:683
 #, elixir-autogen
 msgid "Folder settings saved"
 msgstr ""
@@ -485,7 +485,7 @@ msgstr ""
 msgid "Failed to create template. Please try again."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2751
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2760
 #, elixir-autogen
 msgid "Failed to update template language."
 msgstr ""
@@ -681,7 +681,7 @@ msgstr ""
 msgid "Failed to read the thumbnail link from Drive"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:457
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:460
 #, elixir-autogen, elixir-format
 msgid "All folders will be created inside this directory."
 msgstr ""
@@ -700,8 +700,8 @@ msgstr ""
 msgid "Categories"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2297
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2385
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2306
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2394
 #: lib/phoenix_kit_document_creator/web/preset_form_live.ex:244
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:238
 #, elixir-autogen, elixir-format
@@ -739,7 +739,7 @@ msgstr ""
 msgid "Choose images"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:238
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:241
 #, elixir-autogen, elixir-format
 msgid "Could not create root folder \"%{name}\""
 msgstr ""
@@ -776,7 +776,7 @@ msgstr ""
 msgid "Could not trash type."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2774
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2783
 #, elixir-autogen, elixir-format
 msgid "Could not update category"
 msgstr ""
@@ -818,7 +818,7 @@ msgstr ""
 msgid "Edit Type"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:386
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:389
 #, elixir-autogen, elixir-format
 msgid "Existing folders found at their current location."
 msgstr ""
@@ -833,13 +833,13 @@ msgstr ""
 msgid "Failed to save variable configuration. Please try again."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1973
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2136
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1982
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2145
 #, elixir-autogen, elixir-format
 msgid "File exists in Drive but is outside the configured Document Creator folders"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:696
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:699
 #, elixir-autogen, elixir-format
 msgid "Folders moved to \"%{name}\""
 msgstr ""
@@ -864,22 +864,22 @@ msgstr ""
 msgid "Max images (blank = unlimited)"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:705
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:708
 #, elixir-autogen, elixir-format
 msgid "Migration failed for: %{folders}"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:396
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:399
 #, elixir-autogen, elixir-format
 msgid "Move folders"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:387
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:390
 #, elixir-autogen, elixir-format
 msgid "Move templates, documents, and deleted into \"%{name}\"?"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:394
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:397
 #, elixir-autogen, elixir-format
 msgid "Moving…"
 msgstr ""
@@ -911,7 +911,7 @@ msgid "No categories yet."
 msgstr ""
 
 #: lib/phoenix_kit_document_creator/taxonomy.ex:1132
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2387
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2396
 #, elixir-autogen, elixir-format
 msgid "No category"
 msgstr ""
@@ -928,7 +928,7 @@ msgstr ""
 
 #: lib/phoenix_kit_document_creator/taxonomy.ex:1147
 #: lib/phoenix_kit_document_creator/taxonomy.ex:1154
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2418
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2427
 #, elixir-autogen, elixir-format
 msgid "No type"
 msgstr ""
@@ -958,18 +958,18 @@ msgstr ""
 msgid "Permanently deleting a type removes it from all templates and documents (FK set to NULL)."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:554
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:557
 #, elixir-autogen, elixir-format
 msgid "Remember to grant access."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:433
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:436
 #, elixir-autogen, elixir-format
 msgid "Root folder"
 msgstr ""
 
 #: lib/phoenix_kit_document_creator/web/category_form_live.ex:208
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1692
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1701
 #: lib/phoenix_kit_document_creator/web/preset_form_live.ex:360
 #: lib/phoenix_kit_document_creator/web/type_form_live.ex:260
 #, elixir-autogen, elixir-format
@@ -991,12 +991,12 @@ msgstr ""
 msgid "Separator"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:555
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:558
 #, elixir-autogen, elixir-format
 msgid "Share the \"%{name}\" folder in Google Drive with the users who need access to project documents."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:390
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:393
 #, elixir-autogen, elixir-format
 msgid "Skip"
 msgstr ""
@@ -1011,8 +1011,8 @@ msgstr ""
 msgid "The Document Creator uses Google Docs for editing and Google Drive for storage. Connect a Google account in Settings to get started."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2311
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2416
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2320
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2425
 #, elixir-autogen, elixir-format
 msgid "Type"
 msgstr ""
@@ -1064,7 +1064,7 @@ msgstr ""
 msgid "Could not reorder types."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2778
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2787
 #, elixir-autogen, elixir-format
 msgid "Could not update type"
 msgstr ""
@@ -1187,7 +1187,7 @@ msgid "Reset"
 msgstr ""
 
 #: lib/phoenix_kit_document_creator/web/components/image_picker.ex:163
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1378
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1387
 #, elixir-autogen, elixir-format
 msgid "Search by name…"
 msgstr ""
@@ -1235,7 +1235,7 @@ msgid_plural "%{count} files"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2423
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2432
 #, elixir-autogen, elixir-format
 msgid "(deleted type)"
 msgstr ""
@@ -1245,27 +1245,27 @@ msgstr ""
 msgid "(missing or trashed template)"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1382
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1391
 #, elixir-autogen, elixir-format
 msgid "All Categories"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1397
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1406
 #, elixir-autogen, elixir-format
 msgid "All Languages"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1406
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1415
 #, elixir-autogen, elixir-format
 msgid "All Statuses"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1390
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1399
 #, elixir-autogen, elixir-format
 msgid "All Types"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1635
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1644
 #, elixir-autogen, elixir-format
 msgid "Categories & groups"
 msgstr ""
@@ -1280,7 +1280,7 @@ msgstr ""
 msgid "Could not add the standard groups."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2829
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2838
 #, elixir-autogen, elixir-format
 msgid "Could not update template categories"
 msgstr ""
@@ -1290,22 +1290,22 @@ msgstr ""
 msgid "Create the standard groups (Hinnapakkumine … Hooldusjuhend) in this category, in order? Existing groups with these names are only repositioned."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2079
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2088
 #, elixir-autogen, elixir-format
 msgid "Created"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2003
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2012
 #, elixir-autogen, elixir-format
 msgid "Created:"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1609
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1618
 #, elixir-autogen, elixir-format
 msgid "Edit template"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2361
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2370
 #, elixir-autogen, elixir-format
 msgid "Edit template (categories, groups, language)"
 msgstr ""
@@ -1320,17 +1320,17 @@ msgstr ""
 msgid "Failed to refresh the thumbnail. Please try again."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1342
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1351
 #, elixir-autogen, elixir-format
 msgid "Filters"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1667
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1676
 #, elixir-autogen, elixir-format
 msgid "Group"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1342
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1351
 #, elixir-autogen, elixir-format
 msgid "Hide Filters"
 msgstr ""
@@ -1340,49 +1340,49 @@ msgstr ""
 msgid "Include annotations"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1617
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1626
 #, elixir-autogen, elixir-format
 msgid "Language"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1411
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1420
 #, elixir-autogen, elixir-format
 msgid "Lost"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1638
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1647
 #, elixir-autogen, elixir-format
 msgid "No categories yet"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1668
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1677
 #, elixir-autogen, elixir-format
 msgid "No group"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1622
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2346
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1631
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2355
 #, elixir-autogen, elixir-format
 msgid "No language"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2449
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2458
 #, elixir-autogen, elixir-format
 msgid "Not categorized"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1408
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1417
 #, elixir-autogen, elixir-format
 msgid "Published"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1243
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1252
 #, elixir-autogen, elixir-format
 msgid "Refresh"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2042
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2188
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2051
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2197
 #, elixir-autogen, elixir-format
 msgid "Refresh thumbnail"
 msgstr ""
@@ -1402,44 +1402,44 @@ msgstr ""
 msgid "Standard groups added in order."
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2304
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2313
 #, elixir-autogen, elixir-format
 msgid "This category was deleted"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2318
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2327
 #, elixir-autogen, elixir-format
 msgid "This type was deleted"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:1414
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:1423
 #, elixir-autogen, elixir-format
 msgid "Unfiled"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2000
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2009
 #, elixir-autogen, elixir-format
 msgid "Updated:"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2306
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2454
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2315
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2463
 #, elixir-autogen, elixir-format
 msgid "deleted category"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2320
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2329
 #, elixir-autogen, elixir-format
 msgid "deleted type"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2702
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2702
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2711
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2711
 #, elixir-autogen, elixir-format
 msgid "unknown"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/documents_live.ex:2394
+#: lib/phoenix_kit_document_creator/web/documents_live.ex:2403
 #, elixir-autogen, elixir-format
 msgid "— deleted category —"
 msgstr ""
@@ -1485,7 +1485,7 @@ msgstr ""
 msgid "Settings"
 msgstr ""
 
-#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:154
+#: lib/phoenix_kit_document_creator/web/google_oauth_settings_live.ex:156
 #, elixir-autogen, elixir-format
 msgid "You do not have permission to change Document Creator settings."
 msgstr ""
