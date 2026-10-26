@@ -2695,37 +2695,6 @@ defmodule PhoenixKitDocumentCreator.ExpectedSchema do
         backfill: nil
       },
       %{
-        id: "constraint:phoenix_kit_doc_documents.phoenix_kit_doc_documents_project_uuid_fkey",
-        owner: :phoenix_kit_document_creator,
-        check:
-          {:catalog,
-           %{
-             name: "phoenix_kit_doc_documents_project_uuid_fkey",
-             table: "phoenix_kit_doc_documents",
-             kind: :constraint
-           }},
-        create:
-          "DO $$\nBEGIN\n  IF NOT EXISTS (\n    SELECT 1\n    FROM pg_constraint c\n    JOIN pg_class t ON t.oid = c.conrelid\n    JOIN pg_namespace n ON n.oid = t.relnamespace\n    WHERE c.conname = 'phoenix_kit_doc_documents_project_uuid_fkey'\n      AND t.relname = 'phoenix_kit_doc_documents'\n      AND n.nspname = '__SCHEMA__'\n  ) THEN\n    ALTER TABLE __SCHEMA__.phoenix_kit_doc_documents ADD CONSTRAINT phoenix_kit_doc_documents_project_uuid_fkey FOREIGN KEY (project_uuid) REFERENCES __SCHEMA__.phoenix_kit_projects(uuid) ON DELETE SET NULL;\n  END IF;\nEND\n$$",
-        since: 1,
-        class: :constraint,
-        revisions: [
-          {1,
-           %{
-             type: "f",
-             columns: ["project_uuid"],
-             definition:
-               "FOREIGN KEY (project_uuid) REFERENCES __SCHEMA__.phoenix_kit_projects(uuid) ON DELETE SET NULL",
-             name_template: nil,
-             foreign_table: "phoenix_kit_projects",
-             foreign_columns: ["uuid"],
-             on_delete: "n",
-             on_update: "a"
-           }}
-        ],
-        presence: :required,
-        backfill: nil
-      },
-      %{
         id: "constraint:phoenix_kit_doc_documents.phoenix_kit_doc_documents_template_uuid_fkey",
         owner: :phoenix_kit_document_creator,
         check:

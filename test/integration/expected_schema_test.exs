@@ -25,7 +25,10 @@ defmodule PhoenixKitDocumentCreator.Integration.ExpectedSchemaTest do
   @app :phoenix_kit_document_creator
   @migrations PhoenixKitDocumentCreator.Migrations.Schema
   @modules %{@app => %{manifest: ExpectedSchema, migrations: @migrations}}
-  @known_gaps []
+  # The chain adds this foreign key only where `phoenix_kit_projects` exists, which
+  # is another package's table, so the manifest leaves it out (generated with
+  # `--exclude`).
+  @known_gaps ["constraint:phoenix_kit_doc_documents.phoenix_kit_doc_documents_project_uuid_fkey"]
 
   setup do
     # Core's chain reads the repo from config while it builds.
@@ -105,7 +108,9 @@ defmodule PhoenixKitDocumentCreator.Integration.ExpectedSchemaTest do
              "index #{name} is not in the manifest"
     end
 
-    for [table, name] <- constraints, name = unprefixed.(name) do
+    for [table, name] <- constraints,
+        name = unprefixed.(name),
+        "constraint:#{table}.#{name}" not in @known_gaps do
       assert MapSet.member?(ids, "constraint:#{table}.#{name}"),
              "constraint #{table}.#{name} is not in the manifest"
     end
@@ -134,7 +139,9 @@ defmodule PhoenixKitDocumentCreator.Integration.ExpectedSchemaTest do
     Repo.query!(~s(ALTER TABLE "#{schema}"."#{table}" DROP COLUMN "#{column}"))
 
     id = "column:#{table}.#{column}"
-    assert [%{kind: :missing, module: @app, object_id: ^id}] = schema |> verify() |> module_findings()
+
+    assert [%{kind: :missing, module: @app, object_id: ^id}] =
+             schema |> verify() |> module_findings()
 
     {:ok, _report} = Repair.repair(prefix: schema, repo: Repo, module_manifests: @modules)
 

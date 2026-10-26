@@ -363,7 +363,7 @@ owns their shape. A change to one is a new version here, never a core migration
 
 | Version | Change |
 |---|---|
-| V1 | `phoenix_kit_doc_documents.project_uuid` — nullable FK to `phoenix_kit_projects(uuid)`, `ON DELETE SET NULL`, plus its index. Purely additive. |
+| V1 | `phoenix_kit_doc_documents.project_uuid` — nullable `project_uuid` plus its index, and an FK to `phoenix_kit_projects(uuid)` (`ON DELETE SET NULL`) added only where that table exists; this package does not depend on projects. Purely additive. |
 | V2 | `phoenix_kit_doc_template_taxonomy` join table (template × category, optional group), its unique and lookup indexes, and a backfill of one row per template that had a `category_uuid`. Stamps the legacy `templates.category_uuid` / `type_uuid` columns with a deprecation `COMMENT`; they stay populated as a mirror of the primary membership. |
 | V3 | Adoption of the seven core-created tables (categories, types, templates, documents, document_sections, headers_footers, template_presets), exactly as a fresh core builds them. **Emitted first in `up/1`**, ahead of V1/V2, which alter and reference them. No-op on existing installs; `down/1` never drops. |
 
