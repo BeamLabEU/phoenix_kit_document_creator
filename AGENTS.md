@@ -288,7 +288,7 @@ Every table is `phoenix_kit_doc_*`, UUIDv7 keys, schema-prefix aware.
 | Setting | `"document_creator_folders"` | json; folder paths plus cached `*_folder_id` values, dropped whenever the folder config changes |
 | Setting | `"document_creator_google_oauth"` | legacy, reset to `%{}` after `migrate_legacy/0` runs |
 | Permission | `"document_creator"` | the everyday key, the `permission:` on every module tab |
-| Permission | `"document_creator.settings"` | sub-key for the settings page (Google connection, Drive browsing, folders); the settings tab's `permission:`, and `GoogleOAuthSettingsLive` checks it with `Scope.can?/2` at mount and on every event. `migrate_legacy/0` grants it once to roles holding the base key, flagged by `document_creator_settings_backfilled` |
+| Permission | `"document_creator.settings"` | sub-key for the settings page (Google connection, Drive browsing, folders); the settings tab's `permission:`, and `GoogleOAuthSettingsLive` checks it with `Scope.can?/2` at mount and on every event. `migrate_legacy/0` grants it once to roles holding the base key, flagged by `document_creator_settings_backfilled`; grants are read with a raising query (`roles_lacking/2`), never core's `get_permissions_for_role/1`, which rescues to `[]` and would set the flag after a failed lookup |
 | Project extension | `"document_creator_docs"` | duck-typed catalog entry for the projects hub; `permission_actions: [:view, :edit_tasks]`; linkage is per-document via `documents.project_uuid` |
 
 ### Sync and status model

@@ -10,6 +10,7 @@ defmodule PhoenixKitDocumentCreator.Integration.SettingsPermissionBackfillTest d
   alias PhoenixKit.ModuleRegistry
   alias PhoenixKit.Settings
   alias PhoenixKit.Users.{Permissions, Roles}
+  alias PhoenixKitDocumentCreator.Test.Repo, as: TestRepo
 
   @flag "document_creator_settings_backfilled"
   @sub "document_creator.settings"
@@ -85,5 +86,21 @@ defmodule PhoenixKitDocumentCreator.Integration.SettingsPermissionBackfillTest d
   test "the sub-key is declared on the module" do
     %{sub_permissions: subs} = PhoenixKitDocumentCreator.permission_metadata()
     assert Enum.any?(subs, &(&1.key == "settings"))
+  end
+
+  # Core's `get_permissions_for_role/1` rescues a query error to `[]`, which
+  # would read as "nobody holds the base key" and set the flag for good.
+  test "a failed grant lookup is an error, and the flag stays unset" do
+    _holder = role_with_base!()
+
+    # DDL inside the test's sandbox transaction, undone with it.
+    TestRepo.query!("ALTER TABLE phoenix_kit_role_permissions RENAME TO pk_rp_hidden")
+
+    result = PhoenixKitDocumentCreator.migrate_legacy()
+
+    TestRepo.query!("ALTER TABLE pk_rp_hidden RENAME TO phoenix_kit_role_permissions")
+
+    assert {:ok, %{settings_permission_backfill: {:error, :lookup_failed}}} = result
+    refute Settings.get_setting(@flag) == "true"
   end
 end

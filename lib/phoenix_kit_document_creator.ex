@@ -575,29 +575,30 @@ defmodule PhoenixKitDocumentCreator do
   end
 
   defp do_backfill_settings_permission do
-    alias PhoenixKit.Users.{Permissions, Roles}
+    alias PhoenixKit.Users.Permissions
 
     key = settings_permission()
 
-    results =
-      for role <- Roles.list_roles(),
-          granted = Permissions.get_permissions_for_role(role.uuid),
-          module_key() in granted,
-          key not in granted do
-        Permissions.grant_permission(role.uuid, key, nil)
-      end
-
-    if Enum.all?(results, &match?({:ok, _}, &1)) do
-      {:ok, _} =
-        Settings.update_setting_with_module(@settings_backfill_key, "true", module_key())
-
+    with {:ok, role_uuids} <- roles_lacking(module_key(), key),
+         results = Enum.map(role_uuids, &Permissions.grant_permission(&1, key, nil)),
+         true <- Enum.all?(results, &match?({:ok, _}, &1)),
+         {:ok, _} <-
+           Settings.update_setting_with_module(@settings_backfill_key, "true", module_key()) do
       :backfilled
     else
-      Logger.warning(
-        "[DocumentCreator] settings permission backfill incomplete; retrying next boot"
-      )
+      {:error, :lookup_failed} = error ->
+        Logger.warning(
+          "[DocumentCreator] settings permission backfill could not read grants; retrying"
+        )
 
-      {:error, :grant_failed}
+        error
+
+      _ ->
+        Logger.warning(
+          "[DocumentCreator] settings permission backfill incomplete; retrying next boot"
+        )
+
+        {:error, :grant_failed}
     end
   rescue
     e ->
@@ -606,6 +607,36 @@ defmodule PhoenixKitDocumentCreator do
       )
 
       {:error, :backfill_failed}
+  end
+
+  # Roles holding `base` but not `key`, read with a query that RAISES on a
+  # database error. Core's `Permissions.get_permissions_for_role/1` rescues
+  # to `[]`, which would read as "nobody holds the base key" and set the
+  # flag for good.
+  @doc false
+  def roles_lacking(base, key) do
+    import Ecto.Query, only: [from: 2]
+
+    repo = PhoenixKit.RepoHelper.repo()
+
+    holders =
+      from(rp in PhoenixKit.Users.RolePermission,
+        where: rp.module_key == ^base,
+        select: rp.role_uuid
+      )
+      |> repo.all()
+
+    have =
+      from(rp in PhoenixKit.Users.RolePermission,
+        where: rp.module_key == ^key,
+        select: rp.role_uuid
+      )
+      |> repo.all()
+      |> MapSet.new()
+
+    {:ok, holders |> Enum.uniq() |> Enum.reject(&MapSet.member?(have, &1))}
+  rescue
+    _ -> {:error, :lookup_failed}
   end
 
   # Core's log never raises: a missing activities table (host hasn't run
