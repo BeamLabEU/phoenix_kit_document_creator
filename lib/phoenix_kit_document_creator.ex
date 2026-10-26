@@ -86,6 +86,13 @@ defmodule PhoenixKitDocumentCreator do
   # `project_uuid` for the projects hub's Documents tab.
   def migration_module, do: PhoenixKitDocumentCreator.Migrations.Schema
 
+  @doc """
+  The manifest of this module's tables, for `mix phoenix_kit.repair` and
+  `mix phoenix_kit.doctor`; see `PhoenixKitDocumentCreator.ExpectedSchema`.
+  """
+  # No `@impl`, so this compiles against a core that lacks the callback.
+  def expected_schema, do: PhoenixKitDocumentCreator.ExpectedSchema
+
   # Project-extension catalog entry for the `phoenix_kit_projects` hub —
   # duck-typed contract (no dependency on that package, no `@impl`).
   # Linkage is PER-DOCUMENT (documents.project_uuid, V1 of this module's
