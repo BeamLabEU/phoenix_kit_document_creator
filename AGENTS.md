@@ -131,6 +131,13 @@ mix gettext.extract --merge priv/gettext
 - **`enabled?/0` must `rescue` and `catch :exit`.** Module discovery runs early
   in boot, before Settings may be ready, and the test sandbox can exit the pool
   checkout under a caller — both paths must return `false` rather than crash.
+- **Permissions are enforced in the module.** A page gated by a sub-key
+  checks `Scope.can?/2` in `mount/3` and in every `handle_event/3`; the tab's
+  `permission:` only hides it. `ProjectDocumentsLive`'s `"can_write"` is
+  about the hub's project, so attach takes only an unlinked document and
+  detach only one linked to that project
+  (`Documents.attach_document_to_project/2`,
+  `Documents.detach_document_from_project/2`).
 - **Activity logging goes through core, which never raises.** Logging runs
   through the `log_activity/1` helpers in `Documents` and `Taxonomy` (plus the
   two legacy-migration sites in `GoogleDocsClient` and the top-level module);
@@ -280,7 +287,8 @@ Every table is `phoenix_kit_doc_*`, UUIDv7 keys, schema-prefix aware.
 | Setting | `"document_creator_settings"` | json; `"google_connection"` holds the integration uuid |
 | Setting | `"document_creator_folders"` | json; folder paths plus cached `*_folder_id` values, dropped whenever the folder config changes |
 | Setting | `"document_creator_google_oauth"` | legacy, reset to `%{}` after `migrate_legacy/0` runs |
-| Permission | `"document_creator"` | one key, used as the `permission:` on every tab |
+| Permission | `"document_creator"` | the everyday key, the `permission:` on every module tab |
+| Permission | `"document_creator.settings"` | sub-key for the settings page (Google connection, Drive browsing, folders); the settings tab's `permission:`, and `GoogleOAuthSettingsLive` checks it with `Scope.can?/2` at mount and on every event. `migrate_legacy/0` grants it once to roles holding the base key, flagged by `document_creator_settings_backfilled`; grants are read with a raising query (`roles_lacking/2`), never core's `get_permissions_for_role/1`, which rescues to `[]` and would set the flag after a failed lookup |
 | Project extension | `"document_creator_docs"` | duck-typed catalog entry for the projects hub; `permission_actions: [:view, :edit_tasks]`; linkage is per-document via `documents.project_uuid` |
 
 ### Sync and status model
