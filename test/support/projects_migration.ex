@@ -6,6 +6,8 @@ defmodule PhoenixKitDocumentCreator.Test.ProjectsMigration do
 
   use Ecto.Migration
 
-  def up, do: PhoenixKitProjects.Migrations.Schema.up(prefix: "public")
+  alias PhoenixKitProjects.Migrations.Schema
+
+  def up, do: Schema.up(prefix: "public")
   def down, do: :ok
 end
